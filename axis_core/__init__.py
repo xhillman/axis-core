@@ -38,6 +38,7 @@ __all__ = [
     "Timeouts",
     "RetryPolicy",
     "RateLimits",
+    "CacheConfig",
     # Errors
     "AxisError",
     "InputError",
@@ -121,6 +122,10 @@ def __getattr__(name: str):
         from axis_core.config import RateLimits
 
         return RateLimits
+    if name == "CacheConfig":
+        from axis_core.config import CacheConfig
+
+        return CacheConfig
 
     # Errors
     if name == "AxisError":
