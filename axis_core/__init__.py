@@ -229,3 +229,8 @@ def __getattr__(name: str):
         return CancelToken
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Override module-level imports that conflict with exported names
+# This handles the case where 'tool' module name conflicts with 'tool' function
+from axis_core.tool import tool as tool  # noqa: F401, E402

@@ -106,7 +106,7 @@ class ModelError(AxisError):
 
         Recoverable errors (worth retrying):
         - RateLimitError, TimeoutError, ConnectionError, ConnectError
-        - ReadTimeout, APIConnectionError
+        - ReadTimeout, ReadTimeoutError, APIConnectionError
 
         Not recoverable (permanent failures):
         - ValidationError, AuthenticationError, TypeError, ValueError, KeyError
@@ -128,6 +128,7 @@ class ModelError(AxisError):
             "ConnectionError",
             "ConnectError",
             "ReadTimeout",
+            "ReadTimeoutError",
             "APIConnectionError",
         }
 

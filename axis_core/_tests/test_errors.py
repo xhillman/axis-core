@@ -223,13 +223,13 @@ class TestModelError:
         class ConnectError(Exception):
             pass
 
-        class ReadTimeout(Exception):
+        class ReadTimeoutError(Exception):
             pass
 
         class APIConnectionError(Exception):
             pass
 
-        for exc_class in [ConnectionError, ConnectError, ReadTimeout, APIConnectionError]:
+        for exc_class in [ConnectionError, ConnectError, ReadTimeoutError, APIConnectionError]:
             original = exc_class("Connection failed")
             error = ModelError.from_exception(original, model_id="gpt-4")
             assert error.recoverable is True, f"{exc_class.__name__} should be recoverable"
@@ -385,8 +385,8 @@ class TestErrorRecord:
             recovered=False,
         )
 
-        # Should not be able to modify fields
-        with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
+        # Should not be able to modify fields (frozen dataclass raises AttributeError)
+        with pytest.raises(AttributeError):
             record.recovered = True  # type: ignore
 
     def test_error_record_fields_required(self) -> None:
