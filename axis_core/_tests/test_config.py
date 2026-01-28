@@ -1,6 +1,7 @@
 """Tests for axis_core.config module."""
 
 import pytest
+
 from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts
 
 

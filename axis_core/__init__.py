@@ -50,6 +50,7 @@ __all__ = [
     "TimeoutError",
     "CancelledError",
     "ErrorClass",
+    "ErrorRecord",
     # Results
     "RunResult",
     "StreamEvent",
@@ -168,6 +169,10 @@ def __getattr__(name: str):
         from axis_core.errors import ErrorClass
 
         return ErrorClass
+    if name == "ErrorRecord":
+        from axis_core.errors import ErrorRecord
+
+        return ErrorRecord
 
     # Results
     if name == "RunResult":

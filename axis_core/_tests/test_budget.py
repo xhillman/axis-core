@@ -1,6 +1,7 @@
 """Tests for axis_core.budget module."""
 
 import pytest
+
 from axis_core.budget import Budget, BudgetState
 
 
