@@ -81,8 +81,9 @@ See `.env.example` for all environment variables. Key ones:
 - `AXIS_DEFAULT_PLANNER` — Default planner (sequential)
 - `AXIS_MAX_CYCLES`, `AXIS_MAX_COST_USD` — Budget constraints
 
-## Documentation
+## Project Authority Map:
 
-Primary design docs in `dev/`:
-- `axis-core-prd.md` — Complete product requirements
-- `SPEC.md` — Technical specification
+- Task List: tasks-axis-core-prd.md (source of truth for task IDs, sub-tasks, file targets)
+- Architecture & Constraints: SPEC.md (ADRs, invariants, design rules)
+- Execution Process: process-tasks.md (TDD flow, pacing, completion protocol)
+- Product Intent (only if needed): axis-core-prd.md
