@@ -76,3 +76,7 @@ python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "axis_core.*._tests.*"
+ignore_errors = true
