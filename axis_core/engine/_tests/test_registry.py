@@ -89,16 +89,121 @@ class TestModelRegistry:
         registry = ModelRegistry()
         assert isinstance(registry, AdapterRegistry)
 
-    def test_built_in_models_not_registered_by_default(self) -> None:
-        """Built-in models would be registered by model adapters, not the registry."""
-        registry = ModelRegistry()
-        # Registry starts empty; models register themselves when imported
-        assert registry.list() == []
-
     def test_can_register_custom_model(self) -> None:
         registry = ModelRegistry()
         registry.register("custom-model", MockAdapter)  # type: ignore[arg-type]
         assert registry.get("custom-model") is MockAdapter
+
+
+# ---------------------------------------------------------------------------
+# Built-in model registration tests (Task 16.1)
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltInModelRegistration:
+    """Tests for built-in model registration."""
+
+    def test_anthropic_models_registered(self) -> None:
+        """Built-in Anthropic models should be registered in global model_registry."""
+        from axis_core.engine.registry import model_registry
+
+        # Import models to trigger registration
+        try:
+            import axis_core.adapters.models  # noqa: F401
+        except ImportError:
+            pytest.skip("Anthropic package not installed")
+
+        # Check that all built-in Anthropic models are registered
+        registered = model_registry.list()
+        expected_models = [
+            "claude-3-haiku-20240307",
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-opus-4-1-20250805",
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-5-20251101",
+        ]
+        for model in expected_models:
+            assert model in registered, f"Expected model {model} to be registered"
+
+    def test_string_resolution_creates_anthropic_instance(self) -> None:
+        """Resolving a Claude model string should create AnthropicModel instance."""
+        from axis_core.engine.registry import model_registry
+        from axis_core.engine.resolver import resolve_adapter
+
+        try:
+            from axis_core.adapters.models import AnthropicModel
+        except ImportError:
+            pytest.skip("Anthropic package not installed")
+
+        # Resolve string to instance
+        model = resolve_adapter(
+            "claude-sonnet-4-20250514",
+            model_registry,
+            api_key="test-key",
+        )
+
+        # Should get an AnthropicModel instance
+        assert isinstance(model, AnthropicModel)
+        assert model.model_id == "claude-sonnet-4-20250514"
+
+    def test_string_resolution_passes_kwargs(self) -> None:
+        """String resolution should pass constructor kwargs to model."""
+        from axis_core.engine.registry import model_registry
+        from axis_core.engine.resolver import resolve_adapter
+
+        try:
+            from axis_core.adapters.models import AnthropicModel
+        except ImportError:
+            pytest.skip("Anthropic package not installed")
+
+        model = resolve_adapter(
+            "claude-sonnet-4-20250514",
+            model_registry,
+            api_key="custom-key",
+            temperature=0.8,
+            max_tokens=500,
+        )
+
+        assert isinstance(model, AnthropicModel)
+        # Check private attributes (AnthropicModel stores these as private)
+        assert model._api_key == "custom-key"
+        assert model._temperature == 0.8
+        assert model._max_tokens == 500
+
+    def test_unknown_model_raises_config_error(self) -> None:
+        """Resolving unknown model string should raise ConfigError."""
+        from axis_core.engine.registry import model_registry
+        from axis_core.engine.resolver import resolve_adapter
+
+        with pytest.raises(ConfigError, match="Unknown adapter 'nonexistent-model'"):
+            resolve_adapter("nonexistent-model", model_registry)
+
+    def test_convenience_aliases_registered(self) -> None:
+        """Convenience aliases should map to latest model versions."""
+        from axis_core.engine.registry import model_registry
+        from axis_core.engine.resolver import resolve_adapter
+
+        try:
+            from axis_core.adapters.models import AnthropicModel
+        except ImportError:
+            pytest.skip("Anthropic package not installed")
+
+        # Test that convenience aliases work
+        haiku = resolve_adapter("claude-haiku", model_registry, api_key="test")
+        sonnet = resolve_adapter("claude-sonnet", model_registry, api_key="test")
+        opus = resolve_adapter("claude-opus", model_registry, api_key="test")
+
+        # Verify they create instances with correct model IDs
+        assert isinstance(haiku, AnthropicModel)
+        assert haiku.model_id == "claude-haiku-4-5-20251001"
+
+        assert isinstance(sonnet, AnthropicModel)
+        assert sonnet.model_id == "claude-sonnet-4-5-20250929"
+
+        assert isinstance(opus, AnthropicModel)
+        assert opus.model_id == "claude-opus-4-5-20251101"
 
 
 # ---------------------------------------------------------------------------
