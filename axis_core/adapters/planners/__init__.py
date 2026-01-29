@@ -8,6 +8,10 @@ This module provides built-in planner implementations:
 """
 
 from axis_core.adapters.planners.sequential import SequentialPlanner
+from axis_core.engine.registry import planner_registry
+
+# Register built-in planners
+planner_registry.register("sequential", SequentialPlanner)
 
 __all__ = [
     "SequentialPlanner",

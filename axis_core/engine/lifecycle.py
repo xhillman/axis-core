@@ -31,6 +31,8 @@ from axis_core.context import (
     RunContext,
     RunState,
 )
+from axis_core.engine.registry import memory_registry, model_registry, planner_registry
+from axis_core.engine.resolver import resolve_adapter
 from axis_core.errors import (
     AxisError,
     BudgetError,
@@ -81,9 +83,20 @@ class LifecycleEngine:
         tools: dict[str, Any] | None = None,
         system: str | None = None,
     ) -> None:
-        self.model = model
-        self.planner = planner
-        self.memory = memory
+        # Resolve adapters from strings or pass through instances (Task 16.2)
+        resolved_model = resolve_adapter(model, model_registry)
+        resolved_planner = resolve_adapter(planner, planner_registry)
+        resolved_memory = resolve_adapter(memory, memory_registry)
+
+        # Model and planner are required (won't be None after resolution)
+        if resolved_model is None:
+            raise ConfigError("Model adapter is required")
+        if resolved_planner is None:
+            raise ConfigError("Planner adapter is required")
+
+        self.model: Any = resolved_model
+        self.planner: Any = resolved_planner
+        self.memory: Any | None = resolved_memory
         self.telemetry: list[Any] = telemetry or []
         self.tools: dict[str, Any] = tools or {}
         self.system = system

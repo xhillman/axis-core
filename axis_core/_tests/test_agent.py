@@ -418,3 +418,65 @@ class TestSingleExecution:
 
         # Clean up first task
         await task1
+
+
+# ---------------------------------------------------------------------------
+# String-based adapter resolution tests (Task 16.2)
+# ---------------------------------------------------------------------------
+
+
+class TestStringAdapterResolution:
+    """Tests for string-based adapter construction through Agent."""
+
+    def test_agent_with_model_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Agent should accept model string and resolve to instance."""
+        try:
+            from axis_core.adapters.models import AnthropicModel
+            # Trigger registration by importing adapters
+            import axis_core.adapters.planners  # noqa: F401
+        except ImportError:
+            pytest.skip("Anthropic package not installed")
+
+        # Set dummy API key
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        # Create agent with string model identifier
+        agent = Agent(
+            model="claude-haiku",
+            planner="sequential",
+        )
+
+        # Should have resolved to AnthropicModel instance
+        # (Check via private _model since we'd need to access engine otherwise)
+        assert agent._model == "claude-haiku"  # Agent stores string
+
+        # Verify resolution happens in engine by building one
+        engine = agent._build_engine()
+        assert isinstance(engine.model, AnthropicModel)
+        assert engine.model.model_id == "claude-haiku-4-5-20251001"
+
+    def test_agent_with_all_string_adapters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Agent should resolve all adapters from strings."""
+        try:
+            # Trigger registration by importing adapters
+            from axis_core.adapters.models import AnthropicModel
+            from axis_core.adapters.memory import EphemeralMemory
+            from axis_core.adapters.planners import SequentialPlanner
+        except ImportError:
+            pytest.skip("Required packages not installed")
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        agent = Agent(
+            model="claude-sonnet",
+            planner="sequential",
+            memory="ephemeral",
+        )
+
+        engine = agent._build_engine()
+
+        assert isinstance(engine.model, AnthropicModel)
+        assert isinstance(engine.planner, SequentialPlanner)
+        assert isinstance(engine.memory, EphemeralMemory)

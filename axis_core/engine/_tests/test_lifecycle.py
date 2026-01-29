@@ -1190,3 +1190,95 @@ class TestTelemetryEmission:
         event_types = [e.type for e in mock_telemetry.events]
         assert "cycle_started" in event_types
         assert "cycle_completed" in event_types
+
+
+# =============================================================================
+# Adapter resolution tests (Task 16.2, 16.4)
+# =============================================================================
+
+
+class TestAdapterResolution:
+    """Tests for string-to-adapter resolution in LifecycleEngine."""
+
+    def test_model_string_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """LifecycleEngine should resolve model strings to instances."""
+        try:
+            from axis_core.adapters.models import AnthropicModel
+        except ImportError:
+            pytest.skip("Anthropic package not installed")
+
+        # Set dummy API key for test
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        # Pass string identifier
+        engine = LifecycleEngine(
+            model="claude-haiku",
+            planner=MockPlanner(),
+        )
+
+        # Should be resolved to AnthropicModel instance
+        assert isinstance(engine.model, AnthropicModel)
+        assert engine.model.model_id == "claude-haiku-4-5-20251001"
+
+    def test_model_instance_passthrough(self) -> None:
+        """LifecycleEngine should accept model instances directly."""
+        mock_model = MockModelAdapter()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+        )
+
+        # Should keep the same instance
+        assert engine.model is mock_model
+
+    def test_planner_string_resolution(self) -> None:
+        """LifecycleEngine should resolve planner strings to instances."""
+        from axis_core.adapters.planners import SequentialPlanner
+
+        mock_model = MockModelAdapter()
+
+        # Pass string identifier
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner="sequential",
+        )
+
+        # Should be resolved to SequentialPlanner instance
+        assert isinstance(engine.planner, SequentialPlanner)
+
+    def test_memory_string_resolution(self) -> None:
+        """LifecycleEngine should resolve memory strings to instances."""
+        from axis_core.adapters.memory import EphemeralMemory
+
+        mock_model = MockModelAdapter()
+
+        # Pass string identifier
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+            memory="ephemeral",
+        )
+
+        # Should be resolved to EphemeralMemory instance
+        assert isinstance(engine.memory, EphemeralMemory)
+
+    def test_unknown_model_raises_config_error(self) -> None:
+        """LifecycleEngine should raise ConfigError for unknown model strings."""
+        with pytest.raises(ConfigError, match="Unknown adapter 'nonexistent-model'"):
+            LifecycleEngine(
+                model="nonexistent-model",
+                planner=MockPlanner(),
+            )
+
+    def test_none_values_preserved(self) -> None:
+        """LifecycleEngine should preserve None for optional adapters."""
+        mock_model = MockModelAdapter()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+            memory=None,
+        )
+
+        assert engine.memory is None

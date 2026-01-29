@@ -8,6 +8,10 @@ This module provides built-in memory adapter implementations:
 """
 
 from axis_core.adapters.memory.ephemeral import EphemeralMemory
+from axis_core.engine.registry import memory_registry
+
+# Register built-in memory adapters
+memory_registry.register("ephemeral", EphemeralMemory)
 
 __all__ = [
     "EphemeralMemory",

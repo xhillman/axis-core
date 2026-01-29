@@ -70,9 +70,9 @@ class SequentialPlanner:
                     id=f"tool_{i}_{tool_call.id}",
                     type=StepType.TOOL,
                     payload={
-                        "tool_name": tool_call.name,
+                        "tool": tool_call.name,
                         "tool_call_id": tool_call.id,
-                        "arguments": tool_call.arguments,
+                        "args": tool_call.arguments,
                     },
                     dependencies=None,  # Sequential - no explicit dependencies
                     retry_policy=None,  # Use default retry policy
