@@ -24,7 +24,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from axis_core.protocols.model import ToolCall
+    from axis_core.protocols.model import ModelResponse, ToolCall
     from axis_core.protocols.planner import Plan
 
 from axis_core.budget import Budget, BudgetState
@@ -237,6 +237,9 @@ class RunState:
     current_plan: Plan | None = None
     current_execution: ExecutionResult | None = None
 
+    # Last model response for next Observe phase
+    last_model_response: ModelResponse | None = None
+
     # Budget tracking
     budget_state: BudgetState = field(default_factory=BudgetState)
 
@@ -298,6 +301,96 @@ class RunState:
             record: ModelCallRecord to add
         """
         self._model_calls.append(record)
+
+    def build_messages(
+        self,
+        ctx: RunContext,
+        strategy: str = "smart",
+        max_cycles: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Build message array for next model call.
+
+        Reconstructs conversation history from completed cycles using
+        the specified strategy to control token usage.
+
+        Args:
+            ctx: Run context with input and cycle history
+            strategy: Context strategy ("smart", "full", "minimal")
+            max_cycles: For "smart" strategy, number of recent cycles to include
+
+        Returns:
+            List of messages in standard internal format
+
+        Strategies:
+            - "smart": First message with memory context + last N cycles
+            - "full": All cycles (expensive, use for debugging)
+            - "minimal": Just first message (most token-efficient)
+        """
+        messages: list[dict[str, Any]] = []
+
+        # Start with original user input (always include)
+        first_message_content = ctx.input.text
+
+        # Inject memory context if available (only on first message)
+        if self.current_observation and self.current_observation.memory_context:
+            mem_ctx = self.current_observation.memory_context
+            if mem_ctx.get("relevant_memories"):
+                context_parts = ["<relevant_context>"]
+                for mem in mem_ctx["relevant_memories"]:
+                    context_parts.append(f"- {mem.get('key', '')}: {mem.get('value', '')}")
+                context_parts.append("</relevant_context>")
+                context_str = "\n".join(context_parts)
+                first_message_content = f"{context_str}\n\n{first_message_content}"
+
+        messages.append({"role": "user", "content": first_message_content})
+
+        # Add conversation history based on strategy
+        if strategy == "full":
+            cycles_to_include = self._cycles
+        elif strategy == "smart":
+            cycles_to_include = self._cycles[-max_cycles:] if self._cycles else []
+        elif strategy == "minimal":
+            cycles_to_include = []
+        else:
+            # Default to smart
+            cycles_to_include = self._cycles[-max_cycles:] if self._cycles else []
+
+        # Reconstruct messages from cycles
+        for cycle in cycles_to_include:
+            # Add assistant response if present
+            if cycle.observation.response:
+                msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": cycle.observation.response,
+                }
+
+                # Add tool calls if present
+                if cycle.observation.tool_requests:
+                    msg["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        }
+                        for tc in cycle.observation.tool_requests
+                    ]
+
+                messages.append(msg)
+
+            # Add tool results if any tools were executed
+            if cycle.execution and cycle.execution.results:
+                # Extract tool results from execution
+                for step in cycle.plan.steps if cycle.plan else []:
+                    if step.id in cycle.execution.results:
+                        tool_call_id = step.payload.get("tool_call_id")
+                        if tool_call_id:
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call_id,
+                                "content": str(cycle.execution.results[step.id]),
+                            })
+
+        return messages
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize RunState to a dictionary.

@@ -40,32 +40,28 @@ class TestSequentialPlanner:
         # Verify plan structure
         assert isinstance(plan, Plan)
         assert plan.goal == "Process user request"
-        assert len(plan.steps) == 3  # 2 tool steps + 1 terminal
+        assert len(plan.steps) == 2  # 2 tool steps (no terminal until tools complete)
 
         # Verify tool steps
         assert plan.steps[0].type == StepType.TOOL
-        assert plan.steps[0].payload["tool_name"] == "search"
+        assert plan.steps[0].payload["tool"] == "search"
         assert plan.steps[0].payload["tool_call_id"] == "call_1"
-        assert plan.steps[0].payload["arguments"] == {"query": "test"}
+        assert plan.steps[0].payload["args"] == {"query": "test"}
 
         assert plan.steps[1].type == StepType.TOOL
-        assert plan.steps[1].payload["tool_name"] == "calculate"
+        assert plan.steps[1].payload["tool"] == "calculate"
         assert plan.steps[1].payload["tool_call_id"] == "call_2"
-        assert plan.steps[1].payload["arguments"] == {"expr": "2+2"}
-
-        # Verify terminal step
-        assert plan.steps[2].type == StepType.TERMINAL
-        assert "output" in plan.steps[2].payload
+        assert plan.steps[1].payload["args"] == {"expr": "2+2"}
 
     @pytest.mark.asyncio
-    async def test_plan_without_tool_requests(self) -> None:
-        """Test planning when observation has no tool requests (direct response)."""
+    async def test_plan_without_tool_requests_first_cycle(self) -> None:
+        """Test planning on first cycle (no response yet)."""
         planner = SequentialPlanner()
 
         observation = Observation(
             input=NormalizedInput(text="Hello", original="Hello"),
             tool_requests=None,
-            response="Hello! How can I help you today?",
+            response=None,  # First cycle - no response yet
             goal="Respond to greeting",
         )
 
@@ -74,7 +70,29 @@ class TestSequentialPlanner:
 
         plan = await planner.plan(observation, ctx)
 
-        # Should have only 1 terminal step
+        # Should have MODEL step only (need to call model first)
+        assert isinstance(plan, Plan)
+        assert len(plan.steps) == 1
+        assert plan.steps[0].type == StepType.MODEL
+
+    @pytest.mark.asyncio
+    async def test_plan_with_final_response(self) -> None:
+        """Test planning when model provided final response (no more tools)."""
+        planner = SequentialPlanner()
+
+        observation = Observation(
+            input=NormalizedInput(text="Hello", original="Hello"),
+            tool_requests=None,
+            response="Hello! How can I help you today?",  # Final response from previous cycle
+            goal="Respond to greeting",
+        )
+
+        ctx = Mock()
+        ctx.run_id = "run_456"
+
+        plan = await planner.plan(observation, ctx)
+
+        # Should have just TERMINAL (model already responded in previous cycle)
         assert isinstance(plan, Plan)
         assert len(plan.steps) == 1
         assert plan.steps[0].type == StepType.TERMINAL
@@ -97,7 +115,7 @@ class TestSequentialPlanner:
 
         plan = await planner.plan(observation, ctx)
 
-        # Empty tuple should behave like no tools - go straight to terminal
+        # Empty tuple should behave like no tools - just TERMINAL (response already present)
         assert len(plan.steps) == 1
         assert plan.steps[0].type == StepType.TERMINAL
 
@@ -193,11 +211,10 @@ class TestSequentialPlanner:
 
         plan = await planner.plan(observation, ctx)
 
-        # 1 tool step + 1 terminal step
-        assert len(plan.steps) == 2
+        # 1 tool step only (no terminal until tools complete)
+        assert len(plan.steps) == 1
         assert plan.steps[0].type == StepType.TOOL
-        assert plan.steps[0].payload["tool_name"] == "single_tool"
-        assert plan.steps[1].type == StepType.TERMINAL
+        assert plan.steps[0].payload["tool"] == "single_tool"
 
     @pytest.mark.asyncio
     async def test_step_dependencies(self) -> None:
@@ -248,7 +265,7 @@ class TestSequentialPlanner:
         plan = await planner.plan(observation, ctx)
 
         # Arguments should be preserved exactly
-        assert plan.steps[0].payload["arguments"] == complex_args
+        assert plan.steps[0].payload["args"] == complex_args
 
     @pytest.mark.asyncio
     async def test_confidence_score(self) -> None:

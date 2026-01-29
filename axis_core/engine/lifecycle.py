@@ -252,10 +252,34 @@ class LifecycleEngine:
             for c in ctx.state.cycles
         )
 
+        # Check if previous cycle executed tools
+        # If it did, we need to call the model again (don't reuse tool_requests)
+        previous_cycle_had_tools = False
+        if ctx.state._cycles:
+            last_cycle = ctx.state._cycles[-1]
+            if last_cycle.plan:
+                previous_cycle_had_tools = any(
+                    step.type == StepType.TOOL for step in last_cycle.plan.steps
+                )
+
+        # Pull previous model response if available (for subsequent cycles)
+        # BUT: If previous cycle executed tools, clear tool_requests so planner calls model again
+        last_response = ctx.state.last_model_response
+        if previous_cycle_had_tools:
+            # Previous cycle executed tools - need to call model again with results
+            tool_requests = None
+            response = None
+        else:
+            # Use last response as-is
+            tool_requests = last_response.tool_calls if last_response else None
+            response = last_response.content if last_response else None
+
         observation = Observation(
             input=ctx.input,
             memory_context=memory_context,
             previous_cycles=previous_cycles,
+            tool_requests=tool_requests,
+            response=response,
             timestamp=datetime.utcnow(),
         )
 
@@ -531,7 +555,16 @@ class LifecycleEngine:
         Returns:
             Model response content
         """
-        messages = step.payload.get("messages", [{"role": "user", "content": ctx.input.text}])
+        # Build messages if not explicitly provided
+        if "messages" not in step.payload:
+            # Get context strategy from environment or use default
+            import os
+            strategy = os.getenv("AXIS_CONTEXT_STRATEGY", "smart")
+            max_cycles = int(os.getenv("AXIS_MAX_CYCLE_CONTEXT", "5"))
+            messages = ctx.state.build_messages(ctx, strategy=strategy, max_cycles=max_cycles)
+        else:
+            messages = step.payload["messages"]
+
         system = step.payload.get("system", self.system)
 
         await self._emit(
@@ -571,6 +604,9 @@ class LifecycleEngine:
 
         # Store raw response as potential output
         ctx.state.output_raw = response.content
+
+        # Store full response for next Observe phase
+        ctx.state.last_model_response = response
 
         return response.content
 

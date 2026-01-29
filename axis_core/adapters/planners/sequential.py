@@ -63,8 +63,13 @@ class SequentialPlanner:
         """
         steps: list[PlanStep] = []
 
-        # If model requested tools, create a TOOL step for each
+        # Decision tree for what to do:
+        # 1. If model requested tools → execute them
+        # 2. If we have a final response (no tools requested) → terminate
+        # 3. Otherwise → call model
+
         if observation.tool_requests:
+            # Model requested tools - create TOOL steps
             for i, tool_call in enumerate(observation.tool_requests):
                 step = PlanStep(
                     id=f"tool_{i}_{tool_call.id}",
@@ -78,18 +83,29 @@ class SequentialPlanner:
                     retry_policy=None,  # Use default retry policy
                 )
                 steps.append(step)
+            # After tools execute, loop back for next cycle
 
-        # Always add a terminal step to return the final output
-        terminal_step = PlanStep(
-            id="terminal",
-            type=StepType.TERMINAL,
-            payload={
-                "output": observation.response or "",
-            },
-            dependencies=None,
-            retry_policy=None,
-        )
-        steps.append(terminal_step)
+        elif observation.response is not None:
+            # We have a response and no pending tool requests → done!
+            terminal_step = PlanStep(
+                id="terminal",
+                type=StepType.TERMINAL,
+                payload={"output": observation.response},
+                dependencies=None,
+                retry_policy=None,
+            )
+            steps.append(terminal_step)
+
+        else:
+            # No response yet - need to call model
+            model_step = PlanStep(
+                id="model",
+                type=StepType.MODEL,
+                payload={},  # Executor will build messages from context
+                dependencies=None,
+                retry_policy=None,
+            )
+            steps.append(model_step)
 
         # Create the plan
         plan = Plan(

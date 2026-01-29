@@ -930,3 +930,331 @@ class TestSerializationRoundTrip:
         assert restored.errors[0].phase == "act"
         assert restored.errors[0].cycle == 1
         assert restored.errors[0].recovered is False
+
+
+# =============================================================================
+# Message Building Tests (First-Cycle Model Calling)
+# =============================================================================
+
+
+class TestMessageBuilding:
+    """Tests for build_messages() context management."""
+
+    def test_build_messages_first_cycle(self) -> None:
+        """First cycle should return just user input."""
+        from axis_core.context import NormalizedInput, RunContext, RunState
+
+        state = RunState()
+        ctx = RunContext(
+            run_id="test-run",
+            agent_id="test-agent",
+            input=NormalizedInput(text="Hello world", original="Hello world"),
+            context={},
+            attachments=[],
+            config=None,  # type: ignore[arg-type]
+            budget=Budget(),
+            state=state,
+            trace=None,  # type: ignore[arg-type]
+            started_at=datetime.now(timezone.utc),
+            cycle_count=0,
+            cancel_token=None,
+        )
+
+        messages = state.build_messages(ctx, strategy="smart", max_cycles=5)
+
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "Hello world"
+
+    def test_build_messages_with_memory_context(self) -> None:
+        """First message should include memory context if available."""
+        from axis_core.context import (
+            NormalizedInput,
+            Observation,
+            RunContext,
+            RunState,
+        )
+
+        state = RunState()
+        state.current_observation = Observation(
+            input=NormalizedInput(text="test", original="test"),
+            memory_context={
+                "relevant_memories": [
+                    {"key": "fact1", "value": "The sky is blue"},
+                    {"key": "fact2", "value": "Water is wet"},
+                ]
+            },
+            previous_cycles=(),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        ctx = RunContext(
+            run_id="test-run",
+            agent_id="test-agent",
+            input=NormalizedInput(text="What color is the sky?", original="What color is the sky?"),
+            context={},
+            attachments=[],
+            config=None,  # type: ignore[arg-type]
+            budget=Budget(),
+            state=state,
+            trace=None,  # type: ignore[arg-type]
+            started_at=datetime.now(timezone.utc),
+            cycle_count=0,
+            cancel_token=None,
+        )
+
+        messages = state.build_messages(ctx, strategy="smart")
+
+        assert len(messages) == 1
+        assert "<relevant_context>" in messages[0]["content"]
+        assert "The sky is blue" in messages[0]["content"]
+        assert "What color is the sky?" in messages[0]["content"]
+
+    def test_build_messages_smart_strategy(self) -> None:
+        """Smart strategy should include last N cycles only."""
+        from axis_core.context import (
+            CycleState,
+            EvalDecision,
+            ExecutionResult,
+            NormalizedInput,
+            Observation,
+            RunContext,
+            RunState,
+        )
+        from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
+
+        state = RunState()
+
+        # Create 10 cycles
+        for i in range(10):
+            cycle = CycleState(
+                cycle_number=i,
+                observation=Observation(
+                    input=NormalizedInput(text=f"cycle {i}", original=f"cycle {i}"),
+                    response=f"response {i}",
+                    tool_requests=None,
+                    previous_cycles=(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                plan=Plan(
+                    id=f"plan-{i}",
+                    goal=f"goal {i}",
+                    steps=(),
+                ),
+                execution=ExecutionResult(),
+                evaluation=EvalDecision(done=False),
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+            )
+            state.append_cycle(cycle)
+
+        ctx = RunContext(
+            run_id="test-run",
+            agent_id="test-agent",
+            input=NormalizedInput(text="original", original="original"),
+            context={},
+            attachments=[],
+            config=None,  # type: ignore[arg-type]
+            budget=Budget(),
+            state=state,
+            trace=None,  # type: ignore[arg-type]
+            started_at=datetime.now(timezone.utc),
+            cycle_count=10,
+            cancel_token=None,
+        )
+
+        messages = state.build_messages(ctx, strategy="smart", max_cycles=3)
+
+        # Should have: 1 user message + (last 3 cycles * 1 assistant message each) = 4 messages
+        assert len(messages) == 4
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "original"
+
+        # Check that we have responses from cycles 7, 8, 9 (last 3)
+        assert "response 7" in messages[1]["content"]
+        assert "response 8" in messages[2]["content"]
+        assert "response 9" in messages[3]["content"]
+
+    def test_build_messages_with_tool_calls(self) -> None:
+        """Messages should include tool calls and results."""
+        from axis_core.context import (
+            CycleState,
+            EvalDecision,
+            ExecutionResult,
+            NormalizedInput,
+            Observation,
+            RunContext,
+            RunState,
+        )
+        from axis_core.protocols.model import ToolCall
+
+        state = RunState()
+
+        # Cycle with tool call
+        cycle = CycleState(
+            cycle_number=0,
+            observation=Observation(
+                input=NormalizedInput(text="search", original="search"),
+                response="Let me search for that",
+                tool_requests=(
+                    ToolCall(id="call_1", name="search", arguments={"q": "test"}),
+                ),
+                previous_cycles=(),
+                timestamp=datetime.now(timezone.utc),
+            ),
+            plan=Plan(
+                id="plan-1",
+                goal="search",
+                steps=(
+                    PlanStep(
+                        id="step_1",
+                        type=StepType.TOOL,
+                        payload={"tool": "search", "tool_call_id": "call_1", "args": {"q": "test"}},
+                    ),
+                ),
+            ),
+            execution=ExecutionResult(results={"step_1": "search results"}),
+            evaluation=EvalDecision(done=True),
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+        )
+        state.append_cycle(cycle)
+
+        ctx = RunContext(
+            run_id="test-run",
+            agent_id="test-agent",
+            input=NormalizedInput(text="search", original="search"),
+            context={},
+            attachments=[],
+            config=None,  # type: ignore[arg-type]
+            budget=Budget(),
+            state=state,
+            trace=None,  # type: ignore[arg-type]
+            started_at=datetime.now(timezone.utc),
+            cycle_count=1,
+            cancel_token=None,
+        )
+
+        messages = state.build_messages(ctx, strategy="smart")
+
+        # Should have: user message, assistant with tool_calls, tool result
+        assert len(messages) == 3
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
+        assert "tool_calls" in messages[1]
+        assert messages[1]["tool_calls"][0]["id"] == "call_1"
+        assert messages[2]["role"] == "tool"
+        assert messages[2]["tool_call_id"] == "call_1"
+        assert "search results" in messages[2]["content"]
+
+    def test_build_messages_minimal_strategy(self) -> None:
+        """Minimal strategy should only return first user message."""
+        from axis_core.context import (
+            CycleState,
+            EvalDecision,
+            ExecutionResult,
+            NormalizedInput,
+            Observation,
+            RunContext,
+            RunState,
+        )
+
+        state = RunState()
+
+        # Add some cycles
+        for i in range(5):
+            cycle = CycleState(
+                cycle_number=i,
+                observation=Observation(
+                    input=NormalizedInput(text=f"cycle {i}", original=f"cycle {i}"),
+                    response=f"response {i}",
+                    tool_requests=None,
+                    previous_cycles=(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                plan=Plan(id=f"plan-{i}", goal=f"goal {i}", steps=()),
+                execution=ExecutionResult(),
+                evaluation=EvalDecision(done=False),
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+            )
+            state.append_cycle(cycle)
+
+        ctx = RunContext(
+            run_id="test-run",
+            agent_id="test-agent",
+            input=NormalizedInput(text="original", original="original"),
+            context={},
+            attachments=[],
+            config=None,  # type: ignore[arg-type]
+            budget=Budget(),
+            state=state,
+            trace=None,  # type: ignore[arg-type]
+            started_at=datetime.now(timezone.utc),
+            cycle_count=5,
+            cancel_token=None,
+        )
+
+        messages = state.build_messages(ctx, strategy="minimal")
+
+        # Should only have original user message
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "original"
+
+    def test_build_messages_full_strategy(self) -> None:
+        """Full strategy should include all cycles."""
+        from axis_core.context import (
+            CycleState,
+            EvalDecision,
+            ExecutionResult,
+            NormalizedInput,
+            Observation,
+            RunContext,
+            RunState,
+        )
+
+        state = RunState()
+
+        # Add 3 cycles
+        for i in range(3):
+            cycle = CycleState(
+                cycle_number=i,
+                observation=Observation(
+                    input=NormalizedInput(text=f"cycle {i}", original=f"cycle {i}"),
+                    response=f"response {i}",
+                    tool_requests=None,
+                    previous_cycles=(),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                plan=Plan(id=f"plan-{i}", goal=f"goal {i}", steps=()),
+                execution=ExecutionResult(),
+                evaluation=EvalDecision(done=False),
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+            )
+            state.append_cycle(cycle)
+
+        ctx = RunContext(
+            run_id="test-run",
+            agent_id="test-agent",
+            input=NormalizedInput(text="original", original="original"),
+            context={},
+            attachments=[],
+            config=None,  # type: ignore[arg-type]
+            budget=Budget(),
+            state=state,
+            trace=None,  # type: ignore[arg-type]
+            started_at=datetime.now(timezone.utc),
+            cycle_count=3,
+            cancel_token=None,
+        )
+
+        messages = state.build_messages(ctx, strategy="full")
+
+        # Should have: 1 user + 3 assistant messages = 4
+        assert len(messages) == 4
+        assert messages[0]["role"] == "user"
+        assert "response 0" in messages[1]["content"]
+        assert "response 1" in messages[2]["content"]
+        assert "response 2" in messages[3]["content"]

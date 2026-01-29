@@ -24,6 +24,7 @@ from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, Usage
 # Pricing table for cost estimation (per million tokens)
 # Source: https://platform.claude.com/docs/en/about-claude/pricing (as of 2026-01)
 MODEL_PRICING: dict[str, dict[str, float]] = {
+  # Exact API model names
   "claude-opus-4-20250514": {
     "input_per_mtok": 15.00,
     "output_per_mtok": 75.00
@@ -51,6 +52,19 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
   "claude-3-haiku-20240307": {
     "input_per_mtok": 0.25,
     "output_per_mtok": 1.25
+  },
+  # Convenience aliases (point to latest versions)
+  "claude-opus": {
+    "input_per_mtok": 5.00,
+    "output_per_mtok": 25.00
+  },
+  "claude-sonnet": {
+    "input_per_mtok": 3.00,
+    "output_per_mtok": 15.00
+  },
+  "claude-haiku": {
+    "input_per_mtok": 1.00,
+    "output_per_mtok": 5.00
   }
 }
 
