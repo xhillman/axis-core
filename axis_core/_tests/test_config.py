@@ -1,8 +1,19 @@
 """Tests for axis_core.config module."""
 
+import os
+from unittest.mock import patch
+
 import pytest
 
-from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts
+from axis_core.config import (
+    CacheConfig,
+    Config,
+    RateLimits,
+    ResolvedConfig,
+    RetryPolicy,
+    Timeouts,
+    deep_merge,
+)
 
 
 class TestTimeouts:
@@ -233,3 +244,161 @@ class TestCacheConfig:
         """CacheConfig should accept sqlite:/// URLs."""
         config = CacheConfig(backend="sqlite:///path/to/cache.db")
         assert config.backend == "sqlite:///path/to/cache.db"
+
+
+# ---------------------------------------------------------------------------
+# deep_merge tests (AD-015)
+# ---------------------------------------------------------------------------
+
+
+class TestDeepMerge:
+    """Tests for deep_merge() utility function (AD-015)."""
+
+    def test_empty_dicts(self) -> None:
+        result = deep_merge({}, {})
+        assert result == {}
+
+    def test_base_only(self) -> None:
+        base = {"a": 1, "b": 2}
+        result = deep_merge(base, {})
+        assert result == {"a": 1, "b": 2}
+
+    def test_override_only(self) -> None:
+        override = {"a": 1, "b": 2}
+        result = deep_merge({}, override)
+        assert result == {"a": 1, "b": 2}
+
+    def test_simple_override(self) -> None:
+        base = {"a": 1, "b": 2}
+        override = {"b": 3, "c": 4}
+        result = deep_merge(base, override)
+        assert result == {"a": 1, "b": 3, "c": 4}
+
+    def test_nested_merge(self) -> None:
+        base = {"a": {"x": 1, "y": 2}, "b": 3}
+        override = {"a": {"y": 10, "z": 20}}
+        result = deep_merge(base, override)
+        assert result == {"a": {"x": 1, "y": 10, "z": 20}, "b": 3}
+
+    def test_deep_nested_merge(self) -> None:
+        base = {"a": {"b": {"c": 1, "d": 2}}, "e": 3}
+        override = {"a": {"b": {"d": 10, "f": 20}}}
+        result = deep_merge(base, override)
+        assert result == {"a": {"b": {"c": 1, "d": 10, "f": 20}}, "e": 3}
+
+    def test_override_with_non_dict(self) -> None:
+        base = {"a": {"x": 1}}
+        override = {"a": "replaced"}
+        result = deep_merge(base, override)
+        assert result == {"a": "replaced"}
+
+    def test_does_not_mutate_base(self) -> None:
+        base = {"a": 1}
+        override = {"b": 2}
+        result = deep_merge(base, override)
+        assert base == {"a": 1}  # unchanged
+        assert result == {"a": 1, "b": 2}
+
+    def test_does_not_mutate_override(self) -> None:
+        base = {"a": 1}
+        override = {"b": 2}
+        result = deep_merge(base, override)
+        assert override == {"b": 2}  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Config singleton tests (9.1-9.2, 9.4, 9.6)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigSingleton:
+    """Tests for Config singleton."""
+
+    def test_singleton_exists(self) -> None:
+        from axis_core.config import config
+
+        assert config is not None
+        assert isinstance(config, Config)
+
+    def test_has_default_model(self) -> None:
+        from axis_core.config import config
+
+        assert hasattr(config, "default_model")
+
+    def test_has_default_planner(self) -> None:
+        from axis_core.config import config
+
+        assert hasattr(config, "default_planner")
+
+    def test_has_default_memory(self) -> None:
+        from axis_core.config import config
+
+        assert hasattr(config, "default_memory")
+
+    def test_programmatic_override(self) -> None:
+        from axis_core.config import config
+
+        original = config.default_model
+        config.default_model = "test-model"
+        assert config.default_model == "test-model"
+        # Restore
+        config.default_model = original
+
+    def test_reset_restores_env_values(self) -> None:
+        from axis_core.config import config
+
+        original = config.default_model
+        config.default_model = "changed"
+        config.reset()
+        assert config.default_model == original
+
+    @patch.dict(os.environ, {"AXIS_DEFAULT_MODEL": "env-model"})
+    def test_loads_from_environment(self) -> None:
+        # Create fresh config instance
+        cfg = Config()
+        assert cfg.default_model == "env-model"
+
+    @patch.dict(os.environ, {"AXIS_DEFAULT_PLANNER": "env-planner"})
+    def test_loads_planner_from_env(self) -> None:
+        cfg = Config()
+        assert cfg.default_planner == "env-planner"
+
+    @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"})
+    def test_loads_api_keys_from_env(self) -> None:
+        cfg = Config()
+        assert cfg.anthropic_api_key == "test-key"
+
+
+# ---------------------------------------------------------------------------
+# ResolvedConfig tests (9.5)
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedConfig:
+    """Tests for ResolvedConfig dataclass."""
+
+    def test_creation(self) -> None:
+        from axis_core.budget import Budget
+
+        resolved = ResolvedConfig(
+            model="claude-sonnet-4",
+            planner="auto",
+            memory=None,
+            budget=Budget(),
+            timeouts=Timeouts(),
+        )
+        assert resolved.model == "claude-sonnet-4"
+        assert resolved.planner == "auto"
+
+    def test_frozen(self) -> None:
+        from axis_core.budget import Budget
+
+        resolved = ResolvedConfig(
+            model="test",
+            planner="auto",
+            memory=None,
+            budget=Budget(),
+            timeouts=Timeouts(),
+        )
+        with pytest.raises(AttributeError):
+            resolved.model = "changed"  # type: ignore[misc]

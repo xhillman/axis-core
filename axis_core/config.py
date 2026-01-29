@@ -1,10 +1,18 @@
 """Configuration dataclasses for axis-core agents.
 
 This module provides immutable configuration objects for timeouts, retries, rate limiting,
-and caching behavior.
+and caching behavior, plus a Config singleton for global defaults.
+
+Architecture Decisions:
+- AD-015: deep_merge() for recursive config dictionary merging
+- Config resolution order: defaults → env → constructor → runtime
 """
 
+from __future__ import annotations
+
+import os
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -150,3 +158,162 @@ class CacheConfig:
     ttl: int = 3600
     backend: str = "memory"
     max_size_mb: int = 100
+
+
+# ===========================================================================
+# deep_merge utility (AD-015)
+# ===========================================================================
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Deep merge two dicts, override wins on conflicts (AD-015).
+
+    Recursively merges nested dictionaries. If both base and override contain
+    the same key pointing to dicts, those dicts are merged. Otherwise, override
+    value replaces base value.
+
+    Args:
+        base: Base dictionary
+        override: Override dictionary
+
+    Returns:
+        New merged dictionary (does not mutate inputs)
+
+    Examples:
+        >>> deep_merge({"a": 1}, {"b": 2})
+        {'a': 1, 'b': 2}
+
+        >>> deep_merge({"a": {"x": 1}}, {"a": {"y": 2}})
+        {'a': {'x': 1, 'y': 2}}
+
+        >>> deep_merge({"a": {"x": 1}}, {"a": "replaced"})
+        {'a': 'replaced'}
+    """
+    result = base.copy()
+
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+
+    return result
+
+
+# ===========================================================================
+# ResolvedConfig dataclass (9.5)
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class ResolvedConfig:
+    """Fully resolved configuration for a single agent run.
+
+    Contains all resolved configuration values after applying the resolution order:
+    defaults → env → constructor → runtime. This is passed to RunContext.
+
+    Attributes:
+        model: Resolved model identifier or adapter
+        planner: Resolved planner identifier or adapter
+        memory: Resolved memory adapter (optional)
+        budget: Budget limits
+        timeouts: Phase timeouts
+        rate_limits: Rate limiting config (optional)
+        retry: Retry policy (optional)
+        cache: Cache config (optional)
+        telemetry_enabled: Whether telemetry is enabled
+        verbose: Whether to print events
+    """
+
+    model: Any
+    planner: Any
+    memory: Any | None = None
+    budget: Any = None  # Budget instance (imported at runtime to avoid circular imports)
+    timeouts: Timeouts | None = None
+    rate_limits: RateLimits | None = None
+    retry: RetryPolicy | None = None
+    cache: CacheConfig | None = None
+    telemetry_enabled: bool = True
+    verbose: bool = False
+
+
+# ===========================================================================
+# Config singleton (9.1-9.2, 9.4, 9.6)
+# ===========================================================================
+
+
+class Config:
+    """Global configuration singleton.
+
+    Loads defaults from environment variables (via python-dotenv) and provides
+    programmatic override with reset() to restore env values.
+
+    Resolution order: defaults → env → constructor → runtime
+
+    Usage:
+        from axis_core.config import config
+
+        print(config.default_model)  # "claude-sonnet-4-20250514"
+
+        config.default_model = "gpt-4"  # Override for testing
+        config.reset()  # Restore from environment
+    """
+
+    def __init__(self) -> None:
+        """Initialize config from environment variables."""
+        # Try to load .env file (non-fatal if missing)
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+        except ImportError:
+            pass  # python-dotenv not installed
+
+        # Load from environment with defaults
+        self._env_default_model = os.getenv(
+            "AXIS_DEFAULT_MODEL", "claude-sonnet-4-20250514"
+        )
+        self._env_default_planner = os.getenv("AXIS_DEFAULT_PLANNER", "auto")
+        self._env_default_memory = os.getenv("AXIS_DEFAULT_MEMORY", "ephemeral")
+        self._env_anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        self._env_openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        self._env_telemetry = os.getenv("AXIS_TELEMETRY", "true").lower() == "true"
+        self._env_verbose = os.getenv("AXIS_VERBOSE", "false").lower() == "true"
+        self._env_debug = os.getenv("AXIS_DEBUG", "false").lower() == "true"
+
+        # Current values (can be overridden programmatically)
+        self.default_model = self._env_default_model
+        self.default_planner = self._env_default_planner
+        self.default_memory = self._env_default_memory
+        self.anthropic_api_key = self._env_anthropic_api_key
+        self.openai_api_key = self._env_openai_api_key
+        self.telemetry = self._env_telemetry
+        self.verbose = self._env_verbose
+        self.debug = self._env_debug
+
+    def reset(self) -> None:
+        """Reset all values to environment defaults."""
+        self.default_model = self._env_default_model
+        self.default_planner = self._env_default_planner
+        self.default_memory = self._env_default_memory
+        self.anthropic_api_key = self._env_anthropic_api_key
+        self.openai_api_key = self._env_openai_api_key
+        self.telemetry = self._env_telemetry
+        self.verbose = self._env_verbose
+        self.debug = self._env_debug
+
+
+# Global config singleton instance
+config = Config()
+
+
+__all__ = [
+    "Timeouts",
+    "RetryPolicy",
+    "RateLimits",
+    "CacheConfig",
+    "deep_merge",
+    "ResolvedConfig",
+    "Config",
+    "config",
+]
