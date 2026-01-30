@@ -133,6 +133,45 @@ class LifecycleEngine:
                 logger.warning("Telemetry sink failed to emit event", exc_info=True)
 
     # =========================================================================
+    # Tool manifest extraction
+    # =========================================================================
+
+    def _get_tool_manifests(self) -> list[Any]:
+        """Extract tool manifests from registered tools.
+
+        Returns protocol-defined ToolManifest objects. The model adapter
+        is responsible for converting these to provider-specific formats.
+
+        Returns:
+            List of ToolManifest objects (protocol layer)
+
+        Example:
+            >>> manifests = engine._get_tool_manifests()
+            >>> manifests[0].name
+            "get_weather"
+            >>> manifests[0].input_schema
+            {"type": "object", "properties": {...}}
+        """
+        if not self.tools:
+            return []
+
+        manifests: list[Any] = []
+
+        for tool_name, tool_fn in self.tools.items():
+            # Check if tool has manifest (created by @tool decorator)
+            if not hasattr(tool_fn, "_axis_manifest"):
+                logger.warning(
+                    "Tool '%s' missing _axis_manifest, skipping",
+                    tool_name,
+                )
+                continue
+
+            manifest = tool_fn._axis_manifest
+            manifests.append(manifest)
+
+        return manifests
+
+    # =========================================================================
     # Initialize phase (7.2)
     # =========================================================================
 
@@ -567,6 +606,10 @@ class LifecycleEngine:
 
         system = step.payload.get("system", self.system)
 
+        # Get tool manifests (protocol objects) - adapter will convert to its format
+        tool_manifests = self._get_tool_manifests()
+        tools = tool_manifests if tool_manifests else None
+
         await self._emit(
             "model_called",
             run_id=ctx.run_id,
@@ -579,6 +622,7 @@ class LifecycleEngine:
         response = await self.model.complete(
             messages=messages,
             system=system,
+            tools=tools,
         )
         duration_ms = (time.monotonic() - start) * 1000
 

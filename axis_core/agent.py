@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -98,6 +99,57 @@ def _coerce_cache(value: dict[str, Any] | CacheConfig | None) -> CacheConfig | N
     )
 
 
+def _resolve_telemetry_sinks() -> list[Any]:
+    """Resolve telemetry sinks from environment variables.
+
+    Reads AXIS_TELEMETRY_SINK env var and creates appropriate sink instances.
+
+    Supported values:
+        - "console": Creates ConsoleSink for stdout output
+        - "none": Returns empty list (telemetry disabled)
+        - "file": Not yet implemented (logs warning)
+        - "callback": Not yet implemented (logs warning)
+
+    Returns:
+        List of telemetry sink instances
+    """
+    sink_type = os.getenv("AXIS_TELEMETRY_SINK", "none").lower()
+
+    if sink_type == "none":
+        return []
+
+    if sink_type == "console":
+        # Import here to avoid circular imports
+        from axis_core.adapters.telemetry.console import ConsoleSink
+
+        # Check if compact mode is requested via env var
+        compact = os.getenv("AXIS_TELEMETRY_COMPACT", "false").lower() == "true"
+        return [ConsoleSink(compact=compact)]
+
+    if sink_type == "file":
+        # File sink not yet implemented
+        file_path = os.getenv("AXIS_TELEMETRY_FILE", "./axis_trace.jsonl")
+        logger.warning(
+            "AXIS_TELEMETRY_SINK=file is not yet implemented. "
+            f"File path would be: {file_path}. Using no telemetry."
+        )
+        return []
+
+    if sink_type == "callback":
+        logger.warning(
+            "AXIS_TELEMETRY_SINK=callback requires passing sinks directly to Agent. "
+            "Using no telemetry."
+        )
+        return []
+
+    # Unknown sink type
+    logger.warning(
+        f"Unknown AXIS_TELEMETRY_SINK value: '{sink_type}'. "
+        f"Supported values: console, file, callback, none. Using no telemetry."
+    )
+    return []
+
+
 class Agent:
     """Primary API for executing AI agent tasks.
 
@@ -172,10 +224,13 @@ class Agent:
         self._verbose = verbose
         self._auth = auth
 
-        # Telemetry
+        # Telemetry - resolve sinks from env vars when enabled
         if isinstance(telemetry, bool):
             self._telemetry_enabled = telemetry
-            self._telemetry_sinks: list[Any] = []
+            # When telemetry=True, resolve sinks from AXIS_TELEMETRY_SINK env var
+            self._telemetry_sinks: list[Any] = (
+                _resolve_telemetry_sinks() if telemetry else []
+            )
         elif isinstance(telemetry, list):
             self._telemetry_enabled = True
             self._telemetry_sinks = telemetry

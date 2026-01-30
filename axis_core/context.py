@@ -357,11 +357,12 @@ class RunState:
 
         # Reconstruct messages from cycles
         for cycle in cycles_to_include:
-            # Add assistant response if present
-            if cycle.observation.response:
+            # Add assistant message if there's a response OR tool requests
+            # (tool-only responses may have empty content but still need the message)
+            if cycle.observation.response or cycle.observation.tool_requests:
                 msg: dict[str, Any] = {
                     "role": "assistant",
-                    "content": cycle.observation.response,
+                    "content": cycle.observation.response or "",
                 }
 
                 # Add tool calls if present

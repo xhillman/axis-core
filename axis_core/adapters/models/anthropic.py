@@ -20,6 +20,7 @@ except ImportError as e:
 
 from axis_core.errors import ModelError
 from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
+from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
 # Source: https://platform.claude.com/docs/en/about-claude/pricing (as of 2026-01)
@@ -129,6 +130,201 @@ class AnthropicModel:
         """Return the model identifier."""
         return self._model_id
 
+    @staticmethod
+    def _convert_tool_manifest_to_anthropic(manifest: ToolManifest) -> dict[str, Any]:
+        """Convert a ToolManifest to Anthropic's tool format.
+
+        This adapter method transforms the protocol-defined ToolManifest
+        into the format expected by Anthropic's API.
+
+        Args:
+            manifest: Tool manifest from the protocol layer
+
+        Returns:
+            Dict in Anthropic's tool format with name, description, and input_schema
+
+        Example:
+            >>> manifest = ToolManifest(
+            ...     name="get_weather",
+            ...     description="Get weather",
+            ...     input_schema={"type": "object", "properties": {...}},
+            ...     ...
+            ... )
+            >>> schema = AnthropicModel._convert_tool_manifest_to_anthropic(manifest)
+            >>> schema["name"]
+            "get_weather"
+        """
+        return {
+            "name": manifest.name,
+            "description": manifest.description,
+            "input_schema": manifest.input_schema,
+        }
+
+    @staticmethod
+    def _convert_tools_to_anthropic(tools: Any) -> list[dict[str, Any]] | None:
+        """Convert tools parameter to Anthropic format.
+
+        Handles both ToolManifest objects (protocol layer) and raw dicts
+        (for backward compatibility or direct API usage).
+
+        Args:
+            tools: List of ToolManifest objects, list of dicts, or None
+
+        Returns:
+            List of tool dicts in Anthropic format, or None if no tools
+
+        Example:
+            >>> manifests = [ToolManifest(...), ToolManifest(...)]
+            >>> anthropic_tools = AnthropicModel._convert_tools_to_anthropic(manifests)
+            >>> len(anthropic_tools)
+            2
+        """
+        if tools is None:
+            return None
+
+        if not tools:
+            return None
+
+        # Check if tools are ToolManifest objects
+        if isinstance(tools, list) and tools:
+            first_tool = tools[0]
+
+            # If already dicts, pass through (backward compatibility)
+            if isinstance(first_tool, dict):
+                # Type narrowing: we know it's a list of dicts
+                tool_dicts: list[dict[str, Any]] = tools
+                return tool_dicts
+
+            # If ToolManifest objects, convert them
+            if isinstance(first_tool, ToolManifest):
+                return [
+                    AnthropicModel._convert_tool_manifest_to_anthropic(manifest)
+                    for manifest in tools
+                ]
+
+        # Shouldn't reach here with proper input types
+        return None
+
+    @staticmethod
+    def _convert_messages_to_anthropic(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert messages from internal format to Anthropic's API format.
+
+        The internal format uses OpenAI-style conventions:
+        - Assistant messages may have a 'tool_calls' field
+        - Tool results use role='tool' with 'tool_call_id'
+
+        Anthropic's format differs:
+        - Assistant messages use content blocks with type='tool_use'
+        - Tool results use role='user' with content blocks of type='tool_result'
+
+        Args:
+            messages: List of messages in internal format
+
+        Returns:
+            List of messages in Anthropic's API format
+
+        Example:
+            Internal format:
+                [
+                    {"role": "user", "content": "What's the weather?"},
+                    {"role": "assistant", "content": "Let me check.",
+                     "tool_calls": [{"id": "tc1", "name": "get_weather", "arguments": {...}}]},
+                    {"role": "tool", "tool_call_id": "tc1", "content": "Sunny, 72°F"}
+                ]
+
+            Anthropic format:
+                [
+                    {"role": "user", "content": "What's the weather?"},
+                    {"role": "assistant", "content": [
+                        {"type": "text", "text": "Let me check."},
+                        {"type": "tool_use", "id": "tc1", "name": "get_weather", "input": {...}}
+                    ]},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "tc1", "content": "Sunny, 72°F"}
+                    ]}
+                ]
+        """
+        converted: list[dict[str, Any]] = []
+        pending_tool_results: list[dict[str, Any]] = []
+
+        for msg in messages:
+            role = msg.get("role", "")
+
+            if role == "tool":
+                # Collect tool results - they'll be batched into a single user message
+                tool_result_block: dict[str, Any] = {
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": msg.get("content", ""),
+                }
+                pending_tool_results.append(tool_result_block)
+
+            elif role == "assistant":
+                # Flush any pending tool results first (shouldn't happen, but be safe)
+                if pending_tool_results:
+                    converted.append({
+                        "role": "user",
+                        "content": pending_tool_results,
+                    })
+                    pending_tool_results = []
+
+                # Convert assistant message
+                tool_calls = msg.get("tool_calls", [])
+                content = msg.get("content", "")
+
+                if tool_calls:
+                    # Build content array with text and tool_use blocks
+                    content_blocks: list[dict[str, Any]] = []
+
+                    # Add text block if there's text content
+                    if content:
+                        content_blocks.append({"type": "text", "text": content})
+
+                    # Add tool_use blocks
+                    for tc in tool_calls:
+                        content_blocks.append({
+                            "type": "tool_use",
+                            "id": tc.get("id", ""),
+                            "name": tc.get("name", ""),
+                            "input": tc.get("arguments", {}),
+                        })
+
+                    converted.append({
+                        "role": "assistant",
+                        "content": content_blocks,
+                    })
+                else:
+                    # Simple text-only assistant message
+                    converted.append({
+                        "role": "assistant",
+                        "content": content,
+                    })
+
+            elif role == "user":
+                # Flush pending tool results before user message
+                if pending_tool_results:
+                    converted.append({
+                        "role": "user",
+                        "content": pending_tool_results,
+                    })
+                    pending_tool_results = []
+
+                # Pass through user messages as-is
+                converted.append(msg)
+
+            else:
+                # Unknown role - pass through (shouldn't happen)
+                converted.append(msg)
+
+        # Flush any remaining tool results at the end
+        if pending_tool_results:
+            converted.append({
+                "role": "user",
+                "content": pending_tool_results,
+            })
+
+        return converted
+
     async def complete(
         self,
         messages: Any,
@@ -144,7 +340,7 @@ class AnthropicModel:
         Args:
             messages: List of message dicts with 'role' and 'content'
             system: System prompt/instructions
-            tools: Available tools for the model to use
+            tools: Available tools (ToolManifest objects or dicts)
             temperature: Sampling temperature (overrides default)
             max_tokens: Maximum tokens to generate (overrides default)
             stop_sequences: Sequences that stop generation
@@ -157,10 +353,13 @@ class AnthropicModel:
             ModelError: If the API call fails
         """
         try:
+            # Convert messages from internal format to Anthropic format
+            anthropic_messages = self._convert_messages_to_anthropic(messages)
+
             # Build request parameters
             kwargs: dict[str, Any] = {
                 "model": self._model_id,
-                "messages": messages,
+                "messages": anthropic_messages,
                 "temperature": temperature if temperature is not None else self._temperature,
                 "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
             }
@@ -168,8 +367,11 @@ class AnthropicModel:
             if system is not None:
                 kwargs["system"] = system
 
+            # Convert tools to Anthropic format (handles ToolManifest objects)
             if tools is not None:
-                kwargs["tools"] = tools
+                anthropic_tools = self._convert_tools_to_anthropic(tools)
+                if anthropic_tools is not None:
+                    kwargs["tools"] = anthropic_tools
 
             if stop_sequences is not None:
                 kwargs["stop_sequences"] = stop_sequences
@@ -292,10 +494,13 @@ class AnthropicModel:
             ModelError: If the API call fails
         """
         try:
+            # Convert messages from internal format to Anthropic format
+            anthropic_messages = self._convert_messages_to_anthropic(messages)
+
             # Build request parameters
             kwargs: dict[str, Any] = {
                 "model": self._model_id,
-                "messages": messages,
+                "messages": anthropic_messages,
                 "temperature": temperature if temperature is not None else self._temperature,
                 "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
             }
@@ -303,8 +508,11 @@ class AnthropicModel:
             if system is not None:
                 kwargs["system"] = system
 
+            # Convert tools to Anthropic format (handles ToolManifest objects)
             if tools is not None:
-                kwargs["tools"] = tools
+                anthropic_tools = self._convert_tools_to_anthropic(tools)
+                if anthropic_tools is not None:
+                    kwargs["tools"] = anthropic_tools
 
             if stop_sequences is not None:
                 kwargs["stop_sequences"] = stop_sequences

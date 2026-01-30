@@ -14,11 +14,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from axis_core.budget import Budget, BudgetState
+from axis_core.budget import Budget
 from axis_core.context import (
     CycleState,
     EvalDecision,
@@ -30,18 +29,14 @@ from axis_core.context import (
 )
 from axis_core.engine.lifecycle import LifecycleEngine, Phase
 from axis_core.errors import (
-    AxisError,
     BudgetError,
     CancelledError,
     ConfigError,
-    ErrorClass,
     PlanError,
-    ToolError,
 )
-from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
-
 
 # =============================================================================
 # Mock adapters for testing
@@ -653,7 +648,8 @@ class TestActPhase:
             agent_id="test-agent",
             budget=Budget(),
         )
-        observation = await engine._observe(ctx)
+        # Observe phase (populates context state)
+        await engine._observe(ctx)
 
         result = await engine._act(ctx, plan)
 
@@ -1282,3 +1278,212 @@ class TestAdapterResolution:
         )
 
         assert engine.memory is None
+
+
+# =============================================================================
+# Tool Schema Tests (TDD for tool integration)
+# =============================================================================
+
+
+class TestToolManifestExtraction:
+    """Tests for tool manifest extraction from registered tools."""
+
+    def test_get_tool_manifests_empty_tools(self) -> None:
+        """_get_tool_manifests should return empty list when no tools."""
+        mock_model = MockModelAdapter()
+        planner = MockPlanner()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=planner,
+            tools={},
+        )
+
+        manifests = engine._get_tool_manifests()
+        assert manifests == []
+
+    def test_get_tool_manifests_with_single_tool(self) -> None:
+        """_get_tool_manifests should return ToolManifest objects."""
+        from axis_core.tool import ToolManifest, tool
+
+        @tool
+        def get_weather(city: str) -> str:
+            """Get the weather for a city."""
+            return f"Weather in {city}"
+
+        mock_model = MockModelAdapter()
+        planner = MockPlanner()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=planner,
+            tools={"get_weather": get_weather},
+        )
+
+        manifests = engine._get_tool_manifests()
+
+        assert len(manifests) == 1
+        manifest = manifests[0]
+        assert isinstance(manifest, ToolManifest)
+        assert manifest.name == "get_weather"
+        assert manifest.description == "Get the weather for a city."
+        assert manifest.input_schema["type"] == "object"
+        assert "city" in manifest.input_schema["properties"]
+        assert manifest.input_schema["properties"]["city"]["type"] == "string"
+        assert "city" in manifest.input_schema["required"]
+
+    def test_get_tool_manifests_with_multiple_tools(self) -> None:
+        """_get_tool_manifests should return manifests for all tools."""
+        from axis_core.tool import ToolManifest, tool
+
+        @tool
+        def get_weather(city: str) -> str:
+            """Get weather."""
+            return "sunny"
+
+        @tool
+        def get_time(timezone: str) -> str:
+            """Get current time."""
+            return "12:00"
+
+        mock_model = MockModelAdapter()
+        planner = MockPlanner()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=planner,
+            tools={"get_weather": get_weather, "get_time": get_time},
+        )
+
+        manifests = engine._get_tool_manifests()
+
+        assert len(manifests) == 2
+        assert all(isinstance(m, ToolManifest) for m in manifests)
+        tool_names = {m.name for m in manifests}
+        assert tool_names == {"get_weather", "get_time"}
+
+    def test_get_tool_manifests_with_optional_params(self) -> None:
+        """_get_tool_manifests should preserve optional parameter info."""
+        from axis_core.tool import ToolManifest, tool
+
+        @tool
+        def search(query: str, limit: int = 10) -> str:
+            """Search for something."""
+            return f"Results for {query}"
+
+        mock_model = MockModelAdapter()
+        planner = MockPlanner()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=planner,
+            tools={"search": search},
+        )
+
+        manifests = engine._get_tool_manifests()
+
+        assert len(manifests) == 1
+        manifest = manifests[0]
+        assert isinstance(manifest, ToolManifest)
+        assert "query" in manifest.input_schema["required"]
+        assert "limit" not in manifest.input_schema["required"]
+        assert "limit" in manifest.input_schema["properties"]
+
+    @pytest.mark.asyncio
+    async def test_model_step_passes_tool_manifests(self) -> None:
+        """MODEL step execution should pass ToolManifest objects to model.complete()."""
+        from axis_core.tool import ToolManifest, tool
+
+        @tool
+        def test_tool(arg: str) -> str:
+            """Test tool."""
+            return "result"
+
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Response with tool call",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=20, total_tokens=30),
+                    cost_usd=0.001,
+                )
+            ]
+        )
+        planner = MockPlanner()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=planner,
+            tools={"test_tool": test_tool},
+        )
+
+        ctx = await engine._initialize(
+            input_text="test input",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        # Create a MODEL step
+        step = PlanStep(
+            id="model_1",
+            type=StepType.MODEL,
+            payload={},
+            dependencies=None,
+            retry_policy=None,
+        )
+
+        # Execute the step
+        await engine._execute_model_step(ctx, step)
+
+        # Verify model.complete() was called with ToolManifest objects (protocol layer)
+        assert len(mock_model.calls) == 1
+        call = mock_model.calls[0]
+        assert "tools" in call
+        assert call["tools"] is not None
+        assert len(call["tools"]) == 1
+        # Should be ToolManifest object, not dict
+        assert isinstance(call["tools"][0], ToolManifest)
+        assert call["tools"][0].name == "test_tool"
+
+    @pytest.mark.asyncio
+    async def test_model_step_with_no_tools(self) -> None:
+        """MODEL step execution with no tools should pass None for tools."""
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=20, total_tokens=30),
+                    cost_usd=0.001,
+                )
+            ]
+        )
+        planner = MockPlanner()
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=planner,
+            tools={},  # No tools
+        )
+
+        ctx = await engine._initialize(
+            input_text="test input",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        step = PlanStep(
+            id="model_1",
+            type=StepType.MODEL,
+            payload={},
+            dependencies=None,
+            retry_policy=None,
+        )
+
+        await engine._execute_model_step(ctx, step)
+
+        # Verify model.complete() was called without tools
+        assert len(mock_model.calls) == 1
+        call = mock_model.calls[0]
+        # Tools should be None or not in call when no tools available
+        assert call.get("tools") is None

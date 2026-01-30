@@ -203,8 +203,28 @@ class TestAgentConstructor:
         assert len(agent._telemetry_sinks) == 1
 
     def test_construction_telemetry_true(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
-        assert agent._telemetry_sinks == []
+        """Test that telemetry=True resolves sinks from AXIS_TELEMETRY_SINK env var."""
+        import os
+        from unittest.mock import patch
+
+        # Test with AXIS_TELEMETRY_SINK=none (empty sinks)
+        with patch.dict(os.environ, {"AXIS_TELEMETRY_SINK": "none"}):
+            agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+            assert agent._telemetry_sinks == []
+            assert agent._telemetry_enabled is True
+
+    def test_construction_telemetry_true_with_console_sink(self) -> None:
+        """Test that telemetry=True with AXIS_TELEMETRY_SINK=console creates ConsoleSink."""
+        import os
+        from unittest.mock import patch
+
+        from axis_core.adapters.telemetry.console import ConsoleSink
+
+        with patch.dict(os.environ, {"AXIS_TELEMETRY_SINK": "console"}):
+            agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+            assert len(agent._telemetry_sinks) == 1
+            assert isinstance(agent._telemetry_sinks[0], ConsoleSink)
+            assert agent._telemetry_enabled is True
 
     def test_construction_telemetry_false(self) -> None:
         agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=False)
