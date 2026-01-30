@@ -94,3 +94,5 @@ Thumbs.db
 axis_memory.db
 *.jsonl
 dev/
+
+CLAUDE.md
