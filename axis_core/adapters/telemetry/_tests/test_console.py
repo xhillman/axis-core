@@ -148,12 +148,11 @@ class TestConsoleSink:
     @pytest.mark.asyncio
     async def test_defaults_to_stdout(self) -> None:
         """ConsoleSink should default to sys.stdout if no output provided."""
-        import sys
 
         sink = ConsoleSink()
         # Can't easily test stdout output, but verify it doesn't error
-        event = TraceEvent(type="test", timestamp=datetime.utcnow(), run_id="run")
+        _event = TraceEvent(type="test", timestamp=datetime.utcnow(), run_id="run")
         # This would print to stdout in a real scenario
         # For now, just verify it doesn't crash
-        # await sink.emit(event)
+        # await sink.emit(_event)
         assert sink is not None

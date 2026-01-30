@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from axis_core.engine.resolver import resolve_adapter
 from axis_core.errors import ConfigError
-
 
 # ---------------------------------------------------------------------------
 # Mock adapters for testing

@@ -8,7 +8,7 @@ from datetime import datetime
 import pytest
 
 from axis_core.context import RunState
-from axis_core.errors import AxisError, ErrorClass, ErrorRecord
+from axis_core.errors import AxisError, ErrorClass
 from axis_core.result import RunResult, RunStats, StreamEvent
 
 

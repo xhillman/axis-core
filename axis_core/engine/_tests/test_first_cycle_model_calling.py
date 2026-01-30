@@ -13,9 +13,6 @@ import pytest
 
 from axis_core.budget import Budget
 from axis_core.context import (
-    CycleState,
-    EvalDecision,
-    ExecutionResult,
     NormalizedInput,
     Observation,
     RunContext,
@@ -24,7 +21,6 @@ from axis_core.context import (
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
-
 
 # =============================================================================
 # Mock adapters
@@ -134,7 +130,7 @@ class TestModelResponseStorage:
             payload={},
         )
 
-        result = await engine._execute_model_step(ctx, step)
+        _ = await engine._execute_model_step(ctx, step)
 
         # Check that response was stored
         assert ctx.state.last_model_response is not None

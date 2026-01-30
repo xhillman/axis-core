@@ -302,7 +302,7 @@ class TestDeepMerge:
     def test_does_not_mutate_override(self) -> None:
         base = {"a": 1}
         override = {"b": 2}
-        result = deep_merge(base, override)
+        _ = deep_merge(base, override)
         assert override == {"b": 2}  # unchanged
 
 

@@ -4,8 +4,10 @@ Tests for RunContext, RunState, and supporting dataclasses that provide
 the single source of truth for agent execution state.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -14,6 +16,9 @@ from axis_core.errors import AxisError, ErrorClass, ErrorRecord
 from axis_core.protocols.model import ToolCall
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.tool import ToolCallRecord
+
+if TYPE_CHECKING:
+    from axis_core.context import CycleState, RunContext
 
 
 class TestNormalizedInput:
@@ -261,7 +266,7 @@ class TestModelCallRecord:
 class TestCycleState:
     """Tests for CycleState dataclass (complete cycle record)."""
 
-    def _create_sample_cycle_state(self) -> "CycleState":
+    def _create_sample_cycle_state(self) -> CycleState:
         """Helper to create a sample CycleState for testing."""
         from axis_core.context import (
             CycleState,
@@ -291,7 +296,6 @@ class TestCycleState:
 
     def test_creation(self) -> None:
         """Test CycleState creation."""
-        from axis_core.context import CycleState
 
         cycle = self._create_sample_cycle_state()
 
@@ -303,7 +307,6 @@ class TestCycleState:
 
     def test_frozen(self) -> None:
         """Test that CycleState is immutable (frozen)."""
-        from axis_core.context import CycleState
 
         cycle = self._create_sample_cycle_state()
 
@@ -312,7 +315,6 @@ class TestCycleState:
 
     def test_to_dict(self) -> None:
         """Test CycleState serialization to dict."""
-        from axis_core.context import CycleState
 
         cycle = self._create_sample_cycle_state()
         data = cycle.to_dict()
@@ -571,7 +573,7 @@ class TestRunState:
 class TestRunContext:
     """Tests for RunContext dataclass (single source of truth)."""
 
-    def _create_sample_context(self) -> "RunContext":
+    def _create_sample_context(self) -> RunContext:
         """Helper to create a sample RunContext for testing."""
         from axis_core.context import NormalizedInput, RunContext, RunState
 
@@ -596,7 +598,6 @@ class TestRunContext:
 
     def test_creation(self) -> None:
         """Test RunContext creation."""
-        from axis_core.context import RunContext
 
         ctx = self._create_sample_context()
 
@@ -607,7 +608,6 @@ class TestRunContext:
 
     def test_identity_fields_readonly(self) -> None:
         """Test that identity fields are read-only after initialization."""
-        from axis_core.context import RunContext
 
         ctx = self._create_sample_context()
 
@@ -621,7 +621,7 @@ class TestRunContext:
 
     def test_input_readonly(self) -> None:
         """Test that input is read-only after initialization."""
-        from axis_core.context import NormalizedInput, RunContext
+        from axis_core.context import NormalizedInput
 
         ctx = self._create_sample_context()
         new_input = NormalizedInput(text="new", original="new")
@@ -631,7 +631,6 @@ class TestRunContext:
 
     def test_mutable_fields_can_change(self) -> None:
         """Test that non-identity fields can be modified."""
-        from axis_core.context import RunContext
 
         ctx = self._create_sample_context()
 
@@ -645,7 +644,6 @@ class TestRunContext:
 
     def test_serialize(self) -> None:
         """Test RunContext serialization."""
-        from axis_core.context import RunContext
 
         ctx = self._create_sample_context()
         data = ctx.serialize()
@@ -1021,7 +1019,6 @@ class TestMessageBuilding:
             RunContext,
             RunState,
         )
-        from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 
         state = RunState()
 

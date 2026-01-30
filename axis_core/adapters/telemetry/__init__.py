@@ -6,8 +6,10 @@ observability backends.
 
 from __future__ import annotations
 
+from typing import Any
 
-def __getattr__(name: str):
+
+def __getattr__(name: str) -> Any:
     """Lazy loading of telemetry sinks to avoid circular imports."""
     if name == "ConsoleSink":
         from axis_core.adapters.telemetry.console import ConsoleSink

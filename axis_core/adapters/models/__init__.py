@@ -15,7 +15,10 @@ __all__ = []
 
 # Conditional import for Anthropic adapter and register built-in models
 try:
-    from axis_core.adapters.models.anthropic import AnthropicModel, MODEL_PRICING
+    from axis_core.adapters.models.anthropic import (
+        MODEL_PRICING,  # noqa: F401 - re-exported
+        AnthropicModel,
+    )
     from axis_core.engine.registry import model_registry
 
     __all__.extend(["AnthropicModel", "MODEL_PRICING"])
@@ -39,13 +42,17 @@ try:
 
     # Register built-in Anthropic models (Task 16.1)
     # Each registration creates a factory that pre-fills the model_id
-    model_registry.register("claude-3-haiku-20240307", _make_anthropic_factory("claude-3-haiku-20240307"))
-    model_registry.register("claude-sonnet-4-20250514", _make_anthropic_factory("claude-sonnet-4-20250514"))
-    model_registry.register("claude-opus-4-20250514", _make_anthropic_factory("claude-opus-4-20250514"))
-    model_registry.register("claude-opus-4-1-20250805", _make_anthropic_factory("claude-opus-4-1-20250805"))
-    model_registry.register("claude-sonnet-4-5-20250929", _make_anthropic_factory("claude-sonnet-4-5-20250929"))
-    model_registry.register("claude-haiku-4-5-20251001", _make_anthropic_factory("claude-haiku-4-5-20251001"))
-    model_registry.register("claude-opus-4-5-20251101", _make_anthropic_factory("claude-opus-4-5-20251101"))
+    _anthropic_models = [
+        "claude-3-haiku-20240307",
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
+        "claude-opus-4-1-20250805",
+        "claude-sonnet-4-5-20250929",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-5-20251101",
+    ]
+    for model_id in _anthropic_models:
+        model_registry.register(model_id, _make_anthropic_factory(model_id))
 
     # Register convenience aliases for latest versions
     model_registry.register("claude-haiku", _make_anthropic_factory("claude-haiku-4-5-20251001"))

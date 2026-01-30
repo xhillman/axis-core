@@ -17,6 +17,8 @@ Example:
     result = agent.run("Greet the user named Alice")
 """
 
+from typing import Any
+
 __version__ = "0.1.0"
 
 # Public API - will be populated as modules are implemented
@@ -58,19 +60,10 @@ __all__ = [
     # Context
     "RunContext",
     "RunState",
-    # Session
-    "Session",
-    "Message",
-    # Attachments
-    "Attachment",
-    "Image",
-    "PDF",
-    # Cancellation
-    "CancelToken",
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Lazy loading of submodules to avoid circular imports and missing module errors."""
     # Core
     if name == "Agent":
@@ -197,36 +190,6 @@ def __getattr__(name: str):
         from axis_core.context import RunState
 
         return RunState
-
-    # Session
-    if name == "Session":
-        from axis_core.session import Session
-
-        return Session
-    if name == "Message":
-        from axis_core.session import Message
-
-        return Message
-
-    # Attachments
-    if name == "Attachment":
-        from axis_core.attachments import Attachment
-
-        return Attachment
-    if name == "Image":
-        from axis_core.attachments import Image
-
-        return Image
-    if name == "PDF":
-        from axis_core.attachments import PDF
-
-        return PDF
-
-    # Cancellation
-    if name == "CancelToken":
-        from axis_core.cancel import CancelToken
-
-        return CancelToken
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

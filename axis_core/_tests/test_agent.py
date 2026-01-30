@@ -3,23 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
 from axis_core.agent import Agent
-from axis_core.budget import Budget, BudgetState
-from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts
-from axis_core.context import RunState
-from axis_core.errors import AxisError, ErrorClass
+from axis_core.budget import Budget
+from axis_core.config import Timeouts
 from axis_core.protocols.model import ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.result import RunResult, RunStats, StreamEvent
 from axis_core.tool import tool
-
 
 # ---------------------------------------------------------------------------
 # Mock helpers
@@ -451,9 +445,9 @@ class TestStringAdapterResolution:
     def test_agent_with_model_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Agent should accept model string and resolve to instance."""
         try:
-            from axis_core.adapters.models import AnthropicModel
             # Trigger registration by importing adapters
             import axis_core.adapters.planners  # noqa: F401
+            from axis_core.adapters.models import AnthropicModel
         except ImportError:
             pytest.skip("Anthropic package not installed")
 
@@ -481,8 +475,8 @@ class TestStringAdapterResolution:
         """Agent should resolve all adapters from strings."""
         try:
             # Trigger registration by importing adapters
-            from axis_core.adapters.models import AnthropicModel
             from axis_core.adapters.memory import EphemeralMemory
+            from axis_core.adapters.models import AnthropicModel
             from axis_core.adapters.planners import SequentialPlanner
         except ImportError:
             pytest.skip("Required packages not installed")
