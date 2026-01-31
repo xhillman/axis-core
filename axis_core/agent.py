@@ -124,7 +124,9 @@ def _resolve_telemetry_sinks() -> list[Any]:
 
         # Check if compact mode is requested via env var
         compact = os.getenv("AXIS_TELEMETRY_COMPACT", "false").lower() == "true"
-        return [ConsoleSink(compact=compact)]
+        # Redaction is enabled by default for security (MED-1)
+        redact = os.getenv("AXIS_TELEMETRY_REDACT", "true").lower() == "true"
+        return [ConsoleSink(compact=compact, redact=redact)]
 
     if sink_type == "file":
         # File sink not yet implemented

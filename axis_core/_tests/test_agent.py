@@ -220,6 +220,72 @@ class TestAgentConstructor:
             assert isinstance(agent._telemetry_sinks[0], ConsoleSink)
             assert agent._telemetry_enabled is True
 
+    def test_telemetry_redaction_enabled_by_default(self) -> None:
+        """Test that AXIS_TELEMETRY_REDACT defaults to true (MED-1 security fix)."""
+        import os
+        from unittest.mock import patch
+
+        from axis_core.adapters.telemetry.console import ConsoleSink
+
+        with patch.dict(os.environ, {"AXIS_TELEMETRY_SINK": "console"}):
+            agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+            sink = agent._telemetry_sinks[0]
+            assert isinstance(sink, ConsoleSink)
+            assert sink._redact is True
+
+    def test_telemetry_redaction_respects_env_var_true(self) -> None:
+        """Test that AXIS_TELEMETRY_REDACT=true enables redaction."""
+        import os
+        from unittest.mock import patch
+
+        from axis_core.adapters.telemetry.console import ConsoleSink
+
+        with patch.dict(
+            os.environ,
+            {"AXIS_TELEMETRY_SINK": "console", "AXIS_TELEMETRY_REDACT": "true"},
+        ):
+            agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+            sink = agent._telemetry_sinks[0]
+            assert isinstance(sink, ConsoleSink)
+            assert sink._redact is True
+
+    def test_telemetry_redaction_respects_env_var_false(self) -> None:
+        """Test that AXIS_TELEMETRY_REDACT=false disables redaction."""
+        import os
+        from unittest.mock import patch
+
+        from axis_core.adapters.telemetry.console import ConsoleSink
+
+        with patch.dict(
+            os.environ,
+            {"AXIS_TELEMETRY_SINK": "console", "AXIS_TELEMETRY_REDACT": "false"},
+        ):
+            agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+            sink = agent._telemetry_sinks[0]
+            assert isinstance(sink, ConsoleSink)
+            assert sink._redact is False
+
+    def test_telemetry_compact_mode_works_with_redaction(self) -> None:
+        """Test that compact mode and redaction can be used together."""
+        import os
+        from unittest.mock import patch
+
+        from axis_core.adapters.telemetry.console import ConsoleSink
+
+        with patch.dict(
+            os.environ,
+            {
+                "AXIS_TELEMETRY_SINK": "console",
+                "AXIS_TELEMETRY_COMPACT": "true",
+                "AXIS_TELEMETRY_REDACT": "true",
+            },
+        ):
+            agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+            sink = agent._telemetry_sinks[0]
+            assert isinstance(sink, ConsoleSink)
+            assert sink._compact is True
+            assert sink._redact is True
+
     def test_construction_telemetry_false(self) -> None:
         agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=False)
         assert agent._telemetry_enabled is False

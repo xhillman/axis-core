@@ -7,9 +7,58 @@ a specified output stream. Uses IMMEDIATE buffering mode.
 from __future__ import annotations
 
 import sys
-from typing import TextIO
+from typing import Any, TextIO
 
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
+
+_REDACTED_VALUE = "[REDACTED]"
+_SENSITIVE_KEY_FRAGMENTS = (
+    "api_key",
+    "apikey",
+    "secret",
+    "token",
+    "password",
+    "authorization",
+    "bearer",
+    "access_key",
+    "private_key",
+)
+
+
+def _should_redact_key(key: str) -> bool:
+    """Check if a key should be redacted based on sensitive fragments.
+
+    Args:
+        key: The dictionary key to check
+
+    Returns:
+        True if the key contains a sensitive fragment (case-insensitive)
+    """
+    key_lower = key.lower()
+    return any(fragment in key_lower for fragment in _SENSITIVE_KEY_FRAGMENTS)
+
+
+def _redact_data(value: Any) -> Any:
+    """Recursively redact sensitive data from event data structures.
+
+    Args:
+        value: The value to redact (can be dict, list, tuple, or scalar)
+
+    Returns:
+        The same structure with sensitive values replaced with [REDACTED]
+    """
+    if isinstance(value, dict):
+        return {
+            k: _REDACTED_VALUE
+            if isinstance(k, str) and _should_redact_key(k)
+            else _redact_data(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_data(item) for item in value)
+    return value
 
 
 class ConsoleSink:
@@ -23,15 +72,22 @@ class ConsoleSink:
         compact: If True, use compact single-line format. If False, use pretty multi-line format.
     """
 
-    def __init__(self, output: TextIO | None = None, compact: bool = False) -> None:
+    def __init__(
+        self,
+        output: TextIO | None = None,
+        compact: bool = False,
+        redact: bool = True,
+    ) -> None:
         """Initialize console sink.
 
         Args:
             output: Output stream (defaults to sys.stdout)
             compact: Use compact format if True
+            redact: If True, redact sensitive keys from event data (default: True)
         """
         self._output = output or sys.stdout
         self._compact = compact
+        self._redact = redact
 
     @property
     def buffering(self) -> BufferMode:
@@ -64,8 +120,10 @@ class ConsoleSink:
             parts.append(f"step={event.step_id}")
         if event.duration_ms is not None:
             parts.append(f"duration={event.duration_ms:.1f}ms")
-        if event.data:
-            parts.append(f"data={event.data}")
+
+        data = _redact_data(event.data) if self._redact else event.data
+        if data:
+            parts.append(f"data={data}")
 
         line = " ".join(parts)
         self._output.write(line + "\n")
@@ -87,8 +145,10 @@ class ConsoleSink:
             lines.append(f"  step_id: {event.step_id}")
         if event.duration_ms is not None:
             lines.append(f"  duration: {event.duration_ms:.1f}ms")
-        if event.data:
-            lines.append(f"  data: {event.data}")
+
+        data = _redact_data(event.data) if self._redact else event.data
+        if data:
+            lines.append(f"  data: {data}")
 
         output = "\n".join(lines) + "\n"
         self._output.write(output)
