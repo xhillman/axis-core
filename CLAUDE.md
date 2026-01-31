@@ -32,6 +32,35 @@ ruff check axis_core --fix
 
 # Type check (strict mode enforced)
 mypy axis_core --strict
+
+# Dependency management (supply chain security)
+# Generate lockfile after updating dependencies in pyproject.toml
+uv pip compile pyproject.toml -o requirements.lock
+
+# Install from lockfile for reproducible builds
+pip install -r requirements.lock
+
+# Verify lockfile is valid
+pytest axis_core/_tests/test_lockfile.py
+```
+
+## Dependency Management & Supply Chain Security
+
+**Lockfile:** `requirements.lock` pins exact versions of all dependencies (direct + transitive) for reproducible builds.
+
+**Update cadence:**
+- **Monthly:** Review and update lockfile with latest security patches
+- **On-demand:** Regenerate lockfile when adding/removing dependencies in `pyproject.toml`
+- **Security alerts:** Regenerate immediately if critical CVE affects locked dependencies
+
+**Commands:**
+```bash
+# After modifying pyproject.toml dependencies
+uv pip compile pyproject.toml -o requirements.lock
+
+# Audit for known vulnerabilities (recommended weekly)
+pip install pip-audit
+pip-audit -r requirements.lock
 ```
 
 ## Architecture
