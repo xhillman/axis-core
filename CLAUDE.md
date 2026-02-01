@@ -86,6 +86,21 @@ pip-audit -r requirements.lock
 - **Async native:** Sync methods wrap async core
 - **Environment-first config:** Resolution order: defaults → env vars → constructor args → runtime args
 
+### Adapter Auto-Registration
+
+Built-in adapters are automatically registered via a lazy factory pattern:
+
+1. **Registry System** (`axis_core/engine/registry.py`): Global registries (`model_registry`, `memory_registry`, `planner_registry`) store adapter factories
+2. **Lazy Factories** (each `axis_core/adapters/{category}/__init__.py`): Create wrapper classes that defer importing actual implementations until instantiation
+3. **Automatic Registration**: When `axis_core.engine.registry` is imported, it triggers all adapter `__init__.py` files which register their factories
+4. **Optional Dependencies**: Adapters with optional deps (e.g., Anthropic) only import the implementation package when first used, providing helpful error messages if dependencies are missing
+
+**Adding new adapters:**
+- Follow the lazy factory pattern in existing `__init__.py` files (see `axis_core/adapters/models/__init__.py` for reference)
+- Register via `{category}_registry.register(name, factory_class)`
+- For adapters with optional dependencies, wrap imports in try/except and raise `ConfigError` with installation instructions
+- **IMPORTANT**: When implementing adapters for specific products (Anthropic, OpenAI, Redis, etc.), always reference the official product documentation to ensure correct usage of their APIs and best practices
+
 ## Testing Conventions
 
 - Tests live in top-level `/tests` directory, mirroring `axis_core/` structure

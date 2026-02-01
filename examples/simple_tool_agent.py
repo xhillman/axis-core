@@ -77,7 +77,13 @@ def search_docs(query: str, max_results: int = 3) -> str:
         "Budget tracking prevents runaway costs",
     ]
 
-    results = [doc for doc in docs if query.lower() in doc.lower()][:max_results]
+    # Split query into words for better matching across all models
+    query_words = query.lower().split()
+    results = [
+        doc
+        for doc in docs
+        if any(word in doc.lower() for word in query_words)
+    ][:max_results]
 
     if results:
         return "\n".join(f"{i+1}. {result}" for i, result in enumerate(results))
