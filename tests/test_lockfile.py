@@ -12,8 +12,8 @@ class TestDependencyLockfile:
     @pytest.fixture
     def repo_root(self) -> Path:
         """Get repository root directory."""
-        # Test file is in axis_core/_tests/, so go up two levels
-        return Path(__file__).parent.parent.parent
+        # Test file is in tests/, so go up one level
+        return Path(__file__).parent.parent
 
     @pytest.fixture
     def lockfile_path(self, repo_root: Path) -> Path:

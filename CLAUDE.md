@@ -25,7 +25,7 @@ pytest --cov=axis_core
 pytest -m "not slow"
 
 # Run single test file
-pytest axis_core/engine/_tests/test_lifecycle.py
+pytest tests/engine/test_lifecycle.py
 
 # Lint
 ruff check axis_core --fix
@@ -41,7 +41,7 @@ uv pip compile pyproject.toml -o requirements.lock
 pip install -r requirements.lock
 
 # Verify lockfile is valid
-pytest axis_core/_tests/test_lockfile.py
+pytest tests/test_lockfile.py
 ```
 
 ## Dependency Management & Supply Chain Security
@@ -88,10 +88,11 @@ pip-audit -r requirements.lock
 
 ## Testing Conventions
 
-- Tests live in `_tests/` subdirectories within each module
+- Tests live in top-level `/tests` directory, mirroring `axis_core/` structure
 - Markers: `@pytest.mark.unit`, `@pytest.mark.integration`, `@pytest.mark.slow`
 - Use `@pytest.mark.asyncio` for async tests (asyncio_mode=auto in pytest.ini)
 - Pattern: `test_*.py` files with `Test*` classes
+- All imports from tests use absolute imports: `from axis_core.* import ...`
 
 ## Code Style
 
