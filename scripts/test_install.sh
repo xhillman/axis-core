@@ -65,14 +65,12 @@ if len(models) < 10:
     sys.exit(1)
 
 # Test 4: Config defaults work
-import os
-os.environ['AXIS_DEFAULT_MODEL'] = 'test-model'
-os.environ['AXIS_DEFAULT_PLANNER'] = 'test-planner'
+# The config singleton is already initialized, so we modify it directly
+from axis_core.config import config
+original_model = config.default_model
 
-# Need to reload config to pick up env vars
-import importlib
-import axis_core.config
-importlib.reload(axis_core.config)
+config.default_model = 'test-model'
+config.default_planner = 'test-planner'
 
 from axis_core import Agent
 agent = Agent()
@@ -80,6 +78,9 @@ if agent._model != 'test-model':
     print(f"✗ Config defaults not working! Got: {agent._model}")
     sys.exit(1)
 print(f"✓ Config defaults working")
+
+# Restore original
+config.default_model = original_model
 
 # Test 5: Basic import and creation
 try:

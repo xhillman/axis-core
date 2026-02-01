@@ -66,7 +66,22 @@ echo ""
 # 6. Upload
 if [ "$TARGET" = "pypi" ]; then
     echo -e "${YELLOW}⚠ Publishing to PRODUCTION PyPI${NC}"
-    read -p "Are you sure? (yes/no): " -r
+    echo ""
+    echo "Have you completed the PyPI checklist?"
+    echo "  → scripts/pypi_checklist.md"
+    echo ""
+    echo "Version $PYPROJECT_VERSION will be:"
+    if [[ "$PYPROJECT_VERSION" =~ ^0\.[0-9]\. ]]; then
+        echo "  🟡 Alpha (0.0.x - 0.9.x) - Consider TestPyPI only"
+    elif [[ "$PYPROJECT_VERSION" =~ ^0\.[0-9][0-9]\. ]]; then
+        echo "  🟢 Beta (0.10.0+) - OK for PyPI"
+    elif [[ "$PYPROJECT_VERSION" =~ rc ]]; then
+        echo "  🔵 Release Candidate - OK for PyPI"
+    else
+        echo "  ✨ Stable - OK for PyPI"
+    fi
+    echo ""
+    read -p "Publish to PyPI? (yes/no): " -r
     if [[ ! $REPLY =~ ^yes$ ]]; then
         echo "Cancelled"
         exit 0
