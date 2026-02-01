@@ -23,13 +23,16 @@ from datetime import datetime
 from typing import Any
 
 from axis_core.budget import Budget, BudgetState
-from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts
+from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts, config
 from axis_core.context import RunState
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.errors import AxisError
 from axis_core.result import RunResult, RunStats, StreamEvent
 
 logger = logging.getLogger("axis_core.agent")
+
+# Sentinel value to distinguish "not provided" from "explicitly None"
+_UNSET = object()
 
 
 def _coerce_budget(value: dict[str, Any] | Budget | None) -> Budget:
@@ -182,10 +185,10 @@ class Agent:
         *,
         system: str | None = None,
         persona: str | None = None,
-        model: Any = None,
+        model: Any = _UNSET,
         fallback: list[Any] | None = None,
-        memory: Any = None,
-        planner: Any = None,
+        memory: Any = _UNSET,
+        planner: Any = _UNSET,
         budget: dict[str, Any] | Budget | None = None,
         timeouts: dict[str, Any] | Timeouts | None = None,
         rate_limits: dict[str, Any] | RateLimits | None = None,
@@ -214,10 +217,12 @@ class Agent:
         self._agent_id = str(uuid.uuid4())
         self._system = system
         self._persona = persona
-        self._model = model
+        # Fall back to config defaults when not provided (config resolution order)
+        # Use sentinel to distinguish "not provided" from "explicitly None"
+        self._model = config.default_model if model is _UNSET else model
         self._fallback: list[Any] = fallback or []
-        self._memory = memory
-        self._planner = planner
+        self._memory = config.default_memory if memory is _UNSET else memory
+        self._planner = config.default_planner if planner is _UNSET else planner
         self._budget = _coerce_budget(budget)
         self._timeouts = _coerce_timeouts(timeouts)
         self._rate_limits = _coerce_rate_limits(rate_limits)

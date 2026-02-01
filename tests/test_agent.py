@@ -131,7 +131,7 @@ class TestAgentConstructor:
     """Tests for Agent class constructor."""
 
     def test_minimal_construction(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         assert agent is not None
 
     def test_construction_with_tools(self) -> None:
@@ -180,7 +180,7 @@ class TestAgentConstructor:
         assert agent._timeouts.act == 30.0
 
     def test_default_budget(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         assert agent._budget.max_cycles == 10  # Budget default
 
     def test_construction_with_memory(self) -> None:
@@ -300,7 +300,7 @@ class TestAgentConstructor:
         assert len(agent._fallback) == 1
 
     def test_agent_id_generated(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         assert agent._agent_id is not None
         assert len(agent._agent_id) > 0
 
@@ -340,7 +340,7 @@ class TestRunAsync:
 
     @pytest.mark.asyncio
     async def test_basic_run(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = await agent.run_async("Hello")
         assert isinstance(result, RunResult)
         assert result.success is True
@@ -348,32 +348,32 @@ class TestRunAsync:
 
     @pytest.mark.asyncio
     async def test_run_returns_output(self) -> None:
-        agent = Agent(model=MockModel("test output"), planner=MockPlanner())
+        agent = Agent(model=MockModel("test output"), planner=MockPlanner(), memory=None)
         result = await agent.run_async("Hello")
         assert result.output == "mock response"
 
     @pytest.mark.asyncio
     async def test_run_with_context(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = await agent.run_async("Hello", context={"user_id": "123"})
         assert result.success is True
 
     @pytest.mark.asyncio
     async def test_run_stats_populated(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = await agent.run_async("Hello")
         assert isinstance(result.stats, RunStats)
         assert result.stats.cycles >= 0
 
     @pytest.mark.asyncio
     async def test_run_empty_input_raises(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = await agent.run_async("")
         assert result.success is False
 
     @pytest.mark.asyncio
     async def test_run_input_type_validated(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         with pytest.raises(TypeError, match="input"):
             await agent.run_async(123)  # type: ignore[arg-type]
 
@@ -387,13 +387,13 @@ class TestRunSync:
     """Tests for run() — sync wrapper (AD-027)."""
 
     def test_sync_run_returns_result(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = agent.run("Hello")
         assert isinstance(result, RunResult)
         assert result.success is True
 
     def test_sync_run_with_context(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = agent.run("Hello", context={"key": "value"})
         assert result.success is True
 
@@ -408,7 +408,7 @@ class TestStreamAsync:
 
     @pytest.mark.asyncio
     async def test_stream_yields_events(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         events: list[StreamEvent] = []
         async for event in agent.stream_async("Hello"):
             events.append(event)
@@ -416,7 +416,7 @@ class TestStreamAsync:
 
     @pytest.mark.asyncio
     async def test_stream_starts_with_run_started(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         events: list[StreamEvent] = []
         async for event in agent.stream_async("Hello"):
             events.append(event)
@@ -424,7 +424,7 @@ class TestStreamAsync:
 
     @pytest.mark.asyncio
     async def test_stream_ends_with_final_event(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         events: list[StreamEvent] = []
         async for event in agent.stream_async("Hello"):
             events.append(event)
@@ -432,7 +432,7 @@ class TestStreamAsync:
 
     @pytest.mark.asyncio
     async def test_stream_input_type_validated(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         with pytest.raises(TypeError, match="input"):
             async for _ in agent.stream_async(42):  # type: ignore[arg-type]
                 pass
@@ -447,12 +447,12 @@ class TestStreamSync:
     """Tests for stream() — sync streaming wrapper (AD-027)."""
 
     def test_sync_stream_yields_events(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         events = list(agent.stream("Hello"))
         assert len(events) >= 2
 
     def test_sync_stream_has_final_event(self) -> None:
-        agent = Agent(model=MockModel(), planner=MockPlanner())
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         events = list(agent.stream("Hello"))
         assert events[-1].is_final is True
 
@@ -484,7 +484,7 @@ class TestSingleExecution:
                     ],
                 )
 
-        agent = Agent(model=MockModel(), planner=SlowPlanner())
+        agent = Agent(model=MockModel(), planner=SlowPlanner(), memory=None)
 
         # Start first run
         task1 = asyncio.create_task(agent.run_async("first"))
@@ -524,6 +524,7 @@ class TestStringAdapterResolution:
         agent = Agent(
             model="claude-haiku",
             planner="sequential",
+            memory=None,
         )
 
         # Should have resolved to AnthropicModel instance
@@ -560,3 +561,74 @@ class TestStringAdapterResolution:
         assert isinstance(engine.model, AnthropicModel)
         assert isinstance(engine.planner, SequentialPlanner)
         assert isinstance(engine.memory, EphemeralMemory)
+
+
+class TestConfigDefaults:
+    """Tests for config default fallback behavior."""
+
+    def test_agent_uses_config_defaults(self) -> None:
+        """Agent should fall back to config defaults when params not provided."""
+        from axis_core.config import config
+
+        # Temporarily override config defaults
+        original_model = config.default_model
+        original_planner = config.default_planner
+        original_memory = config.default_memory
+
+        try:
+            config.default_model = "test-model"
+            config.default_planner = "test-planner"
+            config.default_memory = "test-memory"
+
+            # Create agent without specifying adapters
+            agent = Agent()
+
+            # Should have picked up config defaults
+            assert agent._model == "test-model"
+            assert agent._planner == "test-planner"
+            assert agent._memory == "test-memory"
+        finally:
+            # Restore original config
+            config.default_model = original_model
+            config.default_planner = original_planner
+            config.default_memory = original_memory
+
+    def test_explicit_params_override_defaults(self) -> None:
+        """Explicit parameters should override config defaults."""
+        from axis_core.config import config
+
+        # Temporarily set config defaults
+        original_model = config.default_model
+        original_planner = config.default_planner
+
+        try:
+            config.default_model = "default-model"
+            config.default_planner = "default-planner"
+
+            # Create agent with explicit params
+            agent = Agent(model="explicit-model", planner="explicit-planner")
+
+            # Should use explicit values, not defaults
+            assert agent._model == "explicit-model"
+            assert agent._planner == "explicit-planner"
+        finally:
+            config.default_model = original_model
+            config.default_planner = original_planner
+
+    def test_none_param_overrides_default(self) -> None:
+        """Explicitly passing None should override config default."""
+        from axis_core.config import config
+
+        original_model = config.default_model
+
+        try:
+            config.default_model = "default-model"
+
+            # Explicitly pass None (user wants no model, not the default)
+            agent = Agent(model=None, planner=None)
+
+            # Should use None, not config default
+            assert agent._model is None
+            assert agent._planner is None
+        finally:
+            config.default_model = original_model
