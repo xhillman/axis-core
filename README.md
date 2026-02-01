@@ -187,7 +187,7 @@ AXIS_TELEMETRY_SINK=console  # console, file, none
 
 ## Status
 
-**v0.1.0 (Alpha)** — Core functionality is working:
+**v0.1.3 (Alpha)** — Core functionality is working:
 
 - ✅ Lifecycle engine with full cycle support
 - ✅ Agent API (run, run_async, stream, stream_async)
@@ -220,4 +220,4 @@ ruff check axis_core --fix
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+Apache License — see [LICENSE](LICENSE) for details.

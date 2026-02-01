@@ -19,7 +19,7 @@ Example:
 
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
 # Public API - will be populated as modules are implemented
 __all__ = [
