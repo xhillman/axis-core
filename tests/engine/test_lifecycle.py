@@ -1487,3 +1487,321 @@ class TestToolManifestExtraction:
         call = mock_model.calls[0]
         # Tools should be None or not in call when no tools available
         assert call.get("tools") is None
+
+
+# =============================================================================
+# Model fallback tests (Task 15.0, AD-013)
+# =============================================================================
+
+
+class MockFailingModelAdapter(MockModelAdapter):
+    """Mock model adapter that fails with recoverable errors."""
+
+    def __init__(
+        self,
+        fail_count: int = 1,
+        error_type: str = "RateLimitError",
+        **kwargs: Any,
+    ):
+        super().__init__(**kwargs)
+        self.fail_count = fail_count
+        self.error_type = error_type
+        self.call_count = 0
+
+    async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        self.call_count += 1
+        if self.call_count <= self.fail_count:
+            # Simulate recoverable error with proper exception class name
+            # ModelError.from_exception() checks exception.__class__.__name__
+            if self.error_type == "RateLimitError":
+                # Create an exception with the proper class name
+                exc_class = type("RateLimitError", (Exception,), {})
+                raise exc_class("Rate limit exceeded")
+            elif self.error_type == "ConnectionError":
+                exc_class = type("ConnectionError", (Exception,), {})
+                raise exc_class("Connection failed")
+            else:
+                exc_class = type(self.error_type, (Exception,), {})
+                raise exc_class(f"{self.error_type} occurred")
+        return await super().complete(*args, **kwargs)
+
+
+class TestModelFallback:
+    """Tests for model fallback system (AD-013)."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_recoverable_error(self) -> None:
+        """Should fallback to second model on recoverable error."""
+        from axis_core.errors import ModelError
+
+        # Primary model fails with recoverable error
+        primary = MockFailingModelAdapter(
+            fail_count=999,  # Always fails
+            error_type="RateLimitError",
+        )
+
+        # Fallback model succeeds
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Fallback response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
+                    cost_usd=0.001,
+                )
+            ]
+        )
+
+        planner = MockPlanner()
+        engine = LifecycleEngine(
+            model=primary,
+            planner=planner,
+            fallback=[fallback],
+        )
+
+        ctx = await engine._initialize(
+            input_text="test input",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        # Call the fallback method
+        response = await engine._call_model_with_fallback(
+            ctx=ctx,
+            messages=[{"role": "user", "content": "test"}],
+            system=None,
+            tools=None,
+        )
+
+        assert response.content == "Fallback response"
+        assert primary.call_count == 1  # Primary tried once
+        assert len(fallback.calls) == 1  # Fallback used
+
+    @pytest.mark.asyncio
+    async def test_fallback_preserves_request_parameters(self) -> None:
+        """Should pass exact same parameters to fallback (AD-013)."""
+        primary = MockFailingModelAdapter(fail_count=999)
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="OK",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        planner = MockPlanner()
+        engine = LifecycleEngine(
+            model=primary,
+            planner=planner,
+            fallback=[fallback],
+        )
+
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        test_messages = [{"role": "user", "content": "original request"}]
+        test_system = "You are a helpful assistant"
+        test_tools = [{"name": "tool1"}]
+
+        await engine._call_model_with_fallback(
+            ctx=ctx,
+            messages=test_messages,
+            system=test_system,
+            tools=test_tools,
+        )
+
+        # Verify fallback received exact same parameters
+        assert len(fallback.calls) == 1
+        call = fallback.calls[0]
+        assert call["messages"] == test_messages
+        assert call["system"] == test_system
+        assert call["tools"] == test_tools
+
+    @pytest.mark.asyncio
+    async def test_fallback_chain_multiple_models(self) -> None:
+        """Should try multiple fallback models in order."""
+        primary = MockFailingModelAdapter(fail_count=999)
+        fallback1 = MockFailingModelAdapter(fail_count=999)
+        fallback2 = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Third model works",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
+                    cost_usd=0.001,
+                )
+            ]
+        )
+
+        planner = MockPlanner()
+        engine = LifecycleEngine(
+            model=primary,
+            planner=planner,
+            fallback=[fallback1, fallback2],
+        )
+
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        response = await engine._call_model_with_fallback(
+            ctx=ctx,
+            messages=[{"role": "user", "content": "test"}],
+            system=None,
+            tools=None,
+        )
+
+        assert response.content == "Third model works"
+        assert primary.call_count == 1
+        assert fallback1.call_count == 1
+        assert len(fallback2.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_fails_if_all_models_fail(self) -> None:
+        """Should raise ModelError with cause chain if all models fail."""
+        from axis_core.errors import ModelError
+
+        primary = MockFailingModelAdapter(fail_count=999)
+        fallback1 = MockFailingModelAdapter(fail_count=999)
+        fallback2 = MockFailingModelAdapter(fail_count=999)
+
+        planner = MockPlanner()
+        engine = LifecycleEngine(
+            model=primary,
+            planner=planner,
+            fallback=[fallback1, fallback2],
+        )
+
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        with pytest.raises(ModelError, match="All models failed"):
+            await engine._call_model_with_fallback(
+                ctx=ctx,
+                messages=[{"role": "user", "content": "test"}],
+                system=None,
+                tools=None,
+            )
+
+        # Verify all models were tried
+        assert primary.call_count == 1
+        assert fallback1.call_count == 1
+        assert fallback2.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_on_non_recoverable_error(self) -> None:
+        """Should not fallback on non-recoverable errors like ValidationError."""
+        from axis_core.errors import ModelError
+
+        class MockNonRecoverableModel(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                # Simulate non-recoverable error
+                raise ValueError("Invalid parameters")
+
+        primary = MockNonRecoverableModel()
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Should not reach here",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
+                    cost_usd=0.0001,
+                )
+            ]
+        )
+
+        planner = MockPlanner()
+        engine = LifecycleEngine(
+            model=primary,
+            planner=planner,
+            fallback=[fallback],
+        )
+
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        with pytest.raises(ModelError):
+            await engine._call_model_with_fallback(
+                ctx=ctx,
+                messages=[{"role": "user", "content": "test"}],
+                system=None,
+                tools=None,
+            )
+
+        # Fallback should not have been called
+        assert len(fallback.calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_fallback_emits_telemetry_event(self) -> None:
+        """Should emit model_fallback telemetry event on fallback."""
+        primary = MockFailingModelAdapter(fail_count=999)
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="OK",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        # Mock telemetry sink
+        events: list[TraceEvent] = []
+
+        class MockTelemetrySink:
+            @property
+            def buffering(self) -> BufferMode:
+                return BufferMode.IMMEDIATE
+
+            async def emit(self, event: TraceEvent) -> None:
+                events.append(event)
+
+            async def flush(self) -> None:
+                pass
+
+            async def close(self) -> None:
+                pass
+
+        telemetry_sink = MockTelemetrySink()
+        planner = MockPlanner()
+
+        engine = LifecycleEngine(
+            model=primary,
+            planner=planner,
+            fallback=[fallback],
+            telemetry=[telemetry_sink],
+        )
+
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        await engine._call_model_with_fallback(
+            ctx=ctx,
+            messages=[{"role": "user", "content": "test"}],
+            system=None,
+            tools=None,
+        )
+
+        # Check for model_fallback event
+        fallback_events = [e for e in events if e.type == "model_fallback"]
+        assert len(fallback_events) == 1
+        assert fallback_events[0].data.get("from_model") == "mock-model"
+        assert fallback_events[0].data.get("to_model") == "mock-model"

@@ -151,8 +151,8 @@ def _register_builtin_adapters() -> None:
     try:
         # Import adapter modules to trigger registration
         # These imports have minimal overhead due to lazy loading
-        import axis_core.adapters.models  # noqa: F401
         import axis_core.adapters.memory  # noqa: F401
+        import axis_core.adapters.models  # noqa: F401
         import axis_core.adapters.planners  # noqa: F401
     except ImportError:
         # If adapters aren't available for some reason, that's fine

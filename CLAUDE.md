@@ -49,11 +49,13 @@ pytest tests/test_lockfile.py
 **Lockfile:** `requirements.lock` pins exact versions of all dependencies (direct + transitive) for reproducible builds.
 
 **Update cadence:**
+
 - **Monthly:** Review and update lockfile with latest security patches
 - **On-demand:** Regenerate lockfile when adding/removing dependencies in `pyproject.toml`
 - **Security alerts:** Regenerate immediately if critical CVE affects locked dependencies
 
 **Commands:**
+
 ```bash
 # After modifying pyproject.toml dependencies
 uv pip compile pyproject.toml -o requirements.lock
@@ -72,6 +74,7 @@ pip-audit -r requirements.lock
 3. **Adapters** (`axis_core/adapters/`) — Pluggable implementations for models, memory, planners, telemetry
 
 **Key directories:**
+
 - `axis_core/protocols/` — Adapter Protocol interfaces (ModelAdapter, MemoryAdapter, Planner, TelemetrySink)
 - `axis_core/adapters/models/` — LLM providers (Anthropic, OpenAI, Ollama)
 - `axis_core/adapters/memory/` — State persistence (Ephemeral, SQLite, Redis)
@@ -96,6 +99,7 @@ Built-in adapters are automatically registered via a lazy factory pattern:
 4. **Optional Dependencies**: Adapters with optional deps (e.g., Anthropic) only import the implementation package when first used, providing helpful error messages if dependencies are missing
 
 **Adding new adapters:**
+
 - Follow the lazy factory pattern in existing `__init__.py` files (see `axis_core/adapters/models/__init__.py` for reference)
 - Register via `{category}_registry.register(name, factory_class)`
 - For adapters with optional dependencies, wrap imports in try/except and raise `ConfigError` with installation instructions
@@ -120,13 +124,18 @@ Built-in adapters are automatically registered via a lazy factory pattern:
 ## Configuration
 
 See `.env.example` for all environment variables. Key ones:
+
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` — API keys
 - `AXIS_DEFAULT_MODEL` — Default model (claude-sonnet-4-20250514)
 - `AXIS_DEFAULT_MEMORY` — Default memory adapter (ephemeral)
 - `AXIS_DEFAULT_PLANNER` — Default planner (sequential)
 - `AXIS_MAX_CYCLES`, `AXIS_MAX_COST_USD` — Budget constraints
 
-## Project Authority Map:
+## Documentation
+
+README.md should be kept up to date to reflect the current state of the project. A section that includes future enhancements and planned features is encouraged to give users insight into the roadmap.
+
+## Project Authority Map
 
 - Task List: tasks-axis-core-prd.md (source of truth for task IDs, sub-tasks, file targets)
 - Architecture & Constraints: SPEC.md (ADRs, invariants, design rules)

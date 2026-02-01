@@ -12,7 +12,6 @@ Available adapters:
 from typing import Any
 
 from axis_core.engine.registry import memory_registry
-from axis_core.errors import ConfigError
 
 __all__: list[str] = []
 
@@ -37,7 +36,7 @@ def _make_lazy_ephemeral_factory() -> type[Any]:
 
             instance = EphemeralMemory(**kwargs)
             self.__dict__.update(instance.__dict__)
-            self.__class__ = instance.__class__
+            self.__class__ = instance.__class__  # type: ignore[assignment]
 
     return LazyEphemeralFactory
 
@@ -93,7 +92,7 @@ memory_registry.register("ephemeral", _make_lazy_ephemeral_factory())
 
 # Try to export the actual class for users who want to import it directly
 try:
-    from axis_core.adapters.memory.ephemeral import EphemeralMemory
+    from axis_core.adapters.memory.ephemeral import EphemeralMemory  # noqa: F401
 
     __all__.extend(["EphemeralMemory"])
 except ImportError:

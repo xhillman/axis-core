@@ -34,7 +34,7 @@ def _make_lazy_sequential_factory() -> type[Any]:
 
             instance = SequentialPlanner(**kwargs)
             self.__dict__.update(instance.__dict__)
-            self.__class__ = instance.__class__
+            self.__class__ = instance.__class__  # type: ignore[assignment]
 
     return LazySequentialFactory
 
@@ -70,7 +70,7 @@ planner_registry.register("auto", _make_lazy_sequential_factory())
 
 # Try to export the actual class for users who want to import it directly
 try:
-    from axis_core.adapters.planners.sequential import SequentialPlanner
+    from axis_core.adapters.planners.sequential import SequentialPlanner  # noqa: F401
 
     __all__.extend(["SequentialPlanner"])
 except ImportError:

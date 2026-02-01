@@ -275,6 +275,7 @@ class Agent:
             telemetry=self._telemetry_sinks if self._telemetry_enabled else [],
             tools=self._tools,
             system=self._system,
+            fallback=self._fallback,
         )
 
     def _build_result(

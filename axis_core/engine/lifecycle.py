@@ -40,6 +40,7 @@ from axis_core.errors import (
     ConfigError,
     ErrorClass,
     ErrorRecord,
+    ModelError,
     PlanError,
     ToolError,
 )
@@ -82,6 +83,7 @@ class LifecycleEngine:
         telemetry: list[Any] | None = None,
         tools: dict[str, Any] | None = None,
         system: str | None = None,
+        fallback: list[Any] | None = None,
     ) -> None:
         # Resolve adapters from strings or pass through instances (Task 16.2)
         resolved_model = resolve_adapter(model, model_registry)
@@ -100,6 +102,14 @@ class LifecycleEngine:
         self.telemetry: list[Any] = telemetry or []
         self.tools: dict[str, Any] = tools or {}
         self.system = system
+
+        # Resolve fallback models (Task 15.0)
+        self.fallback: list[Any] = []
+        if fallback:
+            for fallback_model in fallback:
+                resolved_fallback = resolve_adapter(fallback_model, model_registry)
+                if resolved_fallback is not None:
+                    self.fallback.append(resolved_fallback)
 
     # =========================================================================
     # Telemetry helpers
@@ -584,6 +594,105 @@ class LifecycleEngine:
 
         return result
 
+    async def _call_model_with_fallback(
+        self,
+        ctx: RunContext,
+        messages: Any,
+        system: str | None,
+        tools: Any | None,
+    ) -> Any:
+        """Call model with fallback chain on recoverable errors (AD-013).
+
+        Attempts to call the primary model first. On recoverable errors,
+        tries each fallback model in order. Preserves exact request parameters
+        across all attempts per AD-013.
+
+        Args:
+            ctx: Current run context
+            messages: Messages to send to model
+            system: System prompt
+            tools: Tool manifests
+
+        Returns:
+            ModelResponse from first successful model
+
+        Raises:
+            ModelError: If all models (primary + fallbacks) fail
+        """
+        # Build chain of models to try: primary first, then fallbacks
+        models_to_try = [self.model] + self.fallback
+        errors: list[Exception] = []
+
+        for idx, model in enumerate(models_to_try):
+            is_fallback = idx > 0
+            model_id = getattr(model, "model_id", "unknown")
+
+            try:
+                response = await model.complete(
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                )
+
+                # Success - emit fallback event if we used a fallback
+                if is_fallback:
+                    previous_model_id = getattr(
+                        models_to_try[idx - 1], "model_id", "unknown"
+                    )
+                    await self._emit(
+                        "model_fallback",
+                        run_id=ctx.run_id,
+                        phase=Phase.ACT.value,
+                        cycle=ctx.cycle_count,
+                        data={
+                            "from_model": previous_model_id,
+                            "to_model": model_id,
+                            "attempt": idx + 1,
+                        },
+                    )
+
+                return response
+
+            except Exception as e:
+                # Classify error as recoverable or not
+                model_error = ModelError.from_exception(e, model_id)
+                errors.append(model_error)
+
+                # If error is not recoverable, stop trying fallbacks
+                if not model_error.recoverable:
+                    logger.warning(
+                        "Non-recoverable error from model %s: %s",
+                        model_id,
+                        model_error.message,
+                    )
+                    raise model_error
+
+                # Log recoverable error and continue to next fallback
+                logger.info(
+                    "Recoverable error from model %s (attempt %d/%d): %s",
+                    model_id,
+                    idx + 1,
+                    len(models_to_try),
+                    model_error.message,
+                )
+
+                # If this was the last model, we're out of options
+                if idx == len(models_to_try) - 1:
+                    break
+
+        # All models failed with recoverable errors
+        error_messages = [str(e) for e in errors]
+        combined_error = ModelError(
+            message=(
+                f"All models failed after {len(models_to_try)} attempts. "
+                f"Errors: {'; '.join(error_messages)}"
+            ),
+            model_id="fallback_chain",
+            recoverable=False,
+            cause=errors[-1] if errors else None,
+        )
+        raise combined_error
+
     async def _execute_model_step(self, ctx: RunContext, step: PlanStep) -> Any:
         """Execute a model (LLM) step.
 
@@ -619,7 +728,9 @@ class LifecycleEngine:
         )
 
         start = time.monotonic()
-        response = await self.model.complete(
+        # Use fallback chain if configured (Task 15.0)
+        response = await self._call_model_with_fallback(
+            ctx=ctx,
             messages=messages,
             system=system,
             tools=tools,

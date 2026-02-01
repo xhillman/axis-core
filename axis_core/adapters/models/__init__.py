@@ -55,7 +55,7 @@ def _make_lazy_anthropic_factory(model_id: str) -> type[Any]:
             # This makes the factory transparent - it behaves like AnthropicModel
             instance = AnthropicModel(**kwargs)
             self.__dict__.update(instance.__dict__)
-            self.__class__ = instance.__class__
+            self.__class__ = instance.__class__  # type: ignore[assignment]
 
     return LazyAnthropicFactory
 
@@ -137,7 +137,7 @@ def _make_lazy_openai_factory(model_id: str) -> type[Any]:
             # This makes the factory transparent - it behaves like OpenAIModel
             instance = OpenAIModel(**kwargs)
             self.__dict__.update(instance.__dict__)
-            self.__class__ = instance.__class__
+            self.__class__ = instance.__class__  # type: ignore[assignment]
 
     return LazyOpenAIFactory
 
