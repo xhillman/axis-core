@@ -140,6 +140,30 @@ memory_registry = MemoryRegistry()
 planner_registry = PlannerRegistry()
 
 
+# Trigger built-in adapter registration by importing adapter modules
+# This ensures lazy factories are registered when registries are first accessed
+def _register_builtin_adapters() -> None:
+    """Import adapter modules to trigger lazy registration.
+
+    This is called automatically when the registry module is imported,
+    ensuring built-in adapters are always available in the registries.
+    """
+    try:
+        # Import adapter modules to trigger registration
+        # These imports have minimal overhead due to lazy loading
+        import axis_core.adapters.models  # noqa: F401
+        import axis_core.adapters.memory  # noqa: F401
+        import axis_core.adapters.planners  # noqa: F401
+    except ImportError:
+        # If adapters aren't available for some reason, that's fine
+        # Registration will happen when they're imported elsewhere
+        pass
+
+
+# Auto-register built-in adapters when this module is loaded
+_register_builtin_adapters()
+
+
 __all__ = [
     "AdapterRegistry",
     "ModelRegistry",
