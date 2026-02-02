@@ -20,17 +20,17 @@ cd "$TEST_DIR"
 
 # Create venv
 echo "Creating fresh virtual environment..."
-uv venv
+python3 -m venv .venv
 
 # Install package
 echo "Installing axis-core==$VERSION from $SOURCE..."
 if [ "$SOURCE" = "pypi" ]; then
-    uv pip install "axis-core[anthropic]==$VERSION"
+    .venv/bin/pip install "axis-core[anthropic]==$VERSION"
 else
-    uv pip install \
+    # Use pip (not uv) for TestPyPI - uv has compatibility issues
+    .venv/bin/pip install \
       --index-url https://test.pypi.org/simple/ \
       --extra-index-url https://pypi.org/simple/ \
-      --index-strategy unsafe-best-match \
       "axis-core[anthropic]==$VERSION"
 fi
 

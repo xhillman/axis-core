@@ -273,7 +273,7 @@ agent = Agent(
 
 ## Status
 
-**v0.1.3 (Alpha)** — Production-ready core with essential features:
+**v0.2.0 (Alpha)** — Production-ready core with essential features:
 
 ### ✅ Completed
 
