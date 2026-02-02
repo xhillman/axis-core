@@ -103,7 +103,7 @@ async def main():
     # Create agent with tools
     agent = Agent(
         tools=[get_weather, calculate, search_docs],
-        model="claude-haiku",
+        model="claude-sonnet-4-20250514",
         planner="sequential",
         system="You are a helpful assistant with access to tools. Use them when appropriate.",
     )

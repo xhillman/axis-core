@@ -4,7 +4,7 @@ This module provides built-in planner implementations with lazy loading.
 
 Available planners:
 - SequentialPlanner: Execute steps in order (no dependencies)
-- AutoPlanner: Automatically choose planning strategy (future)
+- AutoPlanner: LLM-based planning with fallback to Sequential (AD-016)
 - ReActPlanner: Reason-Act loop strategy (future)
 """
 
@@ -42,9 +42,33 @@ def _make_lazy_sequential_factory() -> type[Any]:
 # Register sequential planner (always available)
 planner_registry.register("sequential", _make_lazy_sequential_factory())
 
-# Register "auto" as an alias for sequential (for now)
-# In the future, "auto" will choose the best planner based on context
-planner_registry.register("auto", _make_lazy_sequential_factory())
+
+# ===========================================================================
+# Lazy factory for Auto planner
+# ===========================================================================
+
+
+def _make_lazy_auto_factory() -> type[Any]:
+    """Create a lazy-loading factory for AutoPlanner.
+
+    AutoPlanner requires a model adapter for LLM-based planning.
+    Falls back to SequentialPlanner on failure per AD-016.
+    """
+
+    class LazyAutoFactory:
+        """Lazy factory for AutoPlanner."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            from axis_core.adapters.planners.auto import AutoPlanner
+
+            instance = AutoPlanner(**kwargs)
+            self.__dict__.update(instance.__dict__)
+            self.__class__ = instance.__class__  # type: ignore[assignment]
+
+    return LazyAutoFactory
+
+
+planner_registry.register("auto", _make_lazy_auto_factory())
 
 
 # ===========================================================================
@@ -68,10 +92,16 @@ planner_registry.register("auto", _make_lazy_sequential_factory())
 # Eager export of planner classes (for direct use)
 # ===========================================================================
 
-# Try to export the actual class for users who want to import it directly
 try:
     from axis_core.adapters.planners.sequential import SequentialPlanner  # noqa: F401
 
     __all__.extend(["SequentialPlanner"])
+except ImportError:
+    pass
+
+try:
+    from axis_core.adapters.planners.auto import AutoPlanner  # noqa: F401
+
+    __all__.extend(["AutoPlanner"])
 except ImportError:
     pass

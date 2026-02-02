@@ -1805,3 +1805,81 @@ class TestModelFallback:
         assert len(fallback_events) == 1
         assert fallback_events[0].data.get("from_model") == "mock-model"
         assert fallback_events[0].data.get("to_model") == "mock-model"
+
+    @pytest.mark.asyncio
+    async def test_planner_fallback_emits_telemetry_event(self) -> None:
+        """Should emit planner_fallback telemetry event when planner falls back (AD-016)."""
+        model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Done",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        events: list[TraceEvent] = []
+
+        class MockTelemetrySink:
+            @property
+            def buffering(self) -> BufferMode:
+                return BufferMode.IMMEDIATE
+
+            async def emit(self, event: TraceEvent) -> None:
+                events.append(event)
+
+            async def flush(self) -> None:
+                pass
+
+            async def close(self) -> None:
+                pass
+
+        telemetry_sink = MockTelemetrySink()
+
+        # Planner that returns a plan with fallback metadata (simulates AutoPlanner fallback)
+        fallback_plan = Plan(
+            id="fallback-plan",
+            goal="Complete task",
+            steps=(
+                PlanStep(
+                    id="terminal-1",
+                    type=StepType.TERMINAL,
+                    payload={"output": "Task completed"},
+                ),
+            ),
+            confidence=0.5,
+            metadata={
+                "planner": "sequential",
+                "fallback": True,
+                "fallback_reason": "Model call failed: API error",
+            },
+        )
+        planner = MockPlanner(plans=[fallback_plan])
+
+        engine = LifecycleEngine(
+            model=model,
+            planner=planner,
+            telemetry=[telemetry_sink],
+        )
+
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        observation = Observation(
+            input=NormalizedInput(text="test", original="test"),
+            response=None,
+            goal="Test planner fallback telemetry",
+        )
+
+        await engine._plan(ctx, observation)
+
+        # Check for planner_fallback event
+        fallback_events = [e for e in events if e.type == "planner_fallback"]
+        assert len(fallback_events) == 1
+        assert fallback_events[0].data.get("original_planner") == "sequential"
+        assert "API error" in fallback_events[0].data.get("reason", "")

@@ -370,7 +370,29 @@ class LifecycleEngine:
             cycle=ctx.cycle_count,
         )
 
+        # Provide tool information to planners via context
+        # (AutoPlanner uses this for LLM-based planning)
+        tool_descriptions = {}
+        for tool_name, tool_fn in self.tools.items():
+            if hasattr(tool_fn, "_axis_manifest"):
+                manifest = tool_fn._axis_manifest
+                tool_descriptions[tool_name] = manifest.description
+        ctx.context["__tools__"] = tool_descriptions
+
         plan: Plan = await self.planner.plan(observation, ctx)
+
+        # AD-016: Emit telemetry if planner fell back to sequential
+        if plan.metadata.get("fallback"):
+            await self._emit(
+                "planner_fallback",
+                run_id=ctx.run_id,
+                phase=Phase.PLAN.value,
+                cycle=ctx.cycle_count,
+                data={
+                    "original_planner": plan.metadata.get("planner", "unknown"),
+                    "reason": plan.metadata.get("fallback_reason", "unknown"),
+                },
+            )
 
         # AD-006: Strict plan validation
         await self._validate_plan(plan)
@@ -957,6 +979,7 @@ class LifecycleEngine:
             "cycles_completed": ctx.cycle_count,
             "budget_state": ctx.state.budget_state,
             "errors": ctx.state.errors,
+            "state": ctx.state,  # Include full state for debugging/replay
         }
 
         # Flush and close telemetry

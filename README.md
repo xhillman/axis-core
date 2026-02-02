@@ -263,6 +263,7 @@ AXIS_MAX_CYCLE_CONTEXT=5            # Max cycles to include in context
 | Ollama | Local models | 🚧 Planned | `pip install axis-core[ollama]` |
 
 **Model Fallback**: Automatically fallback to secondary models on recoverable errors (rate limits, connection issues):
+
 ```python
 agent = Agent(
     model="claude-sonnet-4-20250514",
@@ -277,6 +278,7 @@ agent = Agent(
 ### ✅ Completed
 
 **Core Engine:**
+
 - Lifecycle engine with full Observe → Plan → Act → Evaluate cycle
 - Agent API with sync/async methods (run, run_async, stream, stream_async)
 - Configuration system with environment variable support
@@ -285,23 +287,27 @@ agent = Agent(
 - Type-safe with mypy strict mode
 
 **Model Adapters:**
+
 - Anthropic (Claude Opus 4, Sonnet 4, Haiku)
 - OpenAI (GPT-4, GPT-4o, GPT-3.5-turbo, o1)
 - Model fallback system (automatic retry with secondary models)
 - String-based model resolution (`"claude-sonnet-4-20250514"` → adapter)
 
 **Tool System:**
+
 - `@tool` decorator with automatic JSON schema generation
 - Capability declarations (NETWORK, FILESYSTEM, DESTRUCTIVE, etc.)
 - Rate limiting and timeout support
 - Tool context with budget access
 
 **Memory & Planning:**
+
 - EphemeralMemory (in-memory storage with keyword search)
 - SequentialPlanner (executes tool requests in order)
 - Adapter registry with plugin discovery
 
 **Observability:**
+
 - Phase-level telemetry with customizable sinks
 - ConsoleSink for development
 - Trace event collection
@@ -318,12 +324,14 @@ axis-core is under active development. Here's what's coming:
 ### Phase 3: Advanced Planning & Memory (Q1 2026)
 
 **Smart Planners:**
+
 - **AutoPlanner** — LLM-based planning that intelligently selects and orders tools
 - **ReActPlanner** — Reasoning + Acting loop with explicit thought steps
 - Planner fallback (automatic degradation to SequentialPlanner on planning failure)
 - Plan confidence scoring
 
 **Persistent Memory:**
+
 - **SQLiteMemory** — Local database storage with full-text search (FTS5)
 - **RedisMemory** — Distributed memory with TTL and namespace support
 - Semantic search capabilities
@@ -332,6 +340,7 @@ axis-core is under active development. Here's what's coming:
 ### Phase 4: Production Features (Q2 2026)
 
 **Multi-turn Conversations:**
+
 - **Session** class for stateful conversations
 - Automatic history management with truncation
 - Session persistence (save/load from file)
@@ -339,6 +348,7 @@ axis-core is under active development. Here's what's coming:
 - Optimistic locking for concurrent sessions
 
 **Advanced Capabilities:**
+
 - **Structured Output** — Pydantic schema validation with strict mode
 - **Multimodal Input** — Image and PDF attachment support (10MB limit)
 - **Cancellation** — Cooperative cancellation with CancelToken
@@ -347,6 +357,7 @@ axis-core is under active development. Here's what's coming:
 - **Confirmation Handler** — User approval for destructive operations
 
 **Enhanced Telemetry:**
+
 - **FileSink** — JSONL trace logs for production monitoring
 - **CallbackSink** — Custom telemetry handlers
 - Batched and phase-based buffering modes
@@ -354,18 +365,21 @@ axis-core is under active development. Here's what's coming:
 ### Phase 5: Ecosystem & Integrations (Q3 2026)
 
 **Additional Model Providers:**
+
 - **OllamaModel** — Local model support (Llama, Mistral, etc.)
 - **OpenRouter** — Access to 100+ models via one API
 - **Google Gemini** — Gemini Pro and Ultra support
 - Model-specific optimizations (parallel tool calls, caching)
 
 **Pre-built Loadouts:**
+
 - `research_agent()` — Citation-focused research with ReAct planning
 - `support_agent()` — Customer support with empathetic responses
 - `code_agent()` — Coding assistant with test-first approach
 - Custom loadout templates
 
 **Developer Experience:**
+
 - `axis_core.testing` — MockModel, MockMemory, assertion helpers
 - Debug mode with verbose state dumps
 - Interactive REPL for agent development
@@ -374,18 +388,21 @@ axis-core is under active development. Here's what's coming:
 ### Long-term Vision
 
 **Enterprise Features:**
+
 - Distributed execution with task queues
 - A/B testing framework for prompts and planners
 - Cost optimization engine
 - Audit logging and compliance tools
 
 **Framework Integrations:**
+
 - LangChain compatibility layer
 - FastAPI integration for agent-as-API
 - Gradio/Streamlit UI components
 - Jupyter notebook support with rich display
 
 **Advanced AI:**
+
 - Multi-agent orchestration
 - Agent-to-agent communication
 - Hierarchical task decomposition

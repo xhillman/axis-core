@@ -319,7 +319,7 @@ class Agent:
             ),
             stats=stats,
             trace=[],  # Trace collection will be enhanced in task 10
-            state=RunState(),
+            state=raw.get("state", RunState()),
             run_id=raw.get("run_id", ""),
             memory_error=memory_error,
         )
