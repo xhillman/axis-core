@@ -1532,7 +1532,6 @@ class TestModelFallback:
     @pytest.mark.asyncio
     async def test_fallback_on_recoverable_error(self) -> None:
         """Should fallback to second model on recoverable error."""
-        from axis_core.errors import ModelError
 
         # Primary model fails with recoverable error
         primary = MockFailingModelAdapter(

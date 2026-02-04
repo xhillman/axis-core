@@ -5,7 +5,7 @@ This module provides built-in planner implementations with lazy loading.
 Available planners:
 - SequentialPlanner: Execute steps in order (no dependencies)
 - AutoPlanner: LLM-based planning with fallback to Sequential (AD-016)
-- ReActPlanner: Reason-Act loop strategy (future)
+- ReActPlanner: Reason-Act loop strategy with explicit reasoning traces
 """
 
 from typing import Any
@@ -72,20 +72,31 @@ planner_registry.register("auto", _make_lazy_auto_factory())
 
 
 # ===========================================================================
-# Lazy factories for future planners
+# Lazy factory for ReAct planner
 # ===========================================================================
 
-# ReAct planner (when implemented):
-# def _make_lazy_react_factory() -> type[Any]:
-#     class LazyReActFactory:
-#         def __init__(self, **kwargs: Any) -> None:
-#             from axis_core.adapters.planners.react import ReActPlanner
-#             instance = ReActPlanner(**kwargs)
-#             self.__dict__.update(instance.__dict__)
-#             self.__class__ = instance.__class__
-#     return LazyReActFactory
-#
-# planner_registry.register("react", _make_lazy_react_factory())
+
+def _make_lazy_react_factory() -> type[Any]:
+    """Create a lazy-loading factory for ReActPlanner.
+
+    ReActPlanner implements the Reason + Act pattern with explicit reasoning
+    traces. Requires a model adapter for generating thoughts and actions.
+    """
+
+    class LazyReActFactory:
+        """Lazy factory for ReActPlanner."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            from axis_core.adapters.planners.react import ReActPlanner
+
+            instance = ReActPlanner(**kwargs)
+            self.__dict__.update(instance.__dict__)
+            self.__class__ = instance.__class__  # type: ignore[assignment]
+
+    return LazyReActFactory
+
+
+planner_registry.register("react", _make_lazy_react_factory())
 
 
 # ===========================================================================
@@ -103,5 +114,12 @@ try:
     from axis_core.adapters.planners.auto import AutoPlanner  # noqa: F401
 
     __all__.extend(["AutoPlanner"])
+except ImportError:
+    pass
+
+try:
+    from axis_core.adapters.planners.react import ReActPlanner  # noqa: F401
+
+    __all__.extend(["ReActPlanner"])
 except ImportError:
     pass

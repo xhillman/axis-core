@@ -135,6 +135,8 @@ See `.env.example` for all environment variables. Key ones:
 
 README.md should be kept up to date to reflect the current state of the project. A section that includes future enhancements and planned features is encouraged to give users insight into the roadmap.
 
+After completing significant features or changes, ensure that the README.md is updated accordingly.
+
 ## Project Authority Map
 
 - Task List: tasks-axis-core-prd.md (source of truth for task IDs, sub-tasks, file targets)
