@@ -14,6 +14,7 @@ Architecture Decisions:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 import time
@@ -26,13 +27,56 @@ from axis_core.budget import Budget, BudgetState
 from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts, config
 from axis_core.context import RunState
 from axis_core.engine.lifecycle import LifecycleEngine
+from axis_core.engine.trace_collector import TraceCollector
 from axis_core.errors import AxisError
+from axis_core.protocols.telemetry import BufferMode, TraceEvent
 from axis_core.result import RunResult, RunStats, StreamEvent
 
 logger = logging.getLogger("axis_core.agent")
 
 # Sentinel value to distinguish "not provided" from "explicitly None"
 _UNSET = object()
+_STREAM_DONE = object()
+
+
+def _trace_event_to_dict(event: TraceEvent) -> dict[str, Any]:
+    """Serialize TraceEvent to a dict for streaming."""
+    return {
+        "type": event.type,
+        "timestamp": event.timestamp.isoformat(),
+        "run_id": event.run_id,
+        "phase": event.phase,
+        "cycle": event.cycle,
+        "step_id": event.step_id,
+        "data": event.data,
+        "duration_ms": event.duration_ms,
+    }
+
+
+class _StreamTelemetrySink:
+    """Telemetry sink that forwards trace events into a stream queue."""
+
+    def __init__(self, queue: asyncio.Queue[Any]) -> None:
+        self._queue = queue
+
+    @property
+    def buffering(self) -> BufferMode:
+        return BufferMode.IMMEDIATE
+
+    async def emit(self, event: TraceEvent) -> None:
+        await self._queue.put(
+            StreamEvent(
+                type="telemetry",
+                timestamp=event.timestamp,
+                data={"event": _trace_event_to_dict(event)},
+            )
+        )
+
+    async def flush(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
 
 
 def _coerce_budget(value: dict[str, Any] | Budget | None) -> Budget:
@@ -266,13 +310,18 @@ class Agent:
     # Internal: build engine and execute
     # =========================================================================
 
-    def _build_engine(self) -> LifecycleEngine:
+    def _build_engine(self, extra_sinks: list[Any] | None = None) -> LifecycleEngine:
         """Create a LifecycleEngine with current agent configuration."""
+        sinks: list[Any] = (
+            list(self._telemetry_sinks) if self._telemetry_enabled else []
+        )
+        if extra_sinks:
+            sinks.extend(extra_sinks)
         return LifecycleEngine(
             model=self._model,
             planner=self._planner,
             memory=self._memory,
-            telemetry=self._telemetry_sinks if self._telemetry_enabled else [],
+            telemetry=sinks,
             tools=self._tools,
             system=self._system,
             fallback=self._fallback,
@@ -282,6 +331,7 @@ class Agent:
         self,
         raw: dict[str, Any],
         duration_ms: float,
+        trace: list[Any] | None = None,
     ) -> RunResult:
         """Convert lifecycle engine raw result dict into a RunResult."""
         budget_state: BudgetState = raw.get("budget_state", BudgetState())
@@ -318,7 +368,7 @@ class Agent:
                 getattr(e, "recovered", False) for e in errors
             ),
             stats=stats,
-            trace=[],  # Trace collection will be enhanced in task 10
+            trace=trace or [],
             state=raw.get("state", RunState()),
             run_id=raw.get("run_id", ""),
             memory_error=memory_error,
@@ -372,7 +422,9 @@ class Agent:
             self._running = True
             start = time.monotonic()
             try:
-                engine = self._build_engine()
+                trace_collector = TraceCollector() if self._telemetry_enabled else None
+                extra_sinks = [trace_collector] if trace_collector else []
+                engine = self._build_engine(extra_sinks=extra_sinks)
 
                 input_text = input if isinstance(input, str) else str(input)
 
@@ -387,6 +439,7 @@ class Agent:
                     )
                 except AxisError as e:
                     # Engine raised before finalize (e.g. empty input)
+                    trace = trace_collector.get_events() if trace_collector else []
                     duration_ms = (time.monotonic() - start) * 1000
                     return RunResult(
                         output=None,
@@ -404,14 +457,15 @@ class Agent:
                             cost_usd=0.0,
                             duration_ms=duration_ms,
                         ),
-                        trace=[],
+                        trace=trace,
                         state=RunState(),
                         run_id="",
                         memory_error=None,
                     )
 
                 duration_ms = (time.monotonic() - start) * 1000
-                return self._build_result(raw, duration_ms)
+                trace = trace_collector.get_events() if trace_collector else []
+                return self._build_result(raw, duration_ms, trace=trace)
             finally:
                 self._running = False
 
@@ -472,6 +526,7 @@ class Agent:
         output_schema: type | None = None,
         timeout: float | None = None,
         cancel_token: Any | None = None,
+        stream_telemetry: bool = False,
     ) -> AsyncIterator[StreamEvent]:
         """Execute agent with async streaming. Yields events as they occur.
 
@@ -495,9 +550,25 @@ class Agent:
         async with self._lock:
             self._running = True
             start = time.monotonic()
+            queue: asyncio.Queue[Any] = asyncio.Queue()
             try:
-                engine = self._build_engine()
+                trace_collector = TraceCollector() if self._telemetry_enabled else None
+                extra_sinks: list[Any] = [trace_collector] if trace_collector else []
+                if stream_telemetry:
+                    extra_sinks.append(_StreamTelemetrySink(queue))
+
+                engine = self._build_engine(extra_sinks=extra_sinks)
                 input_text = input if isinstance(input, str) else str(input)
+
+                async def _on_token(token: str) -> None:
+                    if token:
+                        await queue.put(
+                            StreamEvent(
+                                type="model_token",
+                                timestamp=datetime.utcnow(),
+                                data={"token": token},
+                            )
+                        )
 
                 # Emit start event
                 yield StreamEvent(
@@ -507,17 +578,32 @@ class Agent:
                     sequence=0,
                 )
 
-                raw = await engine.execute(
-                    input_text=input_text,
-                    agent_id=self._agent_id,
-                    budget=self._budget,
-                    context=context,
-                    attachments=attachments,
-                    cancel_token=cancel_token,
-                )
+                async def _run_engine() -> dict[str, Any]:
+                    try:
+                        return await engine.execute(
+                            input_text=input_text,
+                            agent_id=self._agent_id,
+                            budget=self._budget,
+                            context=context,
+                            attachments=attachments,
+                            cancel_token=cancel_token,
+                            token_callback=_on_token,
+                        )
+                    finally:
+                        await queue.put(_STREAM_DONE)
 
+                task = asyncio.create_task(_run_engine())
+
+                while True:
+                    item = await queue.get()
+                    if item is _STREAM_DONE:
+                        break
+                    yield item
+
+                raw = await task
                 duration_ms = (time.monotonic() - start) * 1000
-                result = self._build_result(raw, duration_ms)
+                trace = trace_collector.get_events() if trace_collector else []
+                result = self._build_result(raw, duration_ms, trace=trace)
 
                 # Emit final event
                 event_type = "run_completed" if result.success else "run_failed"
@@ -528,6 +614,7 @@ class Agent:
                         "success": result.success,
                         "output": result.output,
                         "run_id": result.run_id,
+                        "stats": dataclasses.asdict(result.stats),
                     },
                     sequence=1,
                 )
@@ -547,6 +634,7 @@ class Agent:
         output_schema: type | None = None,
         timeout: float | None = None,
         cancel_token: Any | None = None,
+        stream_telemetry: bool = False,
     ) -> Iterator[StreamEvent]:
         """Synchronous streaming. Yields StreamEvents.
 
@@ -561,6 +649,7 @@ class Agent:
                 output_schema=output_schema,
                 timeout=timeout,
                 cancel_token=cancel_token,
+                stream_telemetry=stream_telemetry,
             )
             while True:
                 try:

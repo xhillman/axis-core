@@ -176,7 +176,8 @@ class BudgetError(AxisError):
             # Map resource names to parameter names
             param_map = {
                 "cost_usd": "budget.max_cost_usd",
-                "tokens": "budget.max_tokens",
+                "input_tokens": "budget.max_input_tokens",
+                "output_tokens": "budget.max_output_tokens",
                 "cycles": "budget.max_cycles",
             }
 

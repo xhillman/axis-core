@@ -319,16 +319,16 @@ class TestBudgetError:
         # Should suggest ~1.5x the used value (2.25)
         assert "2.25" in error.message
 
-    def test_budget_error_generates_suggestion_tokens(self) -> None:
-        """Test that BudgetError generates actionable suggestion for tokens."""
+    def test_budget_error_generates_suggestion_input_tokens(self) -> None:
+        """Test that BudgetError generates actionable suggestion for input tokens."""
         error = BudgetError(
-            message="Token limit exceeded",
-            resource="tokens",
+            message="Input token limit exceeded",
+            resource="input_tokens",
             used=10000,
             limit=8000,
         )
 
-        assert "budget.max_tokens" in error.message
+        assert "budget.max_input_tokens" in error.message
         # Should suggest ~1.5x the used value (15000)
         assert "15000" in error.message
 

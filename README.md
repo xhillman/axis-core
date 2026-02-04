@@ -60,6 +60,7 @@ def get_weather(city: str) -> str:
 @tool
 def calculate(expression: str) -> str:
     """Calculate a mathematical expression."""
+    # NOTE: eval is unsafe with untrusted input; replace with a safe parser in production.
     return str(eval(expression))
 
 async def main():

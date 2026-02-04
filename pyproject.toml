@@ -7,7 +7,7 @@ name = "axis-core"
 version = "0.2.0"
 description = "A modular, observable AI agent framework"
 readme = "README.md"
-license = "MIT"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
     { name = "Axis Core Contributors" }
@@ -16,7 +16,7 @@ keywords = ["ai", "agent", "llm", "framework", "anthropic", "openai"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",

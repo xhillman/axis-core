@@ -10,7 +10,7 @@ import pytest
 from axis_core.agent import Agent
 from axis_core.budget import Budget
 from axis_core.config import Timeouts
-from axis_core.protocols.model import ModelResponse, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.result import RunResult, RunStats, StreamEvent
 from axis_core.tool import tool
@@ -23,8 +23,13 @@ from axis_core.tool import tool
 class MockModel:
     """Minimal mock model for testing Agent without real LLM."""
 
-    def __init__(self, response_text: str = "mock response") -> None:
+    def __init__(
+        self,
+        response_text: str = "mock response",
+        stream_chunks: list[str] | None = None,
+    ) -> None:
         self._response_text = response_text
+        self._stream_chunks = stream_chunks or [response_text]
         self.complete_calls: list[dict[str, Any]] = []
 
     @property
@@ -51,14 +56,14 @@ class MockModel:
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> Any:
-        yield self._response_text
+        for chunk in self._stream_chunks:
+            yield ModelChunk(content=chunk, tool_call_delta=None, is_final=False)
+        yield ModelChunk(content="", tool_call_delta=None, is_final=True)
 
-    async def estimate_tokens(self, text: str) -> int:
+    def estimate_tokens(self, text: str) -> int:
         return len(text) // 4
 
-    async def estimate_cost(
-        self, input_tokens: int, output_tokens: int
-    ) -> float:
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         return (input_tokens + output_tokens) * 0.00001
 
 
@@ -431,6 +436,50 @@ class TestStreamAsync:
         assert events[-1].is_final is True
 
     @pytest.mark.asyncio
+    async def test_stream_emits_model_tokens(self) -> None:
+        class ModelPlanner:
+            async def plan(self, observation: Any, ctx: Any) -> Plan:
+                return Plan(
+                    id="plan-model",
+                    goal="stream tokens",
+                    steps=[
+                        PlanStep(id="model", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                        ),
+                    ],
+                )
+
+        model = MockModel(stream_chunks=["Hello", " ", "world"])
+        agent = Agent(model=model, planner=ModelPlanner(), memory=None)
+        tokens: list[str] = []
+        async for event in agent.stream_async("Hello"):
+            if event.is_token and event.token:
+                tokens.append(event.token)
+        assert "".join(tokens) == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_stream_telemetry_opt_in(self) -> None:
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        telemetry_events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello", stream_telemetry=True):
+            if event.type == "telemetry":
+                telemetry_events.append(event)
+        assert telemetry_events
+
+    @pytest.mark.asyncio
+    async def test_stream_final_event_includes_stats(self) -> None:
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        last_event: StreamEvent | None = None
+        async for event in agent.stream_async("Hello"):
+            last_event = event
+        assert last_event is not None
+        assert last_event.is_final
+        assert "stats" in last_event.data
+
+    @pytest.mark.asyncio
     async def test_stream_input_type_validated(self) -> None:
         agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         with pytest.raises(TypeError, match="input"):
@@ -455,6 +504,36 @@ class TestStreamSync:
         agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         events = list(agent.stream("Hello"))
         assert events[-1].is_final is True
+
+    def test_sync_stream_emits_model_tokens(self) -> None:
+        class ModelPlanner:
+            async def plan(self, observation: Any, ctx: Any) -> Plan:
+                return Plan(
+                    id="plan-model",
+                    goal="stream tokens",
+                    steps=[
+                        PlanStep(id="model", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                        ),
+                    ],
+                )
+
+        model = MockModel(stream_chunks=["Hello", " ", "sync"])
+        agent = Agent(model=model, planner=ModelPlanner(), memory=None)
+        tokens = [event.token for event in agent.stream("Hello") if event.is_token]
+        assert "".join(t for t in tokens if t) == "Hello sync"
+
+
+class TestTraceCollection:
+    """Tests for trace collection."""
+
+    def test_run_collects_trace_when_telemetry_enabled(self) -> None:
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        result = agent.run("Hello")
+        assert result.trace
 
 
 # ---------------------------------------------------------------------------

@@ -454,6 +454,42 @@ class TestObservePhase:
         assert isinstance(observation.memory_context, dict)
 
     @pytest.mark.asyncio
+    async def test_observe_injects_memory_into_messages(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+    ) -> None:
+        """Relevant memory should be injected into the first user message."""
+
+        class MemoryItem:
+            def __init__(self, key: str, value: str) -> None:
+                self.key = key
+                self.value = value
+
+        class MemoryAdapter:
+            async def search(self, query: str, limit: int = 10) -> list[Any]:
+                return [MemoryItem("pref", "dark")]
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            memory=MemoryAdapter(),
+            planner=mock_planner,
+        )
+
+        ctx = await engine._initialize(
+            input_text="Show my preferences",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        await engine._observe(ctx)
+
+        messages = ctx.state.build_messages(ctx)
+        assert messages
+        assert "<relevant_context>" in messages[0]["content"]
+        assert "- pref: dark" in messages[0]["content"]
+
+    @pytest.mark.asyncio
     async def test_observe_includes_previous_cycles(
         self,
         mock_model: MockModelAdapter,
@@ -842,6 +878,28 @@ class TestEvaluatePhase:
 
         assert decision.done is True
         assert isinstance(decision.error, BudgetError)
+
+    @pytest.mark.asyncio
+    async def test_identify_exhausted_resource_tokens(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+    ) -> None:
+        """Token limits should be identified as exhausted resources."""
+        engine = LifecycleEngine(model=mock_model, planner=mock_planner)
+
+        ctx = await engine._initialize(
+            input_text="Test",
+            agent_id="test-agent",
+            budget=Budget(max_input_tokens=10, max_output_tokens=20),
+        )
+
+        ctx.state.budget_state.input_tokens = 10
+        assert engine._identify_exhausted_resource(ctx) == "input_tokens"
+
+        ctx.state.budget_state.input_tokens = 0
+        ctx.state.budget_state.output_tokens = 20
+        assert engine._identify_exhausted_resource(ctx) == "output_tokens"
 
     @pytest.mark.asyncio
     async def test_evaluate_done_on_cancellation(

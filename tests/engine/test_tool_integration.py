@@ -12,7 +12,7 @@ from axis_core.budget import Budget
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
-from axis_core.tool import tool
+from axis_core.tool import ToolContext, tool
 
 # =============================================================================
 # Mock adapters
@@ -211,6 +211,64 @@ class TestToolIntegration:
         budget_state = result["budget_state"]
         assert budget_state.tool_calls == 1
         assert budget_state.model_calls == 2
+
+    @pytest.mark.asyncio
+    async def test_tool_receives_ctx(self) -> None:
+        """Verify ToolContext is injected when tool declares ctx parameter."""
+        received: dict[str, str] = {}
+
+        @tool
+        def tool_with_ctx(ctx: ToolContext, name: str) -> str:
+            received["run_id"] = ctx.run_id
+            received["agent_id"] = ctx.agent_id
+            return f"{ctx.run_id}:{name}"
+
+        class CtxPlanner:
+            async def plan(self, observation, ctx):
+                steps = [
+                    PlanStep(
+                        id="tool_0",
+                        type=StepType.TOOL,
+                        payload={
+                            "tool": "tool_with_ctx",
+                            "tool_call_id": "call_0",
+                            "args": {"name": "test"},
+                        },
+                        dependencies=None,
+                        retry_policy=None,
+                    ),
+                    PlanStep(
+                        id="terminal",
+                        type=StepType.TERMINAL,
+                        payload={"output": "done"},
+                        dependencies=None,
+                        retry_policy=None,
+                    ),
+                ]
+                return Plan(
+                    id="plan_ctx",
+                    goal="ctx test",
+                    steps=tuple(steps),
+                    reasoning="ctx test",
+                    confidence=1.0,
+                    metadata={},
+                )
+
+        engine = LifecycleEngine(
+            model=MockModelWithTools(),
+            planner=CtxPlanner(),
+            tools={"tool_with_ctx": tool_with_ctx},
+        )
+
+        result = await engine.execute(
+            input_text="ctx test",
+            agent_id="agent-123",
+            budget=Budget(max_cycles=3),
+        )
+
+        assert result["success"] is True
+        assert received["agent_id"] == "agent-123"
+        assert received["run_id"] == result["run_id"]
 
     @pytest.mark.asyncio
     async def test_tool_manifest_with_multiple_params(self) -> None:

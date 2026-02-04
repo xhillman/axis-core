@@ -14,6 +14,9 @@ Architecture Decisions:
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import json
 import logging
 import time
 import uuid
@@ -44,8 +47,10 @@ from axis_core.errors import (
     PlanError,
     ToolError,
 )
+from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.protocols.telemetry import TraceEvent
+from axis_core.tool import ToolContext
 
 logger = logging.getLogger("axis_core.engine")
 
@@ -102,6 +107,7 @@ class LifecycleEngine:
         self.telemetry: list[Any] = telemetry or []
         self.tools: dict[str, Any] = tools or {}
         self.system = system
+        self._token_callback: Any | None = None
 
         # Resolve fallback models (Task 15.0)
         self.fallback: list[Any] = []
@@ -284,7 +290,7 @@ class LifecycleEngine:
                     limit=5,
                 )
                 if results:
-                    memory_context["search_results"] = [
+                    memory_context["relevant_memories"] = [
                         {"key": item.key, "value": item.value}
                         for item in results
                     ]
@@ -591,7 +597,25 @@ class LifecycleEngine:
 
         start = time.monotonic()
         try:
-            result = await tool_fn(**args)
+            tool_kwargs = dict(args)
+            if "ctx" in tool_kwargs:
+                tool_kwargs.pop("ctx")
+            try:
+                supports_ctx = "ctx" in inspect.signature(tool_fn).parameters
+            except (TypeError, ValueError):
+                supports_ctx = False
+            if supports_ctx:
+                tool_ctx = ToolContext(
+                    run_id=ctx.run_id,
+                    agent_id=ctx.agent_id,
+                    cycle=ctx.cycle_count,
+                    context=ctx.context,
+                    budget=ctx.budget,
+                    budget_state=ctx.state.budget_state,
+                )
+                result = await tool_fn(ctx=tool_ctx, **tool_kwargs)
+            else:
+                result = await tool_fn(**tool_kwargs)
         except Exception as e:
             raise ToolError(
                 message=f"Tool '{tool_name}' failed: {e}",
@@ -715,6 +739,231 @@ class LifecycleEngine:
         )
         raise combined_error
 
+    async def _call_model_with_fallback_stream(
+        self,
+        ctx: RunContext,
+        messages: Any,
+        system: str | None,
+        tools: Any | None,
+        token_callback: Any,
+    ) -> ModelResponse:
+        """Call model with fallback chain using streaming responses."""
+        models_to_try = [self.model] + self.fallback
+        errors: list[Exception] = []
+
+        for idx, model in enumerate(models_to_try):
+            is_fallback = idx > 0
+            model_id = getattr(model, "model_id", "unknown")
+
+            try:
+                response = await self._stream_model_response(
+                    model=model,
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    token_callback=token_callback,
+                )
+
+                if is_fallback:
+                    previous_model_id = getattr(
+                        models_to_try[idx - 1], "model_id", "unknown"
+                    )
+                    await self._emit(
+                        "model_fallback",
+                        run_id=ctx.run_id,
+                        phase=Phase.ACT.value,
+                        cycle=ctx.cycle_count,
+                        data={
+                            "from_model": previous_model_id,
+                            "to_model": model_id,
+                            "attempt": idx + 1,
+                        },
+                    )
+
+                return response
+
+            except Exception as e:
+                model_error = e if isinstance(e, ModelError) else ModelError.from_exception(e, model_id)
+                errors.append(model_error)
+
+                if not model_error.recoverable:
+                    logger.warning(
+                        "Non-recoverable error from model %s: %s",
+                        model_id,
+                        model_error.message,
+                    )
+                    raise model_error
+
+                logger.info(
+                    "Recoverable error from model %s (attempt %d/%d): %s",
+                    model_id,
+                    idx + 1,
+                    len(models_to_try),
+                    model_error.message,
+                )
+
+                if idx == len(models_to_try) - 1:
+                    break
+
+        error_messages = [str(e) for e in errors]
+        combined_error = ModelError(
+            message=(
+                f"All models failed after {len(models_to_try)} attempts. "
+                f"Errors: {'; '.join(error_messages)}"
+            ),
+            model_id="fallback_chain",
+            recoverable=False,
+            cause=errors[-1] if errors else None,
+        )
+        raise combined_error
+
+    async def _stream_model_response(
+        self,
+        model: Any,
+        messages: Any,
+        system: str | None,
+        tools: Any | None,
+        token_callback: Any,
+    ) -> ModelResponse:
+        """Stream a model response and aggregate into a ModelResponse."""
+        content_parts: list[str] = []
+        tool_calls_by_index: dict[int, dict[str, Any]] = {}
+        requires_complete = False
+
+        async for chunk in model.stream(
+            messages=messages,
+            system=system,
+            tools=tools,
+        ):
+            if chunk.content:
+                content_parts.append(chunk.content)
+                await token_callback(chunk.content)
+
+            if chunk.tool_call_delta:
+                delta = chunk.tool_call_delta
+                if "function" in delta:
+                    idx = int(delta.get("index", 0))
+                    entry = tool_calls_by_index.setdefault(
+                        idx, {"id": None, "name": None, "arguments": ""}
+                    )
+                    if "id" in delta:
+                        entry["id"] = delta["id"]
+                    func = delta.get("function") or {}
+                    name = func.get("name")
+                    if name:
+                        entry["name"] = name
+                    args_text = func.get("arguments")
+                    if args_text:
+                        entry["arguments"] += args_text
+                elif "partial_json" in delta:
+                    requires_complete = True
+
+            if chunk.is_final:
+                break
+
+        if requires_complete:
+            return await model.complete(messages=messages, system=system, tools=tools)
+
+        tool_calls: tuple[ToolCall, ...] | None = None
+        if tool_calls_by_index:
+            calls: list[ToolCall] = []
+            for idx in sorted(tool_calls_by_index):
+                entry = tool_calls_by_index[idx]
+                name = entry.get("name")
+                if not name:
+                    requires_complete = True
+                    break
+                args: dict[str, Any] = {}
+                args_text = entry.get("arguments", "")
+                if args_text:
+                    try:
+                        args = json.loads(args_text)
+                    except json.JSONDecodeError:
+                        args = {"_raw": args_text}
+                calls.append(
+                    ToolCall(
+                        id=entry.get("id") or f"call_{idx}",
+                        name=name,
+                        arguments=args,
+                    )
+                )
+
+            if requires_complete:
+                return await model.complete(messages=messages, system=system, tools=tools)
+
+            tool_calls = tuple(calls) if calls else None
+
+        content = "".join(content_parts)
+        input_tokens = await self._estimate_tokens_for_messages(
+            model=model,
+            messages=messages,
+            system=system,
+        )
+        output_tokens = await self._estimate_tokens(model=model, text=content)
+        usage = UsageStats(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        )
+        cost = await self._estimate_cost(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+        return ModelResponse(
+            content=content,
+            tool_calls=tool_calls,
+            usage=usage,
+            cost_usd=cost,
+        )
+
+    async def _estimate_tokens(self, model: Any, text: str) -> int:
+        """Estimate token count using model adapter if available."""
+        estimator = getattr(model, "estimate_tokens", None)
+        if callable(estimator):
+            try:
+                value = estimator(text)
+                if asyncio.iscoroutine(value):
+                    value = await value
+                return int(value)
+            except Exception:
+                pass
+        return max(1, len(text) // 4) if text else 0
+
+    async def _estimate_tokens_for_messages(
+        self,
+        model: Any,
+        messages: Any,
+        system: str | None,
+    ) -> int:
+        parts: list[str] = []
+        if system:
+            parts.append(system)
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(str(part) for part in content)
+            parts.append(str(content))
+        return await self._estimate_tokens(model=model, text="\n".join(parts))
+
+    async def _estimate_cost(
+        self,
+        model: Any,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> float:
+        estimator = getattr(model, "estimate_cost", None)
+        if callable(estimator):
+            try:
+                value = estimator(input_tokens, output_tokens)
+                if asyncio.iscoroutine(value):
+                    value = await value
+                return float(value)
+            except Exception:
+                return 0.0
+        return 0.0
+
     async def _execute_model_step(self, ctx: RunContext, step: PlanStep) -> Any:
         """Execute a model (LLM) step.
 
@@ -751,12 +1000,21 @@ class LifecycleEngine:
 
         start = time.monotonic()
         # Use fallback chain if configured (Task 15.0)
-        response = await self._call_model_with_fallback(
-            ctx=ctx,
-            messages=messages,
-            system=system,
-            tools=tools,
-        )
+        if self._token_callback is not None:
+            response = await self._call_model_with_fallback_stream(
+                ctx=ctx,
+                messages=messages,
+                system=system,
+                tools=tools,
+                token_callback=self._token_callback,
+            )
+        else:
+            response = await self._call_model_with_fallback(
+                ctx=ctx,
+                messages=messages,
+                system=system,
+                tools=tools,
+            )
         duration_ms = (time.monotonic() - start) * 1000
 
         # Track budget
@@ -915,6 +1173,10 @@ class LifecycleEngine:
             return "tool_calls"
         if bs.model_calls >= b.max_model_calls:
             return "model_calls"
+        if b.max_input_tokens is not None and bs.input_tokens >= b.max_input_tokens:
+            return "input_tokens"
+        if b.max_output_tokens is not None and bs.output_tokens >= b.max_output_tokens:
+            return "output_tokens"
         if bs.wall_time_seconds >= b.max_wall_time_seconds:
             return "wall_time"
         return "unknown"
@@ -1013,6 +1275,7 @@ class LifecycleEngine:
         attachments: list[Any] | None = None,
         cancel_token: Any | None = None,
         config: Any | None = None,
+        token_callback: Any | None = None,
     ) -> dict[str, Any]:
         """Execute the full lifecycle: Initialize → [Observe→Plan→Act→Evaluate]* → Finalize.
 
@@ -1024,127 +1287,132 @@ class LifecycleEngine:
             attachments: Optional attachments
             cancel_token: Optional cancellation token
             config: Optional resolved config
+            token_callback: Optional callback for streaming model tokens
 
         Returns:
             Result dict from _finalize
         """
-        # Initialize
-        ctx = await self._initialize(
-            input_text=input_text,
-            agent_id=agent_id,
-            budget=budget,
-            context=context,
-            attachments=attachments,
-            cancel_token=cancel_token,
-            config=config,
-        )
-
-        await self._emit(
-            "run_started",
-            run_id=ctx.run_id,
-            data={"agent_id": agent_id},
-        )
-
-        termination_error: Exception | None = None
-
+        self._token_callback = token_callback
         try:
-            # Main cycle loop
-            while True:
-                cycle_start = time.monotonic()
-                await self._emit(
-                    "cycle_started",
-                    run_id=ctx.run_id,
-                    cycle=ctx.cycle_count,
-                )
-
-                # Check cancellation at cycle start (AD-028)
-                if ctx.cancel_token and ctx.cancel_token.is_cancelled:
-                    reason = getattr(ctx.cancel_token, "_reason", None) or "Cancelled"
-                    termination_error = CancelledError(message=reason)
-                    break
-
-                # Check budget before starting cycle
-                if ctx.state.budget_state.is_exhausted(ctx.budget):
-                    resource = self._identify_exhausted_resource(ctx)
-                    termination_error = BudgetError(
-                        message=f"Budget exhausted: {resource}",
-                        resource=resource,
-                    )
-                    break
-
-                cycle_start_time = datetime.utcnow()
-
-                # Observe
-                observation = await self._observe(ctx)
-
-                # Plan
-                plan = await self._plan(ctx, observation)
-
-                # Act
-                execution = await self._act(ctx, plan)
-
-                # Evaluate
-                decision = await self._evaluate(ctx, plan, execution)
-
-                cycle_end_time = datetime.utcnow()
-
-                # Record completed cycle
-                cycle_state = CycleState(
-                    cycle_number=ctx.cycle_count,
-                    observation=observation,
-                    plan=plan,
-                    execution=execution,
-                    evaluation=decision,
-                    started_at=cycle_start_time,
-                    ended_at=cycle_end_time,
-                )
-                ctx.state.append_cycle(cycle_state)
-
-                # Increment cycle count and budget
-                ctx.cycle_count += 1
-                ctx.state.budget_state.cycles += 1
-
-                cycle_duration_ms = (time.monotonic() - cycle_start) * 1000
-                await self._emit(
-                    "cycle_completed",
-                    run_id=ctx.run_id,
-                    cycle=ctx.cycle_count - 1,
-                    duration_ms=cycle_duration_ms,
-                    data={"done": decision.done},
-                )
-
-                if decision.done:
-                    termination_error = decision.error
-                    break
-
-                # Reset current-cycle state for next cycle
-                ctx.state.current_observation = None
-                ctx.state.current_plan = None
-                ctx.state.current_execution = None
-
-        except AxisError as e:
-            termination_error = e
-        except Exception as e:
-            termination_error = AxisError(
-                message=f"Unexpected error: {e}",
-                error_class=ErrorClass.RUNTIME,
-                cause=e,
+            # Initialize
+            ctx = await self._initialize(
+                input_text=input_text,
+                agent_id=agent_id,
+                budget=budget,
+                context=context,
+                attachments=attachments,
+                cancel_token=cancel_token,
+                config=config,
             )
 
-        # Finalize (always runs)
-        result = await self._finalize(ctx, error=termination_error)
+            await self._emit(
+                "run_started",
+                run_id=ctx.run_id,
+                data={"agent_id": agent_id},
+            )
 
-        event_type = "run_completed" if result["success"] else "run_failed"
-        await self._emit(
-            event_type,
-            run_id=ctx.run_id,
-            data={
-                "success": result["success"],
-                "cycles": result["cycles_completed"],
-            },
-        )
+            termination_error: Exception | None = None
 
-        return result
+            try:
+                # Main cycle loop
+                while True:
+                    cycle_start = time.monotonic()
+                    await self._emit(
+                        "cycle_started",
+                        run_id=ctx.run_id,
+                        cycle=ctx.cycle_count,
+                    )
+
+                    # Check cancellation at cycle start (AD-028)
+                    if ctx.cancel_token and ctx.cancel_token.is_cancelled:
+                        reason = getattr(ctx.cancel_token, "_reason", None) or "Cancelled"
+                        termination_error = CancelledError(message=reason)
+                        break
+
+                    # Check budget before starting cycle
+                    if ctx.state.budget_state.is_exhausted(ctx.budget):
+                        resource = self._identify_exhausted_resource(ctx)
+                        termination_error = BudgetError(
+                            message=f"Budget exhausted: {resource}",
+                            resource=resource,
+                        )
+                        break
+
+                    cycle_start_time = datetime.utcnow()
+
+                    # Observe
+                    observation = await self._observe(ctx)
+
+                    # Plan
+                    plan = await self._plan(ctx, observation)
+
+                    # Act
+                    execution = await self._act(ctx, plan)
+
+                    # Evaluate
+                    decision = await self._evaluate(ctx, plan, execution)
+
+                    cycle_end_time = datetime.utcnow()
+
+                    # Record completed cycle
+                    cycle_state = CycleState(
+                        cycle_number=ctx.cycle_count,
+                        observation=observation,
+                        plan=plan,
+                        execution=execution,
+                        evaluation=decision,
+                        started_at=cycle_start_time,
+                        ended_at=cycle_end_time,
+                    )
+                    ctx.state.append_cycle(cycle_state)
+
+                    # Increment cycle count and budget
+                    ctx.cycle_count += 1
+                    ctx.state.budget_state.cycles += 1
+
+                    cycle_duration_ms = (time.monotonic() - cycle_start) * 1000
+                    await self._emit(
+                        "cycle_completed",
+                        run_id=ctx.run_id,
+                        cycle=ctx.cycle_count - 1,
+                        duration_ms=cycle_duration_ms,
+                        data={"done": decision.done},
+                    )
+
+                    if decision.done:
+                        termination_error = decision.error
+                        break
+
+                    # Reset current-cycle state for next cycle
+                    ctx.state.current_observation = None
+                    ctx.state.current_plan = None
+                    ctx.state.current_execution = None
+
+            except AxisError as e:
+                termination_error = e
+            except Exception as e:
+                termination_error = AxisError(
+                    message=f"Unexpected error: {e}",
+                    error_class=ErrorClass.RUNTIME,
+                    cause=e,
+                )
+
+            # Finalize (always runs)
+            result = await self._finalize(ctx, error=termination_error)
+
+            event_type = "run_completed" if result["success"] else "run_failed"
+            await self._emit(
+                event_type,
+                run_id=ctx.run_id,
+                data={
+                    "success": result["success"],
+                    "cycles": result["cycles_completed"],
+                },
+            )
+
+            return result
+        finally:
+            self._token_callback = None
 
 
 __all__ = [
