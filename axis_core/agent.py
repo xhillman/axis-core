@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
+import json
 import logging
 import os
 import time
@@ -27,10 +29,13 @@ from axis_core.budget import Budget, BudgetState
 from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts, config
 from axis_core.context import RunState
 from axis_core.engine.lifecycle import LifecycleEngine
+from axis_core.engine.registry import memory_registry
+from axis_core.engine.resolver import resolve_adapter
 from axis_core.engine.trace_collector import TraceCollector
 from axis_core.errors import AxisError
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
 from axis_core.result import RunResult, RunStats, StreamEvent
+from axis_core.session import Session, generate_session_id, load_session
 
 logger = logging.getLogger("axis_core.agent")
 
@@ -373,6 +378,84 @@ class Agent:
             run_id=raw.get("run_id", ""),
             memory_error=memory_error,
         )
+
+    def _get_config_fingerprint(self) -> str:
+        """Generate fingerprint of current agent config (AD-044)."""
+        model_value = self._model
+        model_id = (
+            model_value
+            if isinstance(model_value, str)
+            else getattr(model_value, "model_id", None)
+        )
+        config_data = {
+            "tools": sorted(self._tools.keys()),
+            "system": self._system,
+            "model": model_id,
+        }
+        canonical = json.dumps(config_data, sort_keys=True)
+        return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+    async def session_async(
+        self,
+        id: str | None = None,
+        *,
+        max_history: int = 100,
+    ) -> Session:
+        """Create or resume a session."""
+        session_id = id or generate_session_id()
+        memory = resolve_adapter(self._memory, memory_registry)
+
+        session: Session | None = None
+        if memory is not None:
+            try:
+                session = await load_session(memory, session_id)
+            except Exception as e:
+                logger.error("Failed to load session %s: %s", session_id, e)
+
+        current_fingerprint = self._get_config_fingerprint()
+
+        if session is not None:
+            session.max_history = max_history
+            if session.config_fingerprint and session.config_fingerprint != current_fingerprint:
+                logger.warning(
+                    "Session %s was created with different agent configuration. "
+                    "Tools or system prompt may have changed. "
+                    "Continuing with current configuration.",
+                    session_id,
+                )
+                session.config_fingerprint = current_fingerprint
+        else:
+            session = Session(
+                id=session_id,
+                max_history=max_history,
+                agent_id=self._agent_id,
+                config_fingerprint=current_fingerprint,
+            )
+
+        if session.agent_id is None:
+            session.agent_id = self._agent_id
+
+        session.attach(self, memory)
+        return session
+
+    def session(
+        self,
+        id: str | None = None,
+        *,
+        max_history: int = 100,
+    ) -> Session:
+        """Create or resume a session (sync wrapper)."""
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "agent.session() cannot be called from async context. "
+                "Use await agent.session_async() instead."
+            )
+        except RuntimeError as e:
+            if "cannot be called from async context" in str(e):
+                raise
+
+        return asyncio.run(self.session_async(id=id, max_history=max_history))
 
     # =========================================================================
     # run_async — native async (8.3, AD-008)

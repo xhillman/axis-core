@@ -82,6 +82,15 @@ class CancelledError(AxisError):
 
 
 @dataclass
+class ConcurrencyError(AxisError):
+    """Error when optimistic concurrency checks fail."""
+
+    expected_version: int | None = None
+    actual_version: int | None = None
+    error_class: ErrorClass = field(default=ErrorClass.RUNTIME, init=False)
+
+
+@dataclass
 class ToolError(AxisError):
     """Error during tool execution."""
 

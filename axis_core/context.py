@@ -328,6 +328,13 @@ class RunState:
         """
         messages: list[dict[str, Any]] = []
 
+        # Prepend session history if provided via context
+        session_history = ctx.context.get("__session_history__")
+        if isinstance(session_history, list):
+            for session_msg in session_history:
+                if isinstance(session_msg, dict):
+                    messages.append(dict(session_msg))
+
         # Start with original user input (always include)
         first_message_content = ctx.input.text
 

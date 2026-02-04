@@ -51,6 +51,7 @@ __all__ = [
     "BudgetError",
     "TimeoutError",
     "CancelledError",
+    "ConcurrencyError",
     "ErrorClass",
     "ErrorRecord",
     # Results
@@ -60,6 +61,8 @@ __all__ = [
     # Context
     "RunContext",
     "RunState",
+    "Session",
+    "Message",
 ]
 
 
@@ -158,6 +161,10 @@ def __getattr__(name: str) -> Any:
         from axis_core.errors import CancelledError
 
         return CancelledError
+    if name == "ConcurrencyError":
+        from axis_core.errors import ConcurrencyError
+
+        return ConcurrencyError
     if name == "ErrorClass":
         from axis_core.errors import ErrorClass
 
@@ -190,6 +197,14 @@ def __getattr__(name: str) -> Any:
         from axis_core.context import RunState
 
         return RunState
+    if name == "Session":
+        from axis_core.session import Session
+
+        return Session
+    if name == "Message":
+        from axis_core.session import Message
+
+        return Message
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

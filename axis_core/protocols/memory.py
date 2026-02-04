@@ -7,7 +7,10 @@ along with enums for capabilities and dataclasses for memory items.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from axis_core.session import Session
 
 
 class MemoryCapability(Enum):
@@ -164,4 +167,21 @@ class MemoryAdapter(Protocol):
         Returns:
             Number of items deleted
         """
+        ...
+
+
+@runtime_checkable
+class SessionStore(Protocol):
+    """Protocol for session persistence backends."""
+
+    async def store_session(self, session: "Session") -> "Session":
+        """Store or update a session with optimistic locking."""
+        ...
+
+    async def retrieve_session(self, session_id: str) -> "Session | None":
+        """Retrieve a session by ID."""
+        ...
+
+    async def update_session(self, session: "Session") -> "Session":
+        """Update a session with optimistic locking."""
         ...

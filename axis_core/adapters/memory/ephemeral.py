@@ -4,9 +4,12 @@ This adapter provides a simple in-memory dictionary-based storage implementation
 All data is lost when the process terminates.
 """
 
+from datetime import datetime
 from typing import Any
 
+from axis_core.errors import ConcurrencyError
 from axis_core.protocols.memory import MemoryCapability, MemoryItem
+from axis_core.session import SESSION_PREFIX, Session
 
 
 class EphemeralMemory:
@@ -176,3 +179,41 @@ class EphemeralMemory:
         count = len(self._store)
         self._store.clear()
         return count
+
+    async def store_session(self, session: Session) -> Session:
+        """Store or update a session in memory."""
+        key = f"{SESSION_PREFIX}{session.id}"
+        existing = await self.retrieve_session(session.id)
+        if existing and existing.version != session.version:
+            raise ConcurrencyError(
+                message=(
+                    f"Session {session.id} was modified. "
+                    f"Expected version {session.version}, got {existing.version}"
+                ),
+                expected_version=session.version,
+                actual_version=existing.version,
+            )
+        session.version += 1
+        session.updated_at = datetime.utcnow()
+        self._store[key] = {
+            "value": session.serialize(),
+            "metadata": {"type": "session"},
+        }
+        return session
+
+    async def retrieve_session(self, session_id: str) -> Session | None:
+        """Retrieve a session by ID."""
+        key = f"{SESSION_PREFIX}{session_id}"
+        item = self._store.get(key)
+        if item is None:
+            return None
+        value = item.get("value")
+        if isinstance(value, Session):
+            return value
+        if isinstance(value, dict):
+            return Session.deserialize(value)
+        return None
+
+    async def update_session(self, session: Session) -> Session:
+        """Update a session with optimistic locking semantics."""
+        return await self.store_session(session)

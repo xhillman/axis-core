@@ -22,7 +22,7 @@ import time
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from axis_core.budget import Budget
 from axis_core.context import (
@@ -783,7 +783,9 @@ class LifecycleEngine:
                 return response
 
             except Exception as e:
-                model_error = e if isinstance(e, ModelError) else ModelError.from_exception(e, model_id)
+                model_error = (
+                    e if isinstance(e, ModelError) else ModelError.from_exception(e, model_id)
+                )
                 errors.append(model_error)
 
                 if not model_error.recoverable:
@@ -862,7 +864,10 @@ class LifecycleEngine:
                 break
 
         if requires_complete:
-            return await model.complete(messages=messages, system=system, tools=tools)
+            return cast(
+                ModelResponse,
+                await model.complete(messages=messages, system=system, tools=tools),
+            )
 
         tool_calls: tuple[ToolCall, ...] | None = None
         if tool_calls_by_index:
@@ -889,7 +894,10 @@ class LifecycleEngine:
                 )
 
             if requires_complete:
-                return await model.complete(messages=messages, system=system, tools=tools)
+                return cast(
+                    ModelResponse,
+                    await model.complete(messages=messages, system=system, tools=tools),
+                )
 
             tool_calls = tuple(calls) if calls else None
 

@@ -12,6 +12,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - **Protocol-based adapters** — Pluggable models, memory, planners, and telemetry
 - **Model fallback** — Automatic fallback to secondary models on recoverable errors (rate limits, timeouts)
 - **Tool system** — Simple `@tool` decorator with automatic schema generation
+- **Session support** — Persistent multi-turn conversations with optimistic locking
 - **Budget tracking** — Cost, token, and cycle limits with real-time tracking
 - **Built-in observability** — Phase-level telemetry and trace collection
 - **Type-safe** — Full type hints with mypy strict mode
@@ -213,6 +214,22 @@ budget = Budget(
 )
 ```
 
+### Sessions
+
+```python
+from axis_core import Agent
+
+agent = Agent(model="claude-sonnet-4-20250514", planner="sequential")
+
+# Create a new session
+session = agent.session(id="user-123")
+result = session.run("What's the weather in Tokyo?")
+
+# Resume later (history persists when using a memory adapter)
+session = agent.session(id="user-123")
+result = session.run("What about Osaka?")
+```
+
 ### Results
 
 ```python
@@ -342,11 +359,7 @@ axis-core is under active development. Here's what's coming:
 
 **Multi-turn Conversations:**
 
-- **Session** class for stateful conversations
-- Automatic history management with truncation
 - Session persistence (save/load from file)
-- Config fingerprint validation
-- Optimistic locking for concurrent sessions
 
 **Advanced Capabilities:**
 

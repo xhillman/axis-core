@@ -25,6 +25,7 @@ __all__ = [
     "MemoryAdapter",
     "MemoryItem",
     "MemoryCapability",
+    "SessionStore",
     # Planner protocol
     "Planner",
     "Plan",
@@ -74,6 +75,10 @@ def __getattr__(name: str) -> object:
         from axis_core.protocols.memory import MemoryCapability
 
         return MemoryCapability
+    if name == "SessionStore":
+        from axis_core.protocols.memory import SessionStore
+
+        return SessionStore
 
     # Planner protocol
     if name == "Planner":
