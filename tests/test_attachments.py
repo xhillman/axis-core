@@ -76,7 +76,7 @@ class TestImageAttachment:
         path = tmp_path / "note.txt"
         path.write_bytes(b"hello")
 
-        with pytest.raises(ValueError, match="not an image"):
+        with pytest.raises(ValueError, match="image/"):
             Image.from_file(str(path))
 
 
@@ -98,7 +98,64 @@ class TestPDFAttachment:
         path = tmp_path / "note.txt"
         path.write_bytes(b"hello")
 
-        with pytest.raises(ValueError, match="not a PDF"):
+        with pytest.raises(ValueError, match="application/pdf"):
+            PDF.from_file(str(path))
+
+
+class TestImageMimeValidation:
+    """Tests for Image constructor MIME validation (Task 5.1)."""
+
+    def test_accepts_valid_image_mime(self) -> None:
+        """Image constructor should accept mime_type starting with 'image/'."""
+        img = Image(data=b"\x89PNG", mime_type="image/png")
+        assert img.mime_type == "image/png"
+
+    def test_accepts_image_jpeg(self) -> None:
+        """Image constructor should accept image/jpeg."""
+        img = Image(data=b"\xff\xd8", mime_type="image/jpeg")
+        assert img.mime_type == "image/jpeg"
+
+    def test_rejects_non_image_mime(self) -> None:
+        """Image constructor should reject mime_type not starting with 'image/'."""
+        with pytest.raises(ValueError, match="image/"):
+            Image(data=b"data", mime_type="text/plain")
+
+    def test_rejects_application_pdf_mime(self) -> None:
+        """Image constructor should reject application/pdf."""
+        with pytest.raises(ValueError, match="image/"):
+            Image(data=b"data", mime_type="application/pdf")
+
+    def test_from_file_still_validates(self, tmp_path: Path) -> None:
+        """Image.from_file should still reject non-image files."""
+        path = tmp_path / "note.txt"
+        path.write_bytes(b"hello")
+        with pytest.raises(ValueError):
+            Image.from_file(str(path))
+
+
+class TestPDFMimeValidation:
+    """Tests for PDF constructor MIME validation (Task 5.2)."""
+
+    def test_accepts_valid_pdf_mime(self) -> None:
+        """PDF constructor should accept 'application/pdf'."""
+        pdf = PDF(data=b"%PDF", mime_type="application/pdf")
+        assert pdf.mime_type == "application/pdf"
+
+    def test_rejects_non_pdf_mime(self) -> None:
+        """PDF constructor should reject mime_type != 'application/pdf'."""
+        with pytest.raises(ValueError, match="application/pdf"):
+            PDF(data=b"data", mime_type="text/plain")
+
+    def test_rejects_image_mime(self) -> None:
+        """PDF constructor should reject image MIME types."""
+        with pytest.raises(ValueError, match="application/pdf"):
+            PDF(data=b"data", mime_type="image/png")
+
+    def test_from_file_still_validates(self, tmp_path: Path) -> None:
+        """PDF.from_file should still reject non-PDF files."""
+        path = tmp_path / "note.txt"
+        path.write_bytes(b"hello")
+        with pytest.raises(ValueError):
             PDF.from_file(str(path))
 
 

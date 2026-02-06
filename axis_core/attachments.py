@@ -65,13 +65,15 @@ class Attachment:
 class Image(Attachment):
     """Image attachment."""
 
+    def __post_init__(self) -> None:
+        if not self.mime_type.startswith("image/"):
+            raise ValueError(
+                f"Image mime_type must start with 'image/', got '{self.mime_type}'"
+            )
+
     @classmethod
     def from_file(cls, path: str | Path) -> Image:
         attachment = super().from_file(path)
-
-        if not attachment.mime_type.startswith("image/"):
-            raise ValueError(f"File {path} is not an image")
-
         return cls(**asdict(attachment))
 
 
@@ -79,13 +81,15 @@ class Image(Attachment):
 class PDF(Attachment):
     """PDF attachment."""
 
+    def __post_init__(self) -> None:
+        if self.mime_type != "application/pdf":
+            raise ValueError(
+                f"PDF mime_type must be 'application/pdf', got '{self.mime_type}'"
+            )
+
     @classmethod
     def from_file(cls, path: str | Path) -> PDF:
         attachment = super().from_file(path)
-
-        if attachment.mime_type != "application/pdf":
-            raise ValueError(f"File {path} is not a PDF")
-
         return cls(**asdict(attachment))
 
 
