@@ -89,7 +89,8 @@ if [ "$TARGET" = "pypi" ]; then
     uv publish
 else
     echo -e "${GREEN}Publishing to TestPyPI${NC}"
-    uv publish --publish-url https://test.pypi.org/legacy/
+    UV_PUBLISH_TOKEN="${UV_PUBLISH_TEST_TOKEN:-$UV_PUBLISH_TOKEN}" \
+        uv publish --publish-url https://test.pypi.org/legacy/
 fi
 
 echo ""
