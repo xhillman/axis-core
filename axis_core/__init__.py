@@ -19,7 +19,7 @@ Example:
 
 from typing import Any
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # Public API - will be populated as modules are implemented
 __all__ = [
@@ -108,9 +108,9 @@ def __getattr__(name: str) -> Any:
 
     # Configuration
     if name == "config":
-        from axis_core import config as config_module
+        from axis_core.config import config
 
-        return config_module
+        return config
     if name == "Timeouts":
         from axis_core.config import Timeouts
 
@@ -230,5 +230,6 @@ def __getattr__(name: str) -> Any:
 
 
 # Override module-level imports that conflict with exported names
-# This handles the case where 'tool' module name conflicts with 'tool' function
+# This handles cases where submodule names conflict with exported objects
+from axis_core.config import config as config  # noqa: F401, E402
 from axis_core.tool import tool as tool  # noqa: F401, E402

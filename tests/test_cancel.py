@@ -31,3 +31,14 @@ def test_cancel_token_default_reason() -> None:
 
     assert token.is_cancelled is True
     assert token.reason == "Cancelled by user"
+
+
+def test_cancel_token_one_shot() -> None:
+    """Double-cancel should preserve the original reason (one-shot semantics)."""
+    token = CancelToken()
+
+    token.cancel("first reason")
+    token.cancel("second reason")
+
+    assert token.is_cancelled is True
+    assert token.reason == "first reason"

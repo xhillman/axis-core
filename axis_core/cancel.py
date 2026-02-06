@@ -11,7 +11,9 @@ class CancelToken:
         self._reason: str | None = None
 
     def cancel(self, reason: str = "Cancelled by user") -> None:
-        """Request cancellation with optional reason."""
+        """Request cancellation with optional reason. First reason wins (one-shot)."""
+        if self._cancelled:
+            return
         self._cancelled = True
         self._reason = reason
 

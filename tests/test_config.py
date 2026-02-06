@@ -402,3 +402,32 @@ class TestResolvedConfig:
         )
         with pytest.raises(AttributeError):
             resolved.model = "changed"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Config singleton package-level export tests (Task 4.0)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigPackageExport:
+    """Test that `from axis_core import config` returns the Config singleton."""
+
+    def test_package_export_is_config_instance(self) -> None:
+        """from axis_core import config should return the Config() singleton, not the module."""
+        from axis_core import config as pkg_config
+
+        assert isinstance(pkg_config, Config)
+
+    def test_package_export_has_default_model(self) -> None:
+        """config.default_model should be accessible via the package export."""
+        from axis_core import config as pkg_config
+
+        assert hasattr(pkg_config, "default_model")
+        assert isinstance(pkg_config.default_model, str)
+
+    def test_package_export_same_singleton(self) -> None:
+        """Package export should be the same singleton as axis_core.config.config."""
+        from axis_core import config as pkg_config
+        from axis_core.config import config as direct_config
+
+        assert pkg_config is direct_config
