@@ -324,7 +324,7 @@ agent = Agent(
 
 ## Status
 
-**v0.3.1 (Alpha)** — Core features with sessions, attachments, and persistent memory:
+**v0.4.0 (Alpha)** — Core features with sessions, attachments, and persistent memory:
 
 ### ✅ Completed
 

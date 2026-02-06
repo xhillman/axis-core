@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.4.0] - 2026-02-06
 
 ### Added
 - SQLiteMemory adapter with FTS5 keyword search and session support (`axis_core/adapters/memory/sqlite.py`).
