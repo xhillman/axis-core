@@ -2,10 +2,12 @@
 
 import pytest
 
-from axis_core.adapters.memory.sqlite import SQLiteMemory
-from axis_core.errors import ConcurrencyError
-from axis_core.protocols.memory import MemoryCapability, MemoryItem
-from axis_core.session import Session
+aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite not installed")
+
+from axis_core.adapters.memory.sqlite import SQLiteMemory  # noqa: E402
+from axis_core.errors import ConcurrencyError  # noqa: E402
+from axis_core.protocols.memory import MemoryCapability, MemoryItem  # noqa: E402
+from axis_core.session import Session  # noqa: E402
 
 
 @pytest.mark.unit

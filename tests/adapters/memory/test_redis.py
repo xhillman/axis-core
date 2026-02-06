@@ -2,10 +2,13 @@
 
 import pytest
 
-from axis_core.adapters.memory.redis import RedisMemory
-from axis_core.errors import ConcurrencyError
-from axis_core.protocols.memory import MemoryCapability, MemoryItem
-from axis_core.session import Session
+redis_pkg = pytest.importorskip("redis", reason="redis not installed")
+fakeredis = pytest.importorskip("fakeredis", reason="fakeredis not installed")
+
+from axis_core.adapters.memory.redis import RedisMemory  # noqa: E402
+from axis_core.errors import ConcurrencyError  # noqa: E402
+from axis_core.protocols.memory import MemoryCapability, MemoryItem  # noqa: E402
+from axis_core.session import Session  # noqa: E402
 
 
 def _make_memory(**kwargs: object) -> RedisMemory:
