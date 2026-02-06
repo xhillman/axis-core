@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- SQLiteMemory adapter with FTS5 keyword search and session support (`axis_core/adapters/memory/sqlite.py`).
+- RedisMemory adapter with TTL, namespace support, and session persistence (`axis_core/adapters/memory/redis.py`).
+- Lazy factory registration for SQLite and Redis memory adapters in the adapter registry.
+- Tests for SQLiteMemory (20 tests) and RedisMemory (22 tests).
+
 ## [0.3.1] - 2026-02-06
 
 ### Added
@@ -9,3 +17,50 @@ All notable changes to this project will be documented in this file.
 - CancelToken for cooperative cancellation.
 - Attachment and cancellation wiring through Agent, RunContext, and Lifecycle.
 - Tests covering attachments, cancellation, and lifecycle cancellation handling.
+
+## [0.3.0] - 2026-02-05
+
+### Added
+- Session dataclass with message history, versioning, and serialization.
+- SessionStore protocol for session persistence backends.
+- `agent.session()` API for creating and resuming multi-turn conversations.
+- Optimistic concurrency checks with ConcurrencyError on version conflicts.
+- Session tests for create, resume, and version conflict handling.
+
+## [0.2.0] - 2026-02-04
+
+### Added
+- True streaming functionality (`stream()` and `stream_async()` methods).
+- ReAct planner with explicit reasoning steps.
+- AutoPlanner with LLM-based tool selection and ordering.
+- Model fallback system with automatic retry on recoverable errors.
+- OpenAI model adapter (GPT-4, GPT-4o, o1/o3/o4 series).
+
+### Fixed
+- Run state overwrite bug in multi-cycle execution.
+- Default config resolution for environment variables.
+
+## [0.1.3] - 2026-02-02
+
+### Added
+- Auto-registration of adapters via lazy loading factories.
+- Release automation scripts and checklist.
+
+### Fixed
+- Package testing script.
+
+## [0.1.0] - 2026-01-30
+
+### Added
+- Initial project skeleton.
+- Lifecycle engine with Observe → Plan → Act → Evaluate cycle.
+- Agent API with `run()` and `run_async()` methods.
+- `@tool` decorator with automatic JSON schema generation.
+- Anthropic model adapter (Claude Opus, Sonnet, Haiku).
+- EphemeralMemory adapter with keyword search.
+- SequentialPlanner adapter.
+- Console telemetry sink.
+- Budget tracking (cycles, tokens, cost, wall time).
+- Configuration system with environment variable support.
+- Comprehensive error taxonomy with recovery classification.
+- Adapter registry with entry point discovery.

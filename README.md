@@ -235,8 +235,9 @@ result = session.run("What's the weather in Tokyo?")
 session = agent.session(id="user-123")
 result = session.run("What about Osaka?")
 
-# Note: Ephemeral memory persists only in-process. Durable persistence
-# requires a non-ephemeral adapter (e.g., Redis/SQLite) once implemented.
+# For durable persistence across restarts, use SQLite or Redis memory:
+# agent = Agent(model="claude-sonnet-4-20250514", memory="sqlite")
+# agent = Agent(model="claude-sonnet-4-20250514", memory="redis")
 ```
 
 ### Attachments & Cancellation
@@ -295,7 +296,7 @@ AXIS_MAX_TOOL_CALLS=50
 AXIS_MAX_MODEL_CALLS=20
 
 # Telemetry
-AXIS_TELEMETRY_SINK=console         # console, none (file/callback planned)
+AXIS_TELEMETRY_SINK=console         # console, none
 AXIS_TELEMETRY_COMPACT=false        # Compact console output
 AXIS_TELEMETRY_REDACT=true          # Redact sensitive data
 
@@ -323,7 +324,7 @@ agent = Agent(
 
 ## Status
 
-**v0.3.0 (Alpha)** — Core features with session support:
+**v0.3.1 (Alpha)** — Core features with sessions, attachments, and persistent memory:
 
 ### ✅ Completed
 
@@ -336,11 +337,13 @@ agent = Agent(
 - Comprehensive error handling and recovery
 - Type-safe with mypy strict mode
 - Session support with optimistic locking (agent.session / session.run)
+- Attachments (Image/PDF) with 10MB size limits and metadata serialization
+- Cooperative cancellation via CancelToken
 
 **Model Adapters:**
 
 - Anthropic (Claude Opus 4, Sonnet 4, Haiku)
-- OpenAI (GPT-4, GPT-4o, GPT-3.5-turbo, o1)
+- OpenAI (GPT-4, GPT-4o, GPT-5, o1/o3/o4)
 - Model fallback system (automatic retry with secondary models)
 - String-based model resolution (`"claude-sonnet-4-20250514"` → adapter)
 
@@ -351,15 +354,23 @@ agent = Agent(
 - Tool metadata for rate limits/timeouts (runtime enforcement in progress)
 - Tool context with budget access
 
-**Memory & Planning:**
+**Memory Adapters:**
 
-- EphemeralMemory (in-memory storage with keyword search)
-- SequentialPlanner (executes tool requests in order)
+- EphemeralMemory — In-memory storage with keyword search (no dependencies)
+- SQLiteMemory — Persistent local storage with FTS5 keyword search (`pip install axis-core[sqlite]`)
+- RedisMemory — Distributed storage with TTL and namespace support (`pip install axis-core[redis]`)
+- All adapters support session persistence with optimistic concurrency locking
+
+**Planners:**
+
+- SequentialPlanner — Executes tool requests in order
+- AutoPlanner — LLM-based planning that selects and orders tools
+- ReActPlanner — Reasoning + Acting loop with explicit thought steps
 - Adapter registry with plugin discovery
 
 **Observability:**
 
-- Phase-level telemetry (console sink today)
+- Phase-level telemetry (console sink)
 - Trace event collection
 - Budget warnings and exceeded events
 
@@ -371,36 +382,24 @@ See [Roadmap](#roadmap) below for upcoming features.
 
 axis-core is under active development. Here's what's coming:
 
-### Phase 3: Advanced Planning & Memory (Q1 2026)
-
-**Smart Planners:**
-
-- **AutoPlanner** — LLM-based planning that intelligently selects and orders tools
-- **ReActPlanner** — Reasoning + Acting loop with explicit thought steps
-- Planner fallback (automatic degradation to SequentialPlanner on planning failure)
-- Plan confidence scoring
-
-**Persistent Memory:**
-
-- **SQLiteMemory** — Local database storage with full-text search (FTS5)
-- **RedisMemory** — Distributed memory with TTL and namespace support
-- Semantic search capabilities
-- Memory adapter URL resolution (`sqlite:///path/to/db`, `redis://host:port`)
-
-### Phase 4: Production Features (Q2 2026)
-
-**Multi-turn Conversations:**
-
-- Durable session persistence beyond ephemeral memory (SQLite/Redis)
-- Session export/import helpers
+### Phase 3: Production Features (Q1 2026)
 
 **Advanced Capabilities:**
 
 - **Structured Output** — Pydantic schema validation with strict mode
 - **Hook System** — Before/after hooks for each lifecycle phase
 - **Context Injection** — Pass runtime context to tools
-- **Confirmation Handler** — User approval for destructive operations
+- **Confirmation Handler** — User approval for destructive operations (AD-002)
 - **Runtime Enforcement** — Timeouts, rate limits, retries, and cache behavior
+- **Checkpoint/Resume** — Persist and resume agent runs at phase boundaries (AD-005)
+
+**Enhanced Memory:**
+
+- Semantic search capabilities (vector-based)
+- Memory adapter URL resolution (`sqlite:///path/to/db`, `redis://host:port`)
+- Session export/import helpers
+- Planner fallback (automatic degradation to SequentialPlanner on planning failure)
+- Plan confidence scoring
 
 **Enhanced Telemetry:**
 
@@ -408,7 +407,7 @@ axis-core is under active development. Here's what's coming:
 - **CallbackSink** — Custom telemetry handlers
 - Batched and phase-based buffering modes
 
-### Phase 5: Ecosystem & Integrations (Q3 2026)
+### Phase 4: Ecosystem & Integrations (Q2–Q3 2026)
 
 **Additional Model Providers:**
 
