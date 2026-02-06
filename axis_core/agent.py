@@ -25,7 +25,9 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
 from typing import Any
 
+from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget, BudgetState
+from axis_core.cancel import CancelToken
 from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts, config
 from axis_core.context import RunState
 from axis_core.engine.lifecycle import LifecycleEngine
@@ -466,10 +468,10 @@ class Agent:
         input: str | list[Any],
         *,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
+        attachments: list[AttachmentLike] | None = None,
         output_schema: type | None = None,
         timeout: float | None = None,
-        cancel_token: Any | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> RunResult:
         """Execute agent asynchronously.
 
@@ -561,10 +563,10 @@ class Agent:
         input: str | list[Any],
         *,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
+        attachments: list[AttachmentLike] | None = None,
         output_schema: type | None = None,
         timeout: float | None = None,
-        cancel_token: Any | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> RunResult:
         """Execute agent synchronously. Blocks until complete.
 
@@ -605,10 +607,10 @@ class Agent:
         input: str | list[Any],
         *,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
+        attachments: list[AttachmentLike] | None = None,
         output_schema: type | None = None,
         timeout: float | None = None,
-        cancel_token: Any | None = None,
+        cancel_token: CancelToken | None = None,
         stream_telemetry: bool = False,
     ) -> AsyncIterator[StreamEvent]:
         """Execute agent with async streaming. Yields events as they occur.
@@ -713,10 +715,10 @@ class Agent:
         input: str | list[Any],
         *,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
+        attachments: list[AttachmentLike] | None = None,
         output_schema: type | None = None,
         timeout: float | None = None,
-        cancel_token: Any | None = None,
+        cancel_token: CancelToken | None = None,
         stream_telemetry: bool = False,
     ) -> Iterator[StreamEvent]:
         """Synchronous streaming. Yields StreamEvents.

@@ -24,7 +24,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, cast
 
+from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget
+from axis_core.cancel import CancelToken
 from axis_core.context import (
     CycleState,
     EvalDecision,
@@ -197,8 +199,8 @@ class LifecycleEngine:
         agent_id: str,
         budget: Budget,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
-        cancel_token: Any | None = None,
+        attachments: list[AttachmentLike] | None = None,
+        cancel_token: CancelToken | None = None,
         config: Any | None = None,
     ) -> RunContext:
         """Initialize phase: create RunContext, validate config.
@@ -1115,7 +1117,9 @@ class LifecycleEngine:
 
         # 1. Check cancellation
         if ctx.cancel_token and ctx.cancel_token.is_cancelled:
-            reason = getattr(ctx.cancel_token, "_reason", None) or "Cancelled"
+            reason = getattr(ctx.cancel_token, "reason", None) or getattr(
+                ctx.cancel_token, "_reason", None
+            ) or "Cancelled"
             decision = EvalDecision(
                 done=True,
                 error=CancelledError(message=reason),
@@ -1280,8 +1284,8 @@ class LifecycleEngine:
         agent_id: str,
         budget: Budget,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
-        cancel_token: Any | None = None,
+        attachments: list[AttachmentLike] | None = None,
+        cancel_token: CancelToken | None = None,
         config: Any | None = None,
         token_callback: Any | None = None,
     ) -> dict[str, Any]:
@@ -1333,7 +1337,9 @@ class LifecycleEngine:
 
                     # Check cancellation at cycle start (AD-028)
                     if ctx.cancel_token and ctx.cancel_token.is_cancelled:
-                        reason = getattr(ctx.cancel_token, "_reason", None) or "Cancelled"
+                        reason = getattr(ctx.cancel_token, "reason", None) or getattr(
+                            ctx.cancel_token, "_reason", None
+                        ) or "Cancelled"
                         termination_error = CancelledError(message=reason)
                         break
 

@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from axis_core.budget import Budget
+from axis_core.cancel import CancelToken
 from axis_core.context import (
     CycleState,
     EvalDecision,
@@ -1097,6 +1098,29 @@ class TestExecutionLoop:
 
         assert result["success"] is True
         assert result["cycles_completed"] == 2
+
+    @pytest.mark.asyncio
+    async def test_execute_respects_cancellation(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+    ) -> None:
+        """Execute should stop and return CancelledError when cancelled."""
+        engine = LifecycleEngine(model=mock_model, planner=mock_planner)
+
+        token = CancelToken()
+        token.cancel("Stop now")
+
+        result = await engine.execute(
+            input_text="Cancel task",
+            agent_id="test-agent",
+            budget=Budget(),
+            cancel_token=token,
+        )
+
+        assert result["success"] is False
+        assert isinstance(result["error"], CancelledError)
+        assert result["error"].message == "Stop now"
 
     @pytest.mark.asyncio
     async def test_execute_respects_max_cycles(

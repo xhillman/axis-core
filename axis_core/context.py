@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from axis_core.protocols.model import ModelResponse, ToolCall
     from axis_core.protocols.planner import Plan
 
+from axis_core.attachments import AttachmentLike, serialize_attachments
 from axis_core.budget import Budget, BudgetState
 from axis_core.errors import AxisError, ErrorClass, ErrorRecord
 
@@ -492,7 +493,7 @@ class RunContext:
         agent_id: Identifier for the agent (read-only)
         input: Normalized user input (read-only)
         context: Mutable context dict for sharing state
-        attachments: List of attachments
+        attachments: List of attachments (metadata-only in serialization)
         config: Resolved configuration
         budget: Budget limits
         state: Mutable run state
@@ -511,7 +512,7 @@ class RunContext:
 
     # Context and attachments
     context: dict[str, Any]
-    attachments: list[Any]
+    attachments: list[AttachmentLike]
 
     # Configuration
     config: Any  # ResolvedConfig
@@ -561,7 +562,7 @@ class RunContext:
             "agent_id": self.agent_id,
             "input": _serialize_normalized_input(self.input),
             "context": self.context,
-            "attachments": [],  # Attachments serialized as metadata only
+            "attachments": serialize_attachments(self.attachments),
             "config": None,  # Config re-resolved on restore
             "budget": _serialize_budget(self.budget),
             "state": self.state.to_dict(),
@@ -586,7 +587,7 @@ class RunContext:
             agent_id=data["agent_id"],
             input=_deserialize_normalized_input(data["input"]),
             context=data.get("context", {}),
-            attachments=data.get("attachments", []),
+            attachments=list(data.get("attachments", [])),
             config=data.get("config"),
             budget=_deserialize_budget(data.get("budget", {})),
             state=RunState.from_dict(data.get("state", {})),

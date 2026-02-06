@@ -10,10 +10,11 @@ A modular, observable AI agent framework for building production-ready agents in
 
 - **Lifecycle-based execution** — Observe → Plan → Act → Evaluate loop with built-in cycle management
 - **Protocol-based adapters** — Pluggable models, memory, planners, and telemetry
-- **Model fallback** — Automatic fallback to secondary models on recoverable errors (rate limits, timeouts)
+- **Model fallback** — Automatic fallback to secondary models on recoverable errors
 - **Tool system** — Simple `@tool` decorator with automatic schema generation
-- **Session support** — Persistent multi-turn conversations with optimistic locking
+- **Session support** — Multi-turn conversations with optimistic locking (persistence via memory adapters)
 - **Budget tracking** — Cost, token, and cycle limits with real-time tracking
+- **Attachments & cancellation** — Image/PDF attachments (10MB limit) and cooperative cancellation
 - **Built-in observability** — Phase-level telemetry and trace collection
 - **Type-safe** — Full type hints with mypy strict mode
 - **Production-ready** — Async-native with comprehensive error handling and recovery
@@ -35,6 +36,9 @@ pip install axis-core[anthropic,openai]
 
 # With Redis memory adapter
 pip install axis-core[redis]
+
+# With SQLite memory adapter
+pip install axis-core[sqlite]
 
 # Full installation (all optional dependencies)
 pip install axis-core[full]
@@ -89,7 +93,9 @@ for event in agent.stream("Solve 42 * 137"):
     if event.is_token:
         print(event.token, end="", flush=True)
     elif event.is_final:
-        print(f"\n\nTotal cost: ${event.data['stats']['cost_usd']:.4f}")
+        stats = event.data.get("stats")
+        if stats:
+            print(f"\n\nTotal cost: ${stats['cost_usd']:.4f}")
 ```
 
 ### Error Handling & Fallback
@@ -225,9 +231,35 @@ agent = Agent(model="claude-sonnet-4-20250514", planner="sequential")
 session = agent.session(id="user-123")
 result = session.run("What's the weather in Tokyo?")
 
-# Resume later (history persists when using a memory adapter)
+# Resume later (history persists via the configured memory adapter)
 session = agent.session(id="user-123")
 result = session.run("What about Osaka?")
+
+# Note: Ephemeral memory persists only in-process. Durable persistence
+# requires a non-ephemeral adapter (e.g., Redis/SQLite) once implemented.
+```
+
+### Attachments & Cancellation
+
+Attachments are loaded eagerly and limited to 10MB each.
+
+```python
+from axis_core import Agent, CancelToken, Image, PDF
+
+agent = Agent(model="claude-sonnet-4-20250514", planner="sequential")
+
+attachments = [
+    Image.from_file("diagram.png"),
+    PDF.from_file("spec.pdf"),
+]
+
+cancel_token = CancelToken()
+
+result = agent.run(
+    "Summarize the PDF and describe the diagram.",
+    attachments=attachments,
+    cancel_token=cancel_token,
+)
 ```
 
 ### Results
@@ -263,7 +295,7 @@ AXIS_MAX_TOOL_CALLS=50
 AXIS_MAX_MODEL_CALLS=20
 
 # Telemetry
-AXIS_TELEMETRY_SINK=console         # console, file, none
+AXIS_TELEMETRY_SINK=console         # console, none (file/callback planned)
 AXIS_TELEMETRY_COMPACT=false        # Compact console output
 AXIS_TELEMETRY_REDACT=true          # Redact sensitive data
 
@@ -291,7 +323,7 @@ agent = Agent(
 
 ## Status
 
-**v0.2.0 (Alpha)** — Production-ready core with essential features:
+**v0.3.0 (Alpha)** — Core features with session support:
 
 ### ✅ Completed
 
@@ -303,6 +335,7 @@ agent = Agent(
 - Budget tracking (cycles, tokens, cost, wall time)
 - Comprehensive error handling and recovery
 - Type-safe with mypy strict mode
+- Session support with optimistic locking (agent.session / session.run)
 
 **Model Adapters:**
 
@@ -315,7 +348,7 @@ agent = Agent(
 
 - `@tool` decorator with automatic JSON schema generation
 - Capability declarations (NETWORK, FILESYSTEM, DESTRUCTIVE, etc.)
-- Rate limiting and timeout support
+- Tool metadata for rate limits/timeouts (runtime enforcement in progress)
 - Tool context with budget access
 
 **Memory & Planning:**
@@ -326,8 +359,7 @@ agent = Agent(
 
 **Observability:**
 
-- Phase-level telemetry with customizable sinks
-- ConsoleSink for development
+- Phase-level telemetry (console sink today)
 - Trace event collection
 - Budget warnings and exceeded events
 
@@ -359,16 +391,16 @@ axis-core is under active development. Here's what's coming:
 
 **Multi-turn Conversations:**
 
-- Session persistence (save/load from file)
+- Durable session persistence beyond ephemeral memory (SQLite/Redis)
+- Session export/import helpers
 
 **Advanced Capabilities:**
 
 - **Structured Output** — Pydantic schema validation with strict mode
-- **Multimodal Input** — Image and PDF attachment support (10MB limit)
-- **Cancellation** — Cooperative cancellation with CancelToken
 - **Hook System** — Before/after hooks for each lifecycle phase
 - **Context Injection** — Pass runtime context to tools
 - **Confirmation Handler** — User approval for destructive operations
+- **Runtime Enforcement** — Timeouts, rate limits, retries, and cache behavior
 
 **Enhanced Telemetry:**
 

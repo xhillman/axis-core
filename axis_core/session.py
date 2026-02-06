@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from axis_core.attachments import AttachmentLike
+from axis_core.cancel import CancelToken
 from axis_core.errors import ConcurrencyError
 
 if TYPE_CHECKING:
@@ -228,10 +230,10 @@ class Session:
         input: str | list[Any],
         *,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
+        attachments: list[AttachmentLike] | None = None,
         output_schema: type | None = None,
         timeout: float | None = None,
-        cancel_token: Any | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> Any:
         """Run the agent within this session asynchronously."""
         if self._agent is None:
@@ -264,10 +266,10 @@ class Session:
         input: str | list[Any],
         *,
         context: dict[str, Any] | None = None,
-        attachments: list[Any] | None = None,
+        attachments: list[AttachmentLike] | None = None,
         output_schema: type | None = None,
         timeout: float | None = None,
-        cancel_token: Any | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> Any:
         """Run the agent within this session synchronously."""
         try:

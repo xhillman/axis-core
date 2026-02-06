@@ -654,6 +654,46 @@ class TestRunContext:
         assert "state" in data
         assert "started_at" in data
 
+    def test_serialize_includes_attachment_metadata(self) -> None:
+        """RunContext serialization should include attachment metadata only."""
+        from axis_core.attachments import Attachment
+        from axis_core.context import NormalizedInput, RunContext, RunState
+
+        input_ = NormalizedInput(text="test", original="test")
+        state = RunState()
+        budget = Budget()
+        attachment = Attachment(
+            data=b"data",
+            mime_type="text/plain",
+            filename="note.txt",
+        )
+
+        ctx = RunContext(
+            run_id="run-123",
+            agent_id="agent-456",
+            input=input_,
+            context={},
+            attachments=[attachment],
+            config=None,
+            budget=budget,
+            state=state,
+            trace=None,
+            started_at=datetime.now(timezone.utc),
+            cycle_count=0,
+            cancel_token=None,
+        )
+
+        data = ctx.serialize()
+
+        assert data["attachments"] == [
+            {
+                "type": "attachment",
+                "mime_type": "text/plain",
+                "filename": "note.txt",
+                "size_bytes": len(b"data"),
+            }
+        ]
+
     def test_deserialize(self) -> None:
         """Test RunContext deserialization."""
         from axis_core.context import RunContext

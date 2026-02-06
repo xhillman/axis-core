@@ -19,7 +19,7 @@ Example:
 
 from typing import Any
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Public API - will be populated as modules are implemented
 __all__ = [
@@ -63,6 +63,10 @@ __all__ = [
     "RunState",
     "Session",
     "Message",
+    "Attachment",
+    "Image",
+    "PDF",
+    "CancelToken",
 ]
 
 
@@ -205,6 +209,22 @@ def __getattr__(name: str) -> Any:
         from axis_core.session import Message
 
         return Message
+    if name == "Attachment":
+        from axis_core.attachments import Attachment
+
+        return Attachment
+    if name == "Image":
+        from axis_core.attachments import Image
+
+        return Image
+    if name == "PDF":
+        from axis_core.attachments import PDF
+
+        return PDF
+    if name == "CancelToken":
+        from axis_core.cancel import CancelToken
+
+        return CancelToken
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
