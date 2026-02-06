@@ -86,10 +86,10 @@ if [ "$TARGET" = "pypi" ]; then
         echo "Cancelled"
         exit 0
     fi
-    uv publish
+    uv publish --token "$UV_PUBLISH_TOKEN"
 else
     echo -e "${GREEN}Publishing to TestPyPI${NC}"
-    uv publish --publish-url https://test.pypi.org/legacy/
+    uv publish --publish-url https://test.pypi.org/legacy/ --token "$UV_PUBLISH_TEST_TOKEN"
 fi
 
 echo ""
