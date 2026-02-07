@@ -77,6 +77,20 @@ Tests must exercise behavior through **public API or documented extension points
 - Environment variables are documented in `.env.example`; never commit secrets.
 - Keep `requirements.lock` current to support supply-chain security checks.
 
+## CHANGELOG & Versioning Policy
+
+Every user-facing change should be reflected in `CHANGELOG.md` in the same PR.
+
+### Version Bump Rules
+
+- **Minor bump (`0.x.0` / `x.Y.0`)**: New public capabilities, new adapters/integrations, new public API surface, or behavior changes users must learn.
+- **Patch bump (`0.0.x` / `x.y.Z`)**: Backward-compatible bug fixes, security hardening, performance improvements, and documentation clarifications without public API expansion.
+
+### Changelog Entry Expectations
+
+- Add an entry for: new features, bug fixes, security fixes, deprecations, and behavior changes.
+- No entry required for: internal refactors/tests/chore work with no user-visible impact.
+
 ## Architecture Overview
 
 - The runtime follows a three-layer design: Agent API, Lifecycle Engine, and pluggable Adapters.

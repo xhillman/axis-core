@@ -86,6 +86,20 @@ pip install pip-audit
 pip-audit -r requirements.lock
 ```
 
+## CHANGELOG & Versioning Policy
+
+Every user-facing change should be reflected in `CHANGELOG.md` in the same PR.
+
+### Version Bump Rules
+
+- **Minor bump (`0.x.0` / `x.Y.0`)**: New public capabilities, new adapters/integrations, new public API surface, or behavior changes users must learn.
+- **Patch bump (`0.0.x` / `x.y.Z`)**: Backward-compatible bug fixes, security hardening, performance improvements, and documentation clarifications without public API expansion.
+
+### Changelog Entry Expectations
+
+- Add an entry for: new features, bug fixes, security fixes, deprecations, and behavior changes.
+- No entry required for: internal refactors/tests/chore work with no user-visible impact.
+
 ## Architecture
 
 **Three-layer design:**

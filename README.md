@@ -389,78 +389,46 @@ See [Roadmap](#roadmap) below for upcoming features.
 
 ## Roadmap
 
-axis-core is under active development. Here's what's coming:
+axis-core is under active development. This roadmap separates committed work from exploratory ideas.
 
-### Phase 3: Production Features (Q1 2026)
+### Planned (Committed)
 
-**Advanced Capabilities:**
+These are scoped targets tied to the current task list and near-term releases.
 
-- **Structured Output** — Pydantic schema validation with strict mode
-- **Hook System** — Before/after hooks for each lifecycle phase
-- **Context Injection** — Pass runtime context to tools
+**Execution & Safety:**
+
 - **Confirmation Handler** — User approval for destructive operations (AD-002)
 - **Runtime Enforcement** — Timeouts, rate limits, retries, and cache behavior
 - **Checkpoint/Resume** — Persist and resume agent runs at phase boundaries (AD-005)
 
-**Enhanced Memory:**
-
-- Semantic search capabilities (vector-based)
-- Memory adapter URL resolution (`sqlite:///path/to/db`, `redis://host:port`)
-- Session export/import helpers
-- Planner fallback (automatic degradation to SequentialPlanner on planning failure)
-- Plan confidence scoring
-
-**Enhanced Telemetry:**
+**Telemetry & Memory:**
 
 - **FileSink** — JSONL trace logs for production monitoring
 - **CallbackSink** — Custom telemetry handlers
-- Batched and phase-based buffering modes
+- Semantic search capabilities (vector-based)
+- Memory adapter URL resolution (`sqlite:///path/to/db`, `redis://host:port`)
 
-### Phase 4: Ecosystem & Integrations (Q2–Q3 2026)
+**Platform & API:**
 
-**Additional Model Providers:**
+- OpenAI Responses API routing support
+- `research_agent()`, `support_agent()`, and `code_agent()` loadouts
+- Planner fallback and plan confidence scoring
 
-- **OllamaModel** — Local model support (Llama, Mistral, etc.)
-- **OpenRouter** — Access to 100+ models via one API
-- **Google Gemini** — Gemini Pro and Ultra support
-- Model-specific optimizations (parallel tool calls, caching)
+### Exploring (Not Committed)
 
-**Pre-built Loadouts:**
+These are directional ideas. They are not scheduled and may change or be dropped.
 
-- `research_agent()` — Citation-focused research with ReAct planning
-- `support_agent()` — Customer support with empathetic responses
-- `code_agent()` — Coding assistant with test-first approach
-- Custom loadout templates
+**Potential Integrations:**
 
-**Developer Experience:**
+- Additional model providers beyond current built-ins (for example: OpenRouter, Gemini)
+- Deeper model-specific optimizations (parallel tool calls, cache tuning)
+- Framework integrations (LangChain, FastAPI, Gradio/Streamlit, Jupyter)
 
-- `axis_core.testing` — MockModel, MockMemory, assertion helpers
-- Debug mode with verbose state dumps
-- Interactive REPL for agent development
-- VS Code extension for agent debugging
+**Potential Product Surface:**
 
-### Long-term Vision
-
-**Enterprise Features:**
-
-- Distributed execution with task queues
-- A/B testing framework for prompts and planners
-- Cost optimization engine
-- Audit logging and compliance tools
-
-**Framework Integrations:**
-
-- LangChain compatibility layer
-- FastAPI integration for agent-as-API
-- Gradio/Streamlit UI components
-- Jupyter notebook support with rich display
-
-**Advanced AI:**
-
-- Multi-agent orchestration
-- Agent-to-agent communication
-- Hierarchical task decomposition
-- Learning from user feedback
+- Extended developer tooling (`axis_core.testing`, REPL/debug UX, editor integrations)
+- Enterprise capabilities (distributed execution, A/B testing, compliance)
+- Advanced multi-agent capabilities
 
 ---
 
