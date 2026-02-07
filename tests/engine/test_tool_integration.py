@@ -272,7 +272,7 @@ class TestToolIntegration:
 
     @pytest.mark.asyncio
     async def test_tool_manifest_with_multiple_params(self) -> None:
-        """Verify manifests preserve multiple parameter info correctly."""
+        """Verify manifests preserve multiple parameter info during model call."""
         from axis_core.tool import ToolManifest
 
         @tool
@@ -289,11 +289,20 @@ class TestToolIntegration:
             tools={"search": search},
         )
 
-        # Get manifests
-        manifests = engine._get_tool_manifests()
+        # Exercise through phase methods to verify model receives correct manifests
+        ctx = await engine._initialize(
+            input_text="search test",
+            agent_id="test",
+            budget=Budget(),
+        )
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
 
-        assert len(manifests) == 1
-        manifest = manifests[0]
+        assert model.call_count == 1
+        assert model.last_tools is not None
+        assert len(model.last_tools) == 1
+        manifest = model.last_tools[0]
         assert isinstance(manifest, ToolManifest)
         assert manifest.name == "search"
         assert "query" in manifest.input_schema["required"]
@@ -331,7 +340,7 @@ class TestToolIntegration:
 
     @pytest.mark.asyncio
     async def test_tool_manifest_missing_handled_gracefully(self) -> None:
-        """Verify tools without manifests are skipped with warning."""
+        """Tools without @tool decorator should be skipped gracefully during model call."""
 
         # Regular function without @tool decorator
         def bad_tool(x: int) -> int:
@@ -346,6 +355,16 @@ class TestToolIntegration:
             tools={"bad_tool": bad_tool},  # Missing _axis_manifest
         )
 
-        # Should not raise, just skip the tool
-        manifests = engine._get_tool_manifests()
-        assert len(manifests) == 0
+        # Exercise through phase methods — model should receive no tools
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test",
+            budget=Budget(),
+        )
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
+
+        assert model.call_count == 1
+        # bad_tool should have been skipped, so model sees no tools
+        assert model.last_tools is None

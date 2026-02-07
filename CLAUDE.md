@@ -113,6 +113,24 @@ Built-in adapters are automatically registered via a lazy factory pattern:
 - Pattern: `test_*.py` files with `Test*` classes
 - All imports from tests use absolute imports: `from axis_core.* import ...`
 
+### Public-Contract Testing Policy
+
+Tests must exercise behavior through **public API or documented extension points**, not private/internal methods. This prevents test brittleness when implementation details change.
+
+**Allowed test surfaces:**
+
+- `Agent.run()`, `run_async()`, `stream()`, `stream_async()` — agent-level public API
+- `LifecycleEngine.execute()` — engine-level public API
+- Lifecycle phase methods (`_initialize`, `_observe`, `_plan`, `_act`, `_evaluate`, `_finalize`) — documented architectural extension points
+- Adapter protocol methods (`complete`, `stream`, `store`, `retrieve`, `plan`) — protocol contracts
+- `resolve_adapter()` and registry APIs — public adapter resolution
+
+**Do not test directly:**
+
+- Internal helpers like `_try_models_with_fallback`, `_execute_model_step`, `_get_tool_manifests`, `_identify_exhausted_resource`
+- Agent internals like `_build_engine`
+- Any method prefixed with `_` that is not a lifecycle phase method
+
 ## Code Style
 
 - Python 3.10+

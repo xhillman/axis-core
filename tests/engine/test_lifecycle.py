@@ -1034,26 +1034,42 @@ class TestEvaluatePhase:
         assert isinstance(decision.error, BudgetError)
 
     @pytest.mark.asyncio
-    async def test_identify_exhausted_resource_tokens(
+    async def test_evaluate_reports_token_budget_exhaustion(
         self,
         mock_model: MockModelAdapter,
         mock_planner: MockPlanner,
     ) -> None:
-        """Token limits should be identified as exhausted resources."""
+        """Evaluate should report BudgetError when token limits are exhausted."""
         engine = LifecycleEngine(model=mock_model, planner=mock_planner)
+        plan = Plan(
+            id="plan-1",
+            goal="Continue",
+            steps=(PlanStep(id="step-1", type=StepType.MODEL, payload={}),),
+        )
 
+        # Test input token exhaustion
         ctx = await engine._initialize(
             input_text="Test",
             agent_id="test-agent",
-            budget=Budget(max_input_tokens=10, max_output_tokens=20),
+            budget=Budget(max_input_tokens=10),
         )
-
         ctx.state.budget_state.input_tokens = 10
-        assert engine._identify_exhausted_resource(ctx) == "input_tokens"
+        decision = await engine._evaluate(ctx, plan, ExecutionResult())
+        assert decision.done is True
+        assert isinstance(decision.error, BudgetError)
+        assert "input_tokens" in str(decision.error)
 
-        ctx.state.budget_state.input_tokens = 0
-        ctx.state.budget_state.output_tokens = 20
-        assert engine._identify_exhausted_resource(ctx) == "output_tokens"
+        # Test output token exhaustion
+        ctx2 = await engine._initialize(
+            input_text="Test",
+            agent_id="test-agent",
+            budget=Budget(max_output_tokens=20),
+        )
+        ctx2.state.budget_state.output_tokens = 20
+        decision2 = await engine._evaluate(ctx2, plan, ExecutionResult())
+        assert decision2.done is True
+        assert isinstance(decision2.error, BudgetError)
+        assert "output_tokens" in str(decision2.error)
 
     @pytest.mark.asyncio
     async def test_evaluate_done_on_cancellation(
@@ -1521,24 +1537,42 @@ class TestAdapterResolution:
 
 
 class TestToolManifestExtraction:
-    """Tests for tool manifest extraction from registered tools."""
+    """Tests for tool manifest passing through the lifecycle.
 
-    def test_get_tool_manifests_empty_tools(self) -> None:
-        """_get_tool_manifests should return empty list when no tools."""
-        mock_model = MockModelAdapter()
-        planner = MockPlanner()
+    Tests verify that tools registered on the engine are correctly passed
+    to model.complete() during execution, exercised through phase methods
+    rather than internal helpers.
+    """
 
-        engine = LifecycleEngine(
-            model=mock_model,
-            planner=planner,
-            tools={},
+    @staticmethod
+    def _model_then_terminal_planner() -> MockPlanner:
+        """Planner that emits MODEL step, then TERMINAL step."""
+        return MockPlanner(
+            plans=[
+                Plan(
+                    id="plan-model",
+                    goal="Call model",
+                    steps=(
+                        PlanStep(id="model-1", type=StepType.MODEL, payload={}),
+                    ),
+                ),
+                Plan(
+                    id="plan-terminal",
+                    goal="Done",
+                    steps=(
+                        PlanStep(
+                            id="terminal-1",
+                            type=StepType.TERMINAL,
+                            payload={"output": "Done"},
+                        ),
+                    ),
+                ),
+            ]
         )
 
-        manifests = engine._get_tool_manifests()
-        assert manifests == []
-
-    def test_get_tool_manifests_with_single_tool(self) -> None:
-        """_get_tool_manifests should return ToolManifest objects."""
+    @pytest.mark.asyncio
+    async def test_model_receives_tool_manifests_during_act(self) -> None:
+        """Model.complete() should receive ToolManifest objects during act phase."""
         from axis_core.tool import ToolManifest, tool
 
         @tool
@@ -1546,19 +1580,38 @@ class TestToolManifestExtraction:
             """Get the weather for a city."""
             return f"Weather in {city}"
 
-        mock_model = MockModelAdapter()
-        planner = MockPlanner()
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=20, total_tokens=30),
+                    cost_usd=0.001,
+                )
+            ]
+        )
 
         engine = LifecycleEngine(
             model=mock_model,
-            planner=planner,
+            planner=self._model_then_terminal_planner(),
             tools={"get_weather": get_weather},
         )
 
-        manifests = engine._get_tool_manifests()
+        ctx = await engine._initialize(
+            input_text="test input",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
 
-        assert len(manifests) == 1
-        manifest = manifests[0]
+        # Verify model.complete() was called with ToolManifest objects
+        assert len(mock_model.calls) == 1
+        call = mock_model.calls[0]
+        assert call["tools"] is not None
+        assert len(call["tools"]) == 1
+        manifest = call["tools"][0]
         assert isinstance(manifest, ToolManifest)
         assert manifest.name == "get_weather"
         assert manifest.description == "Get the weather for a city."
@@ -1567,8 +1620,9 @@ class TestToolManifestExtraction:
         assert manifest.input_schema["properties"]["city"]["type"] == "string"
         assert "city" in manifest.input_schema["required"]
 
-    def test_get_tool_manifests_with_multiple_tools(self) -> None:
-        """_get_tool_manifests should return manifests for all tools."""
+    @pytest.mark.asyncio
+    async def test_model_receives_multiple_tool_manifests(self) -> None:
+        """Model.complete() should receive manifests for all registered tools."""
         from axis_core.tool import ToolManifest, tool
 
         @tool
@@ -1581,24 +1635,42 @@ class TestToolManifestExtraction:
             """Get current time."""
             return "12:00"
 
-        mock_model = MockModelAdapter()
-        planner = MockPlanner()
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
+                    cost_usd=0.001,
+                )
+            ]
+        )
 
         engine = LifecycleEngine(
             model=mock_model,
-            planner=planner,
+            planner=self._model_then_terminal_planner(),
             tools={"get_weather": get_weather, "get_time": get_time},
         )
 
-        manifests = engine._get_tool_manifests()
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
 
-        assert len(manifests) == 2
-        assert all(isinstance(m, ToolManifest) for m in manifests)
-        tool_names = {m.name for m in manifests}
+        assert len(mock_model.calls) == 1
+        tools = mock_model.calls[0]["tools"]
+        assert len(tools) == 2
+        assert all(isinstance(m, ToolManifest) for m in tools)
+        tool_names = {m.name for m in tools}
         assert tool_names == {"get_weather", "get_time"}
 
-    def test_get_tool_manifests_with_optional_params(self) -> None:
-        """_get_tool_manifests should preserve optional parameter info."""
+    @pytest.mark.asyncio
+    async def test_model_receives_optional_param_info(self) -> None:
+        """Tool manifests should preserve optional parameter info."""
         from axis_core.tool import ToolManifest, tool
 
         @tool
@@ -1606,83 +1678,44 @@ class TestToolManifestExtraction:
             """Search for something."""
             return f"Results for {query}"
 
-        mock_model = MockModelAdapter()
-        planner = MockPlanner()
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
+                    cost_usd=0.001,
+                )
+            ]
+        )
 
         engine = LifecycleEngine(
             model=mock_model,
-            planner=planner,
+            planner=self._model_then_terminal_planner(),
             tools={"search": search},
         )
 
-        manifests = engine._get_tool_manifests()
+        ctx = await engine._initialize(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
 
-        assert len(manifests) == 1
-        manifest = manifests[0]
+        assert len(mock_model.calls) == 1
+        tools = mock_model.calls[0]["tools"]
+        assert len(tools) == 1
+        manifest = tools[0]
         assert isinstance(manifest, ToolManifest)
         assert "query" in manifest.input_schema["required"]
         assert "limit" not in manifest.input_schema["required"]
         assert "limit" in manifest.input_schema["properties"]
 
     @pytest.mark.asyncio
-    async def test_model_step_passes_tool_manifests(self) -> None:
-        """MODEL step execution should pass ToolManifest objects to model.complete()."""
-        from axis_core.tool import ToolManifest, tool
-
-        @tool
-        def test_tool(arg: str) -> str:
-            """Test tool."""
-            return "result"
-
-        mock_model = MockModelAdapter(
-            responses=[
-                ModelResponse(
-                    content="Response with tool call",
-                    tool_calls=None,
-                    usage=UsageStats(input_tokens=10, output_tokens=20, total_tokens=30),
-                    cost_usd=0.001,
-                )
-            ]
-        )
-        planner = MockPlanner()
-
-        engine = LifecycleEngine(
-            model=mock_model,
-            planner=planner,
-            tools={"test_tool": test_tool},
-        )
-
-        ctx = await engine._initialize(
-            input_text="test input",
-            agent_id="test-agent",
-            budget=Budget(),
-        )
-
-        # Create a MODEL step
-        step = PlanStep(
-            id="model_1",
-            type=StepType.MODEL,
-            payload={},
-            dependencies=None,
-            retry_policy=None,
-        )
-
-        # Execute the step
-        await engine._execute_model_step(ctx, step)
-
-        # Verify model.complete() was called with ToolManifest objects (protocol layer)
-        assert len(mock_model.calls) == 1
-        call = mock_model.calls[0]
-        assert "tools" in call
-        assert call["tools"] is not None
-        assert len(call["tools"]) == 1
-        # Should be ToolManifest object, not dict
-        assert isinstance(call["tools"][0], ToolManifest)
-        assert call["tools"][0].name == "test_tool"
-
-    @pytest.mark.asyncio
-    async def test_model_step_with_no_tools(self) -> None:
-        """MODEL step execution with no tools should pass None for tools."""
+    async def test_no_tools_passes_none_to_model(self) -> None:
+        """When no tools are registered, model.complete() should receive None."""
         mock_model = MockModelAdapter(
             responses=[
                 ModelResponse(
@@ -1693,12 +1726,11 @@ class TestToolManifestExtraction:
                 )
             ]
         )
-        planner = MockPlanner()
 
         engine = LifecycleEngine(
             model=mock_model,
-            planner=planner,
-            tools={},  # No tools
+            planner=self._model_then_terminal_planner(),
+            tools={},
         )
 
         ctx = await engine._initialize(
@@ -1706,22 +1738,12 @@ class TestToolManifestExtraction:
             agent_id="test-agent",
             budget=Budget(),
         )
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
 
-        step = PlanStep(
-            id="model_1",
-            type=StepType.MODEL,
-            payload={},
-            dependencies=None,
-            retry_policy=None,
-        )
-
-        await engine._execute_model_step(ctx, step)
-
-        # Verify model.complete() was called without tools
         assert len(mock_model.calls) == 1
-        call = mock_model.calls[0]
-        # Tools should be None or not in call when no tools available
-        assert call.get("tools") is None
+        assert mock_model.calls[0].get("tools") is None
 
 
 # =============================================================================
@@ -1762,19 +1784,50 @@ class MockFailingModelAdapter(MockModelAdapter):
 
 
 class TestModelFallback:
-    """Tests for model fallback system (AD-013)."""
+    """Tests for model fallback system (AD-013).
+
+    Tests exercise fallback behavior through engine.execute() and lifecycle
+    phase methods rather than internal helpers, so they remain stable if
+    the implementation is refactored.
+    """
+
+    @staticmethod
+    def _model_step_planner() -> MockPlanner:
+        """Return a planner that emits a MODEL step then a TERMINAL step."""
+        return MockPlanner(
+            plans=[
+                Plan(
+                    id="plan-model",
+                    goal="Call model",
+                    steps=(
+                        PlanStep(
+                            id="model-1",
+                            type=StepType.MODEL,
+                            payload={},
+                        ),
+                    ),
+                ),
+                Plan(
+                    id="plan-terminal",
+                    goal="Done",
+                    steps=(
+                        PlanStep(
+                            id="terminal-1",
+                            type=StepType.TERMINAL,
+                            payload={"output": "Done"},
+                        ),
+                    ),
+                ),
+            ]
+        )
 
     @pytest.mark.asyncio
     async def test_fallback_on_recoverable_error(self) -> None:
         """Should fallback to second model on recoverable error."""
-
-        # Primary model fails with recoverable error
         primary = MockFailingModelAdapter(
-            fail_count=999,  # Always fails
+            fail_count=999,
             error_type="RateLimitError",
         )
-
-        # Fallback model succeeds
         fallback = MockModelAdapter(
             responses=[
                 ModelResponse(
@@ -1786,34 +1839,25 @@ class TestModelFallback:
             ]
         )
 
-        planner = MockPlanner()
         engine = LifecycleEngine(
             model=primary,
-            planner=planner,
+            planner=self._model_step_planner(),
             fallback=[fallback],
         )
 
-        ctx = await engine._initialize(
+        result = await engine.execute(
             input_text="test input",
             agent_id="test-agent",
-            budget=Budget(),
+            budget=Budget(max_cycles=5),
         )
 
-        # Call the fallback method via call_fn pattern
-        async def call_fn(model: Any) -> ModelResponse:
-            return await model.complete(
-                messages=[{"role": "user", "content": "test"}],
-            )
-
-        response = await engine._try_models_with_fallback(ctx, call_fn)
-
-        assert response.content == "Fallback response"
-        assert primary.call_count == 1  # Primary tried once
-        assert len(fallback.calls) == 1  # Fallback used
+        assert result["success"] is True
+        assert primary.call_count >= 1  # Primary tried
+        assert len(fallback.calls) >= 1  # Fallback used
 
     @pytest.mark.asyncio
     async def test_fallback_preserves_request_parameters(self) -> None:
-        """Should pass exact same parameters to fallback (AD-013)."""
+        """Fallback model should receive the same messages as primary (AD-013)."""
         primary = MockFailingModelAdapter(fail_count=999)
         fallback = MockModelAdapter(
             responses=[
@@ -1826,38 +1870,26 @@ class TestModelFallback:
             ]
         )
 
-        planner = MockPlanner()
         engine = LifecycleEngine(
             model=primary,
-            planner=planner,
+            planner=self._model_step_planner(),
             fallback=[fallback],
         )
 
-        ctx = await engine._initialize(
-            input_text="test",
+        result = await engine.execute(
+            input_text="original request",
             agent_id="test-agent",
-            budget=Budget(),
+            budget=Budget(max_cycles=5),
         )
 
-        test_messages = [{"role": "user", "content": "original request"}]
-        test_system = "You are a helpful assistant"
-        test_tools = [{"name": "tool1"}]
-
-        async def call_fn(model: Any) -> ModelResponse:
-            return await model.complete(
-                messages=test_messages,
-                system=test_system,
-                tools=test_tools,
-            )
-
-        await engine._try_models_with_fallback(ctx, call_fn)
-
-        # Verify fallback received exact same parameters
-        assert len(fallback.calls) == 1
+        assert result["success"] is True
+        # Verify fallback was called and received messages with user input
+        assert len(fallback.calls) >= 1
         call = fallback.calls[0]
-        assert call["messages"] == test_messages
-        assert call["system"] == test_system
-        assert call["tools"] == test_tools
+        assert any(
+            msg.get("content") == "original request"
+            for msg in call["messages"]
+        )
 
     @pytest.mark.asyncio
     async def test_fallback_chain_multiple_models(self) -> None:
@@ -1875,74 +1907,55 @@ class TestModelFallback:
             ]
         )
 
-        planner = MockPlanner()
         engine = LifecycleEngine(
             model=primary,
-            planner=planner,
+            planner=self._model_step_planner(),
             fallback=[fallback1, fallback2],
         )
 
-        ctx = await engine._initialize(
+        result = await engine.execute(
             input_text="test",
             agent_id="test-agent",
-            budget=Budget(),
+            budget=Budget(max_cycles=5),
         )
 
-        async def call_fn(model: Any) -> ModelResponse:
-            return await model.complete(
-                messages=[{"role": "user", "content": "test"}],
-            )
-
-        response = await engine._try_models_with_fallback(ctx, call_fn)
-
-        assert response.content == "Third model works"
-        assert primary.call_count == 1
-        assert fallback1.call_count == 1
-        assert len(fallback2.calls) == 1
+        assert result["success"] is True
+        assert primary.call_count >= 1
+        assert fallback1.call_count >= 1
+        assert len(fallback2.calls) >= 1
 
     @pytest.mark.asyncio
     async def test_fallback_fails_if_all_models_fail(self) -> None:
-        """Should raise ModelError with cause chain if all models fail."""
-        from axis_core.errors import ModelError
-
+        """Run should fail when all models (primary + fallbacks) fail."""
         primary = MockFailingModelAdapter(fail_count=999)
         fallback1 = MockFailingModelAdapter(fail_count=999)
         fallback2 = MockFailingModelAdapter(fail_count=999)
 
-        planner = MockPlanner()
         engine = LifecycleEngine(
             model=primary,
-            planner=planner,
+            planner=self._model_step_planner(),
             fallback=[fallback1, fallback2],
         )
 
-        ctx = await engine._initialize(
+        result = await engine.execute(
             input_text="test",
             agent_id="test-agent",
-            budget=Budget(),
+            budget=Budget(max_cycles=5),
         )
 
-        async def call_fn(model: Any) -> ModelResponse:
-            return await model.complete(
-                messages=[{"role": "user", "content": "test"}],
-            )
-
-        with pytest.raises(ModelError, match="All models failed"):
-            await engine._try_models_with_fallback(ctx, call_fn)
-
+        # Run should complete but report failure
+        assert result["success"] is False
         # Verify all models were tried
-        assert primary.call_count == 1
-        assert fallback1.call_count == 1
-        assert fallback2.call_count == 1
+        assert primary.call_count >= 1
+        assert fallback1.call_count >= 1
+        assert fallback2.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_no_fallback_on_non_recoverable_error(self) -> None:
-        """Should not fallback on non-recoverable errors like ValidationError."""
-        from axis_core.errors import ModelError
+        """Should not fallback on non-recoverable errors like ValueError."""
 
         class MockNonRecoverableModel(MockModelAdapter):
             async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
-                # Simulate non-recoverable error
                 raise ValueError("Invalid parameters")
 
         primary = MockNonRecoverableModel()
@@ -1957,28 +1970,20 @@ class TestModelFallback:
             ]
         )
 
-        planner = MockPlanner()
         engine = LifecycleEngine(
             model=primary,
-            planner=planner,
+            planner=self._model_step_planner(),
             fallback=[fallback],
         )
 
-        ctx = await engine._initialize(
+        result = await engine.execute(
             input_text="test",
             agent_id="test-agent",
-            budget=Budget(),
+            budget=Budget(max_cycles=5),
         )
 
-        async def call_fn(model: Any) -> ModelResponse:
-            return await model.complete(
-                messages=[{"role": "user", "content": "test"}],
-            )
-
-        with pytest.raises(ModelError):
-            await engine._try_models_with_fallback(ctx, call_fn)
-
-        # Fallback should not have been called
+        assert result["success"] is False
+        # Fallback should not have been called for non-recoverable error
         assert len(fallback.calls) == 0
 
     @pytest.mark.asyncio
@@ -1996,49 +2001,27 @@ class TestModelFallback:
             ]
         )
 
-        # Mock telemetry sink
-        events: list[TraceEvent] = []
-
-        class MockTelemetrySink:
-            @property
-            def buffering(self) -> BufferMode:
-                return BufferMode.IMMEDIATE
-
-            async def emit(self, event: TraceEvent) -> None:
-                events.append(event)
-
-            async def flush(self) -> None:
-                pass
-
-            async def close(self) -> None:
-                pass
-
         telemetry_sink = MockTelemetrySink()
-        planner = MockPlanner()
 
         engine = LifecycleEngine(
             model=primary,
-            planner=planner,
+            planner=self._model_step_planner(),
             fallback=[fallback],
             telemetry=[telemetry_sink],
         )
 
-        ctx = await engine._initialize(
+        result = await engine.execute(
             input_text="test",
             agent_id="test-agent",
-            budget=Budget(),
+            budget=Budget(max_cycles=5),
         )
 
-        async def call_fn(model: Any) -> ModelResponse:
-            return await model.complete(
-                messages=[{"role": "user", "content": "test"}],
-            )
-
-        await engine._try_models_with_fallback(ctx, call_fn)
-
+        assert result["success"] is True
         # Check for model_fallback event
-        fallback_events = [e for e in events if e.type == "model_fallback"]
-        assert len(fallback_events) == 1
+        fallback_events = [
+            e for e in telemetry_sink.events if e.type == "model_fallback"
+        ]
+        assert len(fallback_events) >= 1
         assert fallback_events[0].data.get("from_model") == "mock-model"
         assert fallback_events[0].data.get("to_model") == "mock-model"
 

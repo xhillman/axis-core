@@ -587,59 +587,49 @@ class TestSingleExecution:
 class TestStringAdapterResolution:
     """Tests for string-based adapter construction through Agent."""
 
-    def test_agent_with_model_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Agent should accept model string and resolve to instance."""
+    def test_model_string_resolves_via_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Model string identifiers should resolve to correct adapter instances."""
         try:
-            # Trigger registration by importing adapters
-            import axis_core.adapters.planners  # noqa: F401
             from axis_core.adapters.models import AnthropicModel
+            from axis_core.engine.registry import model_registry
+            from axis_core.engine.resolver import resolve_adapter
         except ImportError:
             pytest.skip("Anthropic package not installed")
 
-        # Set dummy API key
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-        # Create agent with string model identifier
-        agent = Agent(
-            model="claude-haiku",
-            planner="sequential",
-            memory=None,
-        )
+        model = resolve_adapter("claude-haiku", model_registry)
+        assert isinstance(model, AnthropicModel)
+        assert model.model_id == "claude-haiku-4-5-20251001"
 
-        # Should have resolved to AnthropicModel instance
-        # (Check via private _model since we'd need to access engine otherwise)
-        assert agent._model == "claude-haiku"  # Agent stores string
-
-        # Verify resolution happens in engine by building one
-        engine = agent._build_engine()
-        assert isinstance(engine.model, AnthropicModel)
-        assert engine.model.model_id == "claude-haiku-4-5-20251001"
-
-    def test_agent_with_all_string_adapters(
+    def test_all_string_adapters_resolve_via_registry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Agent should resolve all adapters from strings."""
+        """All adapter strings should resolve to correct instances via registry."""
         try:
-            # Trigger registration by importing adapters
             from axis_core.adapters.memory import EphemeralMemory
             from axis_core.adapters.models import AnthropicModel
             from axis_core.adapters.planners import SequentialPlanner
+            from axis_core.engine.registry import (
+                memory_registry,
+                model_registry,
+                planner_registry,
+            )
+            from axis_core.engine.resolver import resolve_adapter
         except ImportError:
             pytest.skip("Required packages not installed")
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-        agent = Agent(
-            model="claude-sonnet",
-            planner="sequential",
-            memory="ephemeral",
-        )
+        model = resolve_adapter("claude-sonnet", model_registry)
+        planner = resolve_adapter("sequential", planner_registry)
+        memory = resolve_adapter("ephemeral", memory_registry)
 
-        engine = agent._build_engine()
-
-        assert isinstance(engine.model, AnthropicModel)
-        assert isinstance(engine.planner, SequentialPlanner)
-        assert isinstance(engine.memory, EphemeralMemory)
+        assert isinstance(model, AnthropicModel)
+        assert isinstance(planner, SequentialPlanner)
+        assert isinstance(memory, EphemeralMemory)
 
 
 class TestConfigDefaults:

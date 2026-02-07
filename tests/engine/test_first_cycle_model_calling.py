@@ -94,14 +94,17 @@ class MockPlanner:
 
 
 class TestModelResponseStorage:
-    """Test that _execute_model_step stores last_model_response."""
+    """Test that model responses are stored in context during execution.
+
+    Tests exercise behavior through lifecycle phase methods rather than
+    internal helpers like _execute_model_step.
+    """
 
     @pytest.mark.asyncio
-    async def test_execute_model_step_stores_response(self) -> None:
-        """_execute_model_step should store full response in context."""
+    async def test_act_phase_stores_model_response(self) -> None:
+        """Act phase with MODEL step should store full response in context."""
         from axis_core.engine.lifecycle import LifecycleEngine
 
-        # Create model with specific response
         model_response = ModelResponse(
             content="test response",
             tool_calls=(
@@ -112,25 +115,29 @@ class TestModelResponseStorage:
         )
         mock_model = MockModel(responses=[model_response])
 
-        engine = LifecycleEngine(
-            model=mock_model,
-            planner=MockPlanner(),
+        # Planner that emits a MODEL step
+        planner = MockPlanner(
+            plans=[
+                Plan(
+                    id="plan-model",
+                    goal="Call model",
+                    steps=(
+                        PlanStep(id="model-1", type=StepType.MODEL, payload={}),
+                    ),
+                ),
+            ]
         )
+
+        engine = LifecycleEngine(model=mock_model, planner=planner)
 
         ctx = await engine._initialize(
             input_text="test input",
             agent_id="test-agent",
             budget=Budget(),
         )
-
-        # Execute a MODEL step
-        step = PlanStep(
-            id="model-step",
-            type=StepType.MODEL,
-            payload={},
-        )
-
-        _ = await engine._execute_model_step(ctx, step)
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
 
         # Check that response was stored
         assert ctx.state.last_model_response is not None
@@ -140,21 +147,32 @@ class TestModelResponseStorage:
         assert ctx.state.last_model_response.tool_calls[0].id == "call_1"
 
     @pytest.mark.asyncio
-    async def test_execute_model_step_builds_messages_from_context(self) -> None:
-        """_execute_model_step should build messages if not provided."""
+    async def test_act_phase_builds_messages_from_context(self) -> None:
+        """Act phase should build messages from context for model calls."""
         mock_model = MockModel()
-        engine = LifecycleEngine(model=mock_model, planner=MockPlanner())
+
+        planner = MockPlanner(
+            plans=[
+                Plan(
+                    id="plan-model",
+                    goal="Call model",
+                    steps=(
+                        PlanStep(id="model-1", type=StepType.MODEL, payload={}),
+                    ),
+                ),
+            ]
+        )
+
+        engine = LifecycleEngine(model=mock_model, planner=planner)
 
         ctx = await engine._initialize(
             input_text="Hello",
             agent_id="test-agent",
             budget=Budget(),
         )
-
-        # Execute MODEL step without explicit messages
-        step = PlanStep(id="model-step", type=StepType.MODEL, payload={})
-
-        await engine._execute_model_step(ctx, step)
+        observation = await engine._observe(ctx)
+        plan = await engine._plan(ctx, observation)
+        await engine._act(ctx, plan)
 
         # Check that model was called with built messages
         assert len(mock_model.calls) == 1
