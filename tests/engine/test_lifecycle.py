@@ -810,6 +810,159 @@ class TestActPhase:
 
 
 # =============================================================================
+# Call record tracking tests
+# =============================================================================
+
+
+class TestCallRecordTracking:
+    """Tests for model_call and tool_call record tracking in RunState."""
+
+    @pytest.mark.asyncio
+    async def test_act_model_step_appends_model_call_record(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+    ) -> None:
+        """Model step in Act should append a ModelCallRecord to RunState."""
+        plan = Plan(
+            id="plan-1",
+            goal="Answer",
+            steps=(
+                PlanStep(
+                    id="model-step",
+                    type=StepType.MODEL,
+                    payload={"prompt": "Hello"},
+                ),
+                PlanStep(
+                    id="terminal",
+                    type=StepType.TERMINAL,
+                    payload={},
+                    dependencies=("model-step",),
+                ),
+            ),
+        )
+
+        engine = LifecycleEngine(model=mock_model, planner=mock_planner)
+
+        ctx = await engine._initialize(
+            input_text="Hello",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+        await engine._observe(ctx)
+
+        assert len(ctx.state.model_calls) == 0
+
+        await engine._act(ctx, plan)
+
+        assert len(ctx.state.model_calls) == 1
+        record = ctx.state.model_calls[0]
+        assert record.model_id == "mock-model"
+        assert record.input_tokens > 0
+        assert record.duration_ms > 0
+
+    @pytest.mark.asyncio
+    async def test_act_tool_step_appends_tool_call_record(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+        tools: dict[str, Any],
+    ) -> None:
+        """Tool step in Act should append a ToolCallRecord to RunState."""
+        plan = Plan(
+            id="plan-1",
+            goal="Search",
+            steps=(
+                PlanStep(
+                    id="tool-step",
+                    type=StepType.TOOL,
+                    payload={"tool": "search", "args": {"query": "weather"}},
+                ),
+                PlanStep(
+                    id="terminal",
+                    type=StepType.TERMINAL,
+                    payload={},
+                    dependencies=("tool-step",),
+                ),
+            ),
+        )
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=mock_planner,
+            tools=tools,
+        )
+
+        ctx = await engine._initialize(
+            input_text="Search for weather",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+        await engine._observe(ctx)
+
+        assert len(ctx.state.tool_calls) == 0
+
+        await engine._act(ctx, plan)
+
+        assert len(ctx.state.tool_calls) == 1
+        record = ctx.state.tool_calls[0]
+        assert record.tool_name == "search"
+        assert record.error is None
+        assert record.duration_ms > 0
+        assert "weather" in record.result
+
+    @pytest.mark.asyncio
+    async def test_act_failed_tool_step_records_error(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+    ) -> None:
+        """Failed tool step should still append a ToolCallRecord with error."""
+
+        async def failing_tool(x: int) -> int:
+            raise ValueError("broken")
+
+        tools = {"failing": failing_tool}
+
+        plan = Plan(
+            id="plan-1",
+            goal="Test",
+            steps=(
+                PlanStep(
+                    id="fail-step",
+                    type=StepType.TOOL,
+                    payload={"tool": "failing", "args": {"x": 1}},
+                ),
+                PlanStep(
+                    id="terminal",
+                    type=StepType.TERMINAL,
+                    payload={},
+                ),
+            ),
+        )
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=mock_planner,
+            tools=tools,
+        )
+
+        ctx = await engine._initialize(
+            input_text="Test",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        await engine._act(ctx, plan)
+
+        assert len(ctx.state.tool_calls) == 1
+        record = ctx.state.tool_calls[0]
+        assert record.tool_name == "failing"
+        assert record.error is not None
+        assert "broken" in record.error
+
+
+# =============================================================================
 # Evaluate phase tests
 # =============================================================================
 

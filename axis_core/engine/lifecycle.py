@@ -31,6 +31,7 @@ from axis_core.context import (
     CycleState,
     EvalDecision,
     ExecutionResult,
+    ModelCallRecord,
     NormalizedInput,
     Observation,
     RunContext,
@@ -52,7 +53,7 @@ from axis_core.errors import (
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.protocols.telemetry import TraceEvent
-from axis_core.tool import ToolContext
+from axis_core.tool import ToolCallRecord, ToolContext
 
 logger = logging.getLogger("axis_core.engine")
 
@@ -598,6 +599,8 @@ class LifecycleEngine:
         )
 
         start = time.monotonic()
+        result: Any = None
+        error_msg: str | None = None
         try:
             tool_kwargs = dict(args)
             if "ctx" in tool_kwargs:
@@ -619,8 +622,23 @@ class LifecycleEngine:
             else:
                 result = await tool_fn(**tool_kwargs)
         except Exception as e:
+            error_msg = f"Tool '{tool_name}' failed: {e}"
+            duration_ms = (time.monotonic() - start) * 1000
+
+            # Record failed tool call for observability/checkpointing
+            ctx.state.append_tool_call(ToolCallRecord(
+                tool_name=tool_name,
+                call_id=step.id,
+                args=dict(args),
+                result=None,
+                error=error_msg,
+                cached=False,
+                duration_ms=duration_ms,
+                timestamp=time.time(),
+            ))
+
             raise ToolError(
-                message=f"Tool '{tool_name}' failed: {e}",
+                message=error_msg,
                 tool_name=tool_name,
                 cause=e,
             ) from e
@@ -629,6 +647,18 @@ class LifecycleEngine:
 
         # Track budget
         ctx.state.budget_state.tool_calls += 1
+
+        # Record successful tool call for observability/checkpointing
+        ctx.state.append_tool_call(ToolCallRecord(
+            tool_name=tool_name,
+            call_id=step.id,
+            args=dict(args),
+            result=result,
+            error=None,
+            cached=False,
+            duration_ms=duration_ms,
+            timestamp=time.time(),
+        ))
 
         await self._emit(
             "tool_returned",
@@ -933,6 +963,17 @@ class LifecycleEngine:
         ctx.state.budget_state.input_tokens += response.usage.input_tokens
         ctx.state.budget_state.output_tokens += response.usage.output_tokens
         ctx.state.budget_state.cost_usd += response.cost_usd
+
+        # Record detailed model call for observability/checkpointing
+        ctx.state.append_model_call(ModelCallRecord(
+            model_id=getattr(self.model, "model_id", "unknown"),
+            call_id=step.id,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cost_usd=response.cost_usd,
+            duration_ms=duration_ms,
+            timestamp=time.time(),
+        ))
 
         await self._emit(
             "model_returned",

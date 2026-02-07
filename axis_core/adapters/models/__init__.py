@@ -87,65 +87,33 @@ except ImportError:
 # ===========================================================================
 
 _openai_models = [
-    # GPT-5 series
+    # GPT-5 series (chat completions API)
     "gpt-5.2",
     "gpt-5.1",
     "gpt-5",
     "gpt-5-mini",
     "gpt-5-nano",
-    # GPT-5 chat variants
     "gpt-5.2-chat-latest",
     "gpt-5.1-chat-latest",
     "gpt-5-chat-latest",
-    # GPT-5 codex variants
-    "gpt-5.2-codex",
-    "gpt-5.1-codex-max",
-    "gpt-5.1-codex",
-    "gpt-5-codex",
-    "gpt-5.1-codex-mini",
-    "codex-mini-latest",
-    # GPT-5 pro
     "gpt-5.2-pro",
     "gpt-5-pro",
-    # GPT-4.1 series
+    # GPT-4.1 series (chat completions API)
     "gpt-4.1",
     "gpt-4.1-mini",
     "gpt-4.1-nano",
-    # GPT-4o series
+    # GPT-4o series (chat completions API)
     "gpt-4o",
     "gpt-4o-2024-05-13",
     "gpt-4o-mini",
-    # Realtime models
-    "gpt-realtime",
-    "gpt-realtime-mini",
-    "gpt-4o-realtime-preview",
-    "gpt-4o-mini-realtime-preview",
-    # Audio models
-    "gpt-audio",
-    "gpt-audio-mini",
-    "gpt-4o-audio-preview",
-    "gpt-4o-mini-audio-preview",
-    # O-series reasoning models
+    # O-series reasoning models (chat completions API)
     "o1",
     "o1-pro",
     "o1-mini",
     "o3",
     "o3-pro",
     "o3-mini",
-    "o3-deep-research",
     "o4-mini",
-    "o4-mini-deep-research",
-    # Search models
-    "gpt-5-search-api",
-    "gpt-4o-mini-search-preview",
-    "gpt-4o-search-preview",
-    # Computer use
-    "computer-use-preview",
-    # Image models
-    "gpt-image-1.5",
-    "chatgpt-image-latest",
-    "gpt-image-1",
-    "gpt-image-1-mini",
 ]
 
 for _model_id in _openai_models:
