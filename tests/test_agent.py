@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -331,6 +332,17 @@ class TestAgentConstructor:
         agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         assert agent._agent_id is not None
         assert len(agent._agent_id) > 0
+
+    def test_auth_argument_is_deprecated_and_ignored(self) -> None:
+        with pytest.warns(DeprecationWarning, match="auth"):
+            agent = Agent(
+                model=MockModel(),
+                planner=MockPlanner(),
+                memory=None,
+                auth={"search_tool": {"api_key": "sk-secret-123"}},
+            )
+
+        assert not hasattr(agent, "_auth")
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +739,39 @@ class TestTraceCollection:
         assert payload["api_key"] == "[REDACTED]"
         assert payload["nested"]["private_key"] == "[REDACTED]"
         assert payload["safe"] == "visible"
+
+    def test_auth_credentials_are_not_in_trace_or_state(self) -> None:
+        secret = "sk-secret-123"
+        with pytest.warns(DeprecationWarning, match="auth"):
+            agent = Agent(
+                model=MockModel(),
+                planner=MockPlanner(),
+                memory=None,
+                auth={"search_tool": {"api_key": secret}},
+            )
+
+        result = agent.run("Hello")
+        trace_json = json.dumps([event.data for event in result.trace], default=str)
+        state_json = json.dumps(result.state.to_dict(), default=str)
+
+        assert secret not in trace_json
+        assert secret not in state_json
+
+    @pytest.mark.asyncio
+    async def test_auth_credentials_are_not_in_stream_telemetry(self) -> None:
+        secret = "sk-secret-123"
+        with pytest.warns(DeprecationWarning, match="auth"):
+            agent = Agent(
+                model=MockModel(),
+                planner=MockPlanner(),
+                memory=None,
+                auth={"search_tool": {"api_key": secret}},
+            )
+
+        async for event in agent.stream_async("Hello", stream_telemetry=True):
+            if event.type == "telemetry":
+                telemetry_json = json.dumps(event.data, default=str)
+                assert secret not in telemetry_json
 
 
 # ---------------------------------------------------------------------------

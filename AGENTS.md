@@ -1,5 +1,15 @@
 # Repository Guidelines
 
+## Mandatory: Repo Map First
+
+Before starting any task:
+
+1. Open `REPO_MAP.md` at the repo root
+2. Find your task type in the **Task Router** table
+3. Open only the referenced `.agent/maps/*.md` file(s)
+4. Work from those maps — avoid reading unrelated files to minimize context usage
+5. If `REPO_MAP.md` is missing or outdated, regenerate it as the first step
+
 ## Project Structure & Module Organization
 
 - `axis_core/` is the core package. Key areas include `adapters/`, `engine/`, `loadouts/`, `protocols/`, and `testing/`.

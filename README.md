@@ -277,6 +277,13 @@ result.stats.cost_usd  # Total cost
 result.stats.tool_calls  # Number of tool calls
 ```
 
+### Credential Handling
+
+`Agent(auth=...)` is deprecated and ignored.
+
+Tool credentials should be loaded by tools directly (for example, from environment variables
+or a secret manager), not passed through agent constructor/runtime context objects.
+
 ## Environment Variables
 
 ```bash

@@ -21,6 +21,7 @@ import logging
 import os
 import time
 import uuid
+import warnings
 from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
 from typing import Any, TypeVar
@@ -190,7 +191,7 @@ class Agent:
         cache: Cache config (CacheConfig or dict)
         telemetry: True (collect silently), False (disabled), or list of sinks
         verbose: Print events to console
-        auth: Per-tool credentials
+        auth: Deprecated. Credentials must be managed inside tools.
     """
 
     def __init__(
@@ -243,7 +244,14 @@ class Agent:
         self._retry = _coerce(retry, RetryPolicy, "retry")
         self._cache = _coerce(cache, CacheConfig, "cache")
         self._verbose = verbose
-        self._auth = auth
+
+        if auth is not None:
+            warnings.warn(
+                "Argument 'auth' is deprecated and ignored. "
+                "Manage credentials inside tools (for example via environment variables).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         # Telemetry - resolve sinks from env vars when enabled
         if isinstance(telemetry, bool):

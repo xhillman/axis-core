@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Mandatory: Repo Map First
+
+Before starting any task:
+
+1. Open `REPO_MAP.md` at the repo root
+2. Find your task type in the **Task Router** table
+3. Open only the referenced `.agent/maps/*.md` file(s)
+4. Work from those maps — avoid reading unrelated files to minimize context usage
+5. If `REPO_MAP.md` is missing or outdated, regenerate it as the first step
+
+**Map files:**
+- `REPO_MAP.md` — root router (start here)
+- `.agent/maps/engine_lifecycle.md` — execution engine, phases, lifecycle loop
+- `.agent/maps/adapters.md` — model, memory, planner, telemetry adapters
+- `.agent/maps/protocols_types.md` — protocols, error types, data structures
+- `.agent/maps/domain_core.md` — agent.py, context, sessions, tools
+- `.agent/maps/testing_quality.md` — tests, quality checks, conventions
+- `.agent/maps/configs_env.md` — config, budget, environment variables
+- `.agent/maps/build_release.md` — packaging, publishing, dependencies
+
 ## Project Overview
 
 axis-core is a Python AI agent framework providing a modular, observable execution kernel for building production-ready agents. Currently in early development (v0.1.0 alpha) with project skeleton in place.
