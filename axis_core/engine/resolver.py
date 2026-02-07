@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
+from axis_core.engine.registry import AdapterRegistry
 from axis_core.errors import ConfigError
 
 T = TypeVar("T")
@@ -15,7 +16,7 @@ T = TypeVar("T")
 
 def resolve_adapter(
     value: str | T | None,
-    registry: Any,
+    registry: AdapterRegistry[T],
     **kwargs: Any,
 ) -> T | None:
     """Resolve a string identifier to an adapter instance via registry.
@@ -54,7 +55,7 @@ def resolve_adapter(
                 f"Unknown adapter '{value}'. "
                 f"Check registry or use explicit adapter instance."
             )
-        return adapter_class(**kwargs)  # type: ignore[no-any-return]
+        return adapter_class(**kwargs)
 
     # Instance passthrough - check it's not a primitive type
     if not isinstance(value, (int, float, bool, list, dict, tuple, set)):

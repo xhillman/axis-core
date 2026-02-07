@@ -251,7 +251,7 @@ class SQLiteMemory:
         db = self._conn()
         cursor = await db.execute("DELETE FROM memory WHERE key = ?", (key,))
         await db.commit()
-        return cursor.rowcount > 0
+        return bool(cursor.rowcount > 0)
 
     async def clear(
         self,

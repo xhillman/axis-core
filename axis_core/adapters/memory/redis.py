@@ -45,7 +45,7 @@ class RedisMemory:
 
     def __init__(
         self,
-        client: Redis,  # type: ignore[type-arg]
+        client: Redis,
         key_prefix: str = _DEFAULT_PREFIX,
     ) -> None:
         """Initialize RedisMemory.
@@ -225,7 +225,7 @@ class RedisMemory:
         count = await self._client.delete(full_key)
         # Also clean up metadata
         await self._client.delete(self._meta_key(full_key))
-        return count > 0
+        return bool(count > 0)
 
     async def clear(
         self,

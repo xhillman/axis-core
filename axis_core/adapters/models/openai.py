@@ -7,11 +7,12 @@ Requires the 'openai' package: pip install axis-core[openai]
 import json
 import os
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 # Conditional import per AD-040
 try:
     from openai import AsyncOpenAI
+    from openai.types.chat import ChatCompletionChunk
 except ImportError as e:
     raise ImportError(
         "OpenAIModel requires the openai package. "
@@ -510,9 +511,14 @@ class OpenAIModel:
                 kwargs["stop"] = stop_sequences
 
             # Stream from OpenAI API
-            # Note: create() with stream=True returns an async generator directly
-            # Type checker doesn't understand the overload, so we use type: ignore
-            async for chunk in self._client.chat.completions.create(**kwargs):  # type: ignore[attr-defined]
+            # cast() is needed because mypy can't resolve the create() overload
+            # when stream=True is passed via **kwargs (the SDK uses Literal[True]
+            # in its overload signatures, which requires a static keyword).
+            stream = cast(
+                AsyncIterator[ChatCompletionChunk],
+                self._client.chat.completions.create(**kwargs),
+            )
+            async for chunk in stream:
                 if chunk.choices and len(chunk.choices) > 0:
                     delta = chunk.choices[0].delta
 
@@ -528,7 +534,7 @@ class OpenAIModel:
                     elif delta.tool_calls is not None:
                         # Tool calls are being streamed
                         for tc_delta in delta.tool_calls:
-                            tool_delta = {
+                            tool_delta: dict[str, Any] = {
                                 "index": tc_delta.index,
                             }
                             if hasattr(tc_delta, "id") and tc_delta.id:
