@@ -334,6 +334,7 @@ agent = Agent(
 - Agent API with sync/async methods (run, run_async, stream, stream_async)
 - Configuration system with environment variable support
 - Budget tracking (cycles, tokens, cost, wall time)
+- Hard timeout enforcement (`timeout` arg and `Timeouts.total`) with wall-time budget cutoffs
 - Comprehensive error handling and recovery
 - Type-safe with mypy strict mode
 - Session support with optimistic locking (agent.session / session.run)

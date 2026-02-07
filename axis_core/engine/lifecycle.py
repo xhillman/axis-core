@@ -18,11 +18,13 @@ Architecture Decisions:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TypeVar
 
 from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget
@@ -54,6 +56,7 @@ from axis_core.protocols.planner import Plan
 from axis_core.protocols.telemetry import TraceEvent
 
 logger = logging.getLogger("axis_core.engine")
+T = TypeVar("T")
 
 
 class Phase(Enum):
@@ -238,6 +241,22 @@ class LifecycleEngine:
         """Finalize phase: persist memory, emit summary, clean up."""
         return await _finalize_phase(engine=self, ctx=ctx, error=error)
 
+    @staticmethod
+    def _update_wall_time(ctx: RunContext, run_started_monotonic: float) -> None:
+        """Refresh tracked wall-clock budget consumption."""
+        elapsed = max(0.0, time.monotonic() - run_started_monotonic)
+        ctx.state.budget_state.wall_time_seconds = elapsed
+
+    @staticmethod
+    def _wall_time_budget_error(ctx: RunContext) -> BudgetError:
+        """Create a wall-time budget exhaustion error."""
+        return BudgetError(
+            message="Budget exhausted: wall_time",
+            resource="wall_time",
+            used=ctx.state.budget_state.wall_time_seconds,
+            limit=ctx.budget.max_wall_time_seconds,
+        )
+
     # =========================================================================
     # Main execution loop (7.8)
     # =========================================================================
@@ -269,6 +288,7 @@ class LifecycleEngine:
             Result dict from _finalize
         """
         self._token_callback = token_callback
+        run_started_monotonic = time.monotonic()
         try:
             # Initialize
             ctx = await self._initialize(
@@ -280,6 +300,25 @@ class LifecycleEngine:
                 cancel_token=cancel_token,
                 config=config,
             )
+            self._update_wall_time(ctx, run_started_monotonic)
+
+            async def _run_with_wall_budget(
+                operation: Callable[[], Awaitable[T]],
+            ) -> T:
+                self._update_wall_time(ctx, run_started_monotonic)
+                remaining = (
+                    ctx.budget.max_wall_time_seconds
+                    - ctx.state.budget_state.wall_time_seconds
+                )
+                if remaining <= 0:
+                    raise self._wall_time_budget_error(ctx)
+                try:
+                    result = await asyncio.wait_for(operation(), timeout=remaining)
+                except asyncio.TimeoutError as e:
+                    self._update_wall_time(ctx, run_started_monotonic)
+                    raise self._wall_time_budget_error(ctx) from e
+                self._update_wall_time(ctx, run_started_monotonic)
+                return result
 
             await self._emit(
                 "run_started",
@@ -293,6 +332,7 @@ class LifecycleEngine:
                 # Main cycle loop
                 while True:
                     cycle_start = time.monotonic()
+                    self._update_wall_time(ctx, run_started_monotonic)
                     await self._emit(
                         "cycle_started",
                         run_id=ctx.run_id,
@@ -320,16 +360,55 @@ class LifecycleEngine:
                     cycle_start_time = datetime.utcnow()
 
                     # Observe
-                    observation = await self._observe(ctx)
+                    observation = await _run_with_wall_budget(
+                        lambda: self._observe(ctx)
+                    )
+                    if ctx.state.budget_state.is_exhausted(ctx.budget):
+                        resource = identify_exhausted_resource(ctx)
+                        termination_error = BudgetError(
+                            message=f"Budget exhausted: {resource}",
+                            resource=resource,
+                        )
+                        break
 
                     # Plan
-                    plan = await self._plan(ctx, observation)
+                    plan = await _run_with_wall_budget(
+                        lambda: self._plan(ctx, observation)
+                    )
+                    if ctx.state.budget_state.is_exhausted(ctx.budget):
+                        resource = identify_exhausted_resource(ctx)
+                        termination_error = BudgetError(
+                            message=f"Budget exhausted: {resource}",
+                            resource=resource,
+                        )
+                        break
 
                     # Act
-                    execution = await self._act(ctx, plan)
+                    execution = await _run_with_wall_budget(
+                        lambda: self._act(ctx, plan)
+                    )
+                    if ctx.state.budget_state.is_exhausted(ctx.budget):
+                        resource = identify_exhausted_resource(ctx)
+                        termination_error = BudgetError(
+                            message=f"Budget exhausted: {resource}",
+                            resource=resource,
+                        )
+                        break
 
                     # Evaluate
-                    decision = await self._evaluate(ctx, plan, execution)
+                    decision = await _run_with_wall_budget(
+                        lambda: self._evaluate(ctx, plan, execution)
+                    )
+                    if ctx.state.budget_state.is_exhausted(ctx.budget):
+                        resource = identify_exhausted_resource(ctx)
+                        decision = EvalDecision(
+                            done=True,
+                            error=BudgetError(
+                                message=f"Budget exhausted: {resource}",
+                                resource=resource,
+                            ),
+                            reason=f"Budget exhausted: {resource}",
+                        )
 
                     cycle_end_time = datetime.utcnow()
 
@@ -377,7 +456,9 @@ class LifecycleEngine:
                 )
 
             # Finalize (always runs)
+            self._update_wall_time(ctx, run_started_monotonic)
             result = await self._finalize(ctx, error=termination_error)
+            self._update_wall_time(ctx, run_started_monotonic)
 
             event_type = "run_completed" if result["success"] else "run_failed"
             await self._emit(

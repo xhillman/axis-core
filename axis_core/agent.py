@@ -34,7 +34,8 @@ from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.engine.registry import memory_registry
 from axis_core.engine.resolver import resolve_adapter
 from axis_core.engine.trace_collector import TraceCollector
-from axis_core.errors import AxisError
+from axis_core.errors import AxisError, ErrorClass
+from axis_core.errors import TimeoutError as AxisTimeoutError
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
 from axis_core.result import RunResult, RunStats, StreamEvent
 from axis_core.session import Session, generate_session_id, load_session
@@ -359,6 +360,41 @@ class Agent:
         canonical = json.dumps(config_data, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
+    def _effective_timeout(self, timeout: float | None) -> float | None:
+        """Resolve runtime timeout: explicit override first, then configured total."""
+        if timeout is not None:
+            return timeout
+        return self._timeouts.total
+
+    def _build_failure_result(
+        self,
+        error: AxisError,
+        duration_ms: float,
+        trace: list[Any] | None = None,
+    ) -> RunResult:
+        """Build a failed RunResult when execution aborts before finalize."""
+        return RunResult(
+            output=None,
+            output_raw="",
+            success=False,
+            error=error,
+            had_recoverable_errors=False,
+            stats=RunStats(
+                cycles=0,
+                tool_calls=0,
+                model_calls=0,
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                cost_usd=0.0,
+                duration_ms=duration_ms,
+            ),
+            trace=trace or [],
+            state=RunState(),
+            run_id="",
+            memory_error=None,
+        )
+
     async def session_async(
         self,
         id: str | None = None,
@@ -469,6 +505,7 @@ class Agent:
             self._running = True
             start = time.monotonic()
             try:
+                effective_timeout = self._effective_timeout(timeout)
                 trace_collector = TraceCollector() if self._telemetry_enabled else None
                 extra_sinks = [trace_collector] if trace_collector else []
                 engine = self._build_engine(extra_sinks=extra_sinks)
@@ -476,7 +513,7 @@ class Agent:
                 input_text = input if isinstance(input, str) else str(input)
 
                 try:
-                    raw = await engine.execute(
+                    execute_coro = engine.execute(
                         input_text=input_text,
                         agent_id=self._agent_id,
                         budget=self._budget,
@@ -484,30 +521,33 @@ class Agent:
                         attachments=attachments,
                         cancel_token=cancel_token,
                     )
+                    if effective_timeout is None:
+                        raw = await execute_coro
+                    else:
+                        raw = await asyncio.wait_for(execute_coro, timeout=effective_timeout)
                 except AxisError as e:
                     # Engine raised before finalize (e.g. empty input)
                     trace = trace_collector.get_events() if trace_collector else []
                     duration_ms = (time.monotonic() - start) * 1000
-                    return RunResult(
-                        output=None,
-                        output_raw="",
-                        success=False,
+                    return self._build_failure_result(
                         error=e,
-                        had_recoverable_errors=False,
-                        stats=RunStats(
-                            cycles=0,
-                            tool_calls=0,
-                            model_calls=0,
-                            input_tokens=0,
-                            output_tokens=0,
-                            total_tokens=0,
-                            cost_usd=0.0,
-                            duration_ms=duration_ms,
-                        ),
+                        duration_ms=duration_ms,
                         trace=trace,
-                        state=RunState(),
-                        run_id="",
-                        memory_error=None,
+                    )
+                except asyncio.TimeoutError:
+                    trace = trace_collector.get_events() if trace_collector else []
+                    duration_ms = (time.monotonic() - start) * 1000
+                    timeout_seconds = (
+                        effective_timeout if effective_timeout is not None else self._timeouts.total
+                    )
+                    timeout_error = AxisTimeoutError(
+                        message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
+                        details={"timeout_seconds": timeout_seconds},
+                    )
+                    return self._build_failure_result(
+                        error=timeout_error,
+                        duration_ms=duration_ms,
+                        trace=trace,
                     )
 
                 duration_ms = (time.monotonic() - start) * 1000
@@ -599,6 +639,7 @@ class Agent:
             start = time.monotonic()
             queue: asyncio.Queue[Any] = asyncio.Queue()
             try:
+                effective_timeout = self._effective_timeout(timeout)
                 trace_collector = TraceCollector() if self._telemetry_enabled else None
                 extra_sinks: list[Any] = [trace_collector] if trace_collector else []
                 if stream_telemetry:
@@ -627,7 +668,7 @@ class Agent:
 
                 async def _run_engine() -> dict[str, Any]:
                     try:
-                        return await engine.execute(
+                        execute_coro = engine.execute(
                             input_text=input_text,
                             agent_id=self._agent_id,
                             budget=self._budget,
@@ -636,6 +677,9 @@ class Agent:
                             cancel_token=cancel_token,
                             token_callback=_on_token,
                         )
+                        if effective_timeout is None:
+                            return await execute_coro
+                        return await asyncio.wait_for(execute_coro, timeout=effective_timeout)
                     finally:
                         await queue.put(_STREAM_DONE)
 
@@ -647,10 +691,37 @@ class Agent:
                         break
                     yield item
 
-                raw = await task
                 duration_ms = (time.monotonic() - start) * 1000
                 trace = trace_collector.get_events() if trace_collector else []
-                result = self._build_result(raw, duration_ms, trace=trace)
+                run_error: AxisError | None = None
+                raw: dict[str, Any] | None = None
+
+                try:
+                    raw = await task
+                except AxisError as e:
+                    run_error = e
+                except asyncio.TimeoutError:
+                    timeout_seconds = (
+                        effective_timeout if effective_timeout is not None else self._timeouts.total
+                    )
+                    run_error = AxisTimeoutError(
+                        message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
+                        details={"timeout_seconds": timeout_seconds},
+                    )
+
+                if raw is None:
+                    if run_error is None:
+                        run_error = AxisError(
+                            message="Run failed",
+                            error_class=ErrorClass.RUNTIME,
+                        )
+                    result = self._build_failure_result(
+                        error=run_error,
+                        duration_ms=duration_ms,
+                        trace=trace,
+                    )
+                else:
+                    result = self._build_result(raw, duration_ms, trace=trace)
 
                 # Emit final event
                 event_type = "run_completed" if result.success else "run_failed"
@@ -662,6 +733,7 @@ class Agent:
                         "output": result.output,
                         "run_id": result.run_id,
                         "stats": dataclasses.asdict(result.stats),
+                        "error": str(result.error) if result.error else None,
                     },
                     sequence=1,
                 )

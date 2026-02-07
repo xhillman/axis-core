@@ -10,6 +10,8 @@ import pytest
 from axis_core.agent import Agent
 from axis_core.budget import Budget
 from axis_core.config import Timeouts
+from axis_core.errors import BudgetError
+from axis_core.errors import TimeoutError as AxisTimeoutError
 from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.result import RunResult, RunStats, StreamEvent
@@ -79,6 +81,27 @@ class MockPlanner:
                     id="step-terminal",
                     type=StepType.TERMINAL,
                     payload={"output": "mock response"},
+                ),
+            ],
+        )
+
+
+class SlowPlanner:
+    """Planner that sleeps before returning a terminal plan."""
+
+    def __init__(self, delay_seconds: float) -> None:
+        self._delay_seconds = delay_seconds
+
+    async def plan(self, observation: Any, ctx: Any) -> Plan:
+        await asyncio.sleep(self._delay_seconds)
+        return Plan(
+            id="plan-slow",
+            goal="respond slowly",
+            steps=[
+                PlanStep(
+                    id="step-terminal",
+                    type=StepType.TERMINAL,
+                    payload={"output": "slow response"},
                 ),
             ],
         )
@@ -382,6 +405,38 @@ class TestRunAsync:
         with pytest.raises(TypeError, match="input"):
             await agent.run_async(123)  # type: ignore[arg-type]
 
+    @pytest.mark.asyncio
+    async def test_run_async_honors_explicit_timeout(self) -> None:
+        agent = Agent(model=MockModel(), planner=SlowPlanner(delay_seconds=0.2), memory=None)
+        result = await agent.run_async("Hello", timeout=0.05)
+        assert result.success is False
+        assert isinstance(result.error, AxisTimeoutError)
+
+    @pytest.mark.asyncio
+    async def test_run_async_uses_default_total_timeout(self) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=SlowPlanner(delay_seconds=0.2),
+            memory=None,
+            timeouts=Timeouts(total=0.05),
+        )
+        result = await agent.run_async("Hello")
+        assert result.success is False
+        assert isinstance(result.error, AxisTimeoutError)
+
+    @pytest.mark.asyncio
+    async def test_run_async_respects_wall_time_budget(self) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=SlowPlanner(delay_seconds=0.2),
+            memory=None,
+            budget=Budget(max_wall_time_seconds=0.05),
+        )
+        result = await agent.run_async("Hello", timeout=1.0)
+        assert result.success is False
+        assert isinstance(result.error, BudgetError)
+        assert result.error.resource == "wall_time"
+
 
 # ---------------------------------------------------------------------------
 # run (sync) tests (8.4)
@@ -401,6 +456,24 @@ class TestRunSync:
         agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = agent.run("Hello", context={"key": "value"})
         assert result.success is True
+
+    def test_sync_run_honors_timeout(self) -> None:
+        agent = Agent(model=MockModel(), planner=SlowPlanner(delay_seconds=0.2), memory=None)
+        result = agent.run("Hello", timeout=0.05)
+        assert result.success is False
+        assert isinstance(result.error, AxisTimeoutError)
+
+    def test_sync_run_respects_wall_time_budget(self) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=SlowPlanner(delay_seconds=0.2),
+            memory=None,
+            budget=Budget(max_wall_time_seconds=0.05),
+        )
+        result = agent.run("Hello", timeout=1.0)
+        assert result.success is False
+        assert isinstance(result.error, BudgetError)
+        assert result.error.resource == "wall_time"
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +559,27 @@ class TestStreamAsync:
             async for _ in agent.stream_async(42):  # type: ignore[arg-type]
                 pass
 
+    @pytest.mark.asyncio
+    async def test_stream_async_honors_explicit_timeout(self) -> None:
+        agent = Agent(model=MockModel(), planner=SlowPlanner(delay_seconds=0.2), memory=None)
+        events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello", timeout=0.05):
+            events.append(event)
+        assert events[-1].type == "run_failed"
+
+    @pytest.mark.asyncio
+    async def test_stream_async_uses_default_total_timeout(self) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=SlowPlanner(delay_seconds=0.2),
+            memory=None,
+            timeouts=Timeouts(total=0.05),
+        )
+        events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello"):
+            events.append(event)
+        assert events[-1].type == "run_failed"
+
 
 # ---------------------------------------------------------------------------
 # stream (sync) tests (8.6)
@@ -525,6 +619,11 @@ class TestStreamSync:
         agent = Agent(model=model, planner=ModelPlanner(), memory=None)
         tokens = [event.token for event in agent.stream("Hello") if event.is_token]
         assert "".join(t for t in tokens if t) == "Hello sync"
+
+    def test_sync_stream_honors_timeout(self) -> None:
+        agent = Agent(model=MockModel(), planner=SlowPlanner(delay_seconds=0.2), memory=None)
+        events = list(agent.stream("Hello", timeout=0.05))
+        assert events[-1].type == "run_failed"
 
 
 class TestTraceCollection:

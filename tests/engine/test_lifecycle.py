@@ -12,6 +12,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -1316,6 +1317,57 @@ class TestExecutionLoop:
         assert result["success"] is False
         assert result["cycles_completed"] == 3
         assert isinstance(result["error"], BudgetError)
+
+    @pytest.mark.asyncio
+    async def test_execute_tracks_wall_time_seconds(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+    ) -> None:
+        """Execute should continuously track elapsed wall time in budget state."""
+        engine = LifecycleEngine(model=mock_model, planner=mock_planner)
+
+        result = await engine.execute(
+            input_text="track wall time",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        assert result["budget_state"].wall_time_seconds > 0.0
+
+    @pytest.mark.asyncio
+    async def test_execute_stops_on_wall_time_budget_exhaustion(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        """Execute should fail with BudgetError when wall-time budget is exceeded."""
+
+        class SlowTerminalPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                await asyncio.sleep(0.2)
+                return Plan(
+                    id="slow-terminal",
+                    goal="slow",
+                    steps=(
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                        ),
+                    ),
+                )
+
+        engine = LifecycleEngine(model=mock_model, planner=SlowTerminalPlanner())
+
+        result = await engine.execute(
+            input_text="slow",
+            agent_id="test-agent",
+            budget=Budget(max_wall_time_seconds=0.05),
+        )
+
+        assert result["success"] is False
+        assert isinstance(result["error"], BudgetError)
+        assert result["error"].resource == "wall_time"
 
 
 # =============================================================================
