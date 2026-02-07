@@ -543,6 +543,57 @@ class TestStreamAsync:
         assert telemetry_events
 
     @pytest.mark.asyncio
+    async def test_stream_telemetry_events_are_redacted_by_default(self) -> None:
+        @tool
+        def secret_tool(payload: dict[str, Any]) -> str:
+            return "ok"
+
+        class ToolPlanner:
+            async def plan(self, observation: Any, ctx: Any) -> Plan:
+                return Plan(
+                    id="plan-tool",
+                    goal="call tool",
+                    steps=[
+                        PlanStep(
+                            id="tool-step",
+                            type=StepType.TOOL,
+                            payload={
+                                "tool": "secret_tool",
+                                "args": {
+                                    "payload": {
+                                        "api_key": "sk-secret-123",
+                                        "nested": {"private_key": "key-456"},
+                                        "safe": "visible",
+                                    }
+                                },
+                            },
+                        ),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("tool-step",),
+                        ),
+                    ],
+                )
+
+        agent = Agent(tools=[secret_tool], model=MockModel(), planner=ToolPlanner(), memory=None)
+
+        telemetry_events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello", stream_telemetry=True):
+            if event.type == "telemetry":
+                telemetry_events.append(event)
+
+        tool_called = next(
+            e for e in telemetry_events
+            if e.data.get("event", {}).get("type") == "tool_called"
+        )
+        payload = tool_called.data["event"]["data"]["args"]["payload"]
+        assert payload["api_key"] == "[REDACTED]"
+        assert payload["nested"]["private_key"] == "[REDACTED]"
+        assert payload["safe"] == "visible"
+
+    @pytest.mark.asyncio
     async def test_stream_final_event_includes_stats(self) -> None:
         agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         last_event: StreamEvent | None = None
@@ -633,6 +684,49 @@ class TestTraceCollection:
         agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
         result = agent.run("Hello")
         assert result.trace
+
+    def test_run_trace_events_are_redacted_by_default(self) -> None:
+        @tool
+        def secret_tool(payload: dict[str, Any]) -> str:
+            return "ok"
+
+        class ToolPlanner:
+            async def plan(self, observation: Any, ctx: Any) -> Plan:
+                return Plan(
+                    id="plan-tool",
+                    goal="call tool",
+                    steps=[
+                        PlanStep(
+                            id="tool-step",
+                            type=StepType.TOOL,
+                            payload={
+                                "tool": "secret_tool",
+                                "args": {
+                                    "payload": {
+                                        "api_key": "sk-secret-123",
+                                        "nested": {"private_key": "key-456"},
+                                        "safe": "visible",
+                                    }
+                                },
+                            },
+                        ),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("tool-step",),
+                        ),
+                    ],
+                )
+
+        agent = Agent(tools=[secret_tool], model=MockModel(), planner=ToolPlanner(), memory=None)
+        result = agent.run("Hello")
+
+        tool_called = next(event for event in result.trace if event.type == "tool_called")
+        payload = tool_called.data["args"]["payload"]
+        assert payload["api_key"] == "[REDACTED]"
+        assert payload["nested"]["private_key"] == "[REDACTED]"
+        assert payload["safe"] == "visible"
 
 
 # ---------------------------------------------------------------------------

@@ -543,6 +543,70 @@ class TestRunState:
         # _retry_state should not be in serialized output
         assert "_retry_state" not in data
 
+    def test_to_dict_redacts_sensitive_tool_data_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tool args/results should be redacted in serialized state by default."""
+        from axis_core.context import RunState
+
+        monkeypatch.delenv("AXIS_PERSIST_SENSITIVE_TOOL_DATA", raising=False)
+
+        state = RunState()
+        state.append_tool_call(
+            ToolCallRecord(
+                tool_name="search",
+                call_id="call-1",
+                args={
+                    "api_key": "sk-secret",
+                    "nested": {"private_key": "priv-secret"},
+                    "safe": "ok",
+                },
+                result={
+                    "access_token": "token-secret",
+                    "safe_result": "visible",
+                },
+                error=None,
+                cached=False,
+                duration_ms=1.0,
+                timestamp=1704067200.0,
+            )
+        )
+
+        data = state.to_dict()
+        serialized_call = data["tool_calls"][0]
+        assert serialized_call["args"]["api_key"] == "[REDACTED]"
+        assert serialized_call["args"]["nested"]["private_key"] == "[REDACTED]"
+        assert serialized_call["args"]["safe"] == "ok"
+        assert serialized_call["result"]["access_token"] == "[REDACTED]"
+        assert serialized_call["result"]["safe_result"] == "visible"
+
+    def test_to_dict_allows_sensitive_tool_data_when_opted_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Debug opt-in should allow raw tool args/results in serialized state."""
+        from axis_core.context import RunState
+
+        monkeypatch.setenv("AXIS_PERSIST_SENSITIVE_TOOL_DATA", "true")
+
+        state = RunState()
+        state.append_tool_call(
+            ToolCallRecord(
+                tool_name="search",
+                call_id="call-1",
+                args={"api_key": "sk-secret", "safe": "ok"},
+                result={"access_token": "token-secret", "safe_result": "visible"},
+                error=None,
+                cached=False,
+                duration_ms=1.0,
+                timestamp=1704067200.0,
+            )
+        )
+
+        data = state.to_dict()
+        serialized_call = data["tool_calls"][0]
+        assert serialized_call["args"]["api_key"] == "sk-secret"
+        assert serialized_call["result"]["access_token"] == "token-secret"
+
     def test_from_dict(self) -> None:
         """Test RunState deserialization."""
         from axis_core.context import RunState

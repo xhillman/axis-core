@@ -299,6 +299,7 @@ AXIS_MAX_MODEL_CALLS=20
 AXIS_TELEMETRY_SINK=console         # console, none
 AXIS_TELEMETRY_COMPACT=false        # Compact console output
 AXIS_TELEMETRY_REDACT=true          # Redact sensitive data
+AXIS_PERSIST_SENSITIVE_TOOL_DATA=false  # Debug-only raw tool args/results in RunState
 
 # Advanced
 AXIS_CONTEXT_STRATEGY=smart         # Context building strategy

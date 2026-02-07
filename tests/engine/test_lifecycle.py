@@ -1490,6 +1490,66 @@ class TestTelemetryEmission:
         assert "cycle_started" in event_types
         assert "cycle_completed" in event_types
 
+    @pytest.mark.asyncio
+    async def test_tool_called_payload_is_redacted_before_sink(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+        mock_telemetry: MockTelemetrySink,
+    ) -> None:
+        """Sensitive keys should be redacted before lifecycle sinks receive events."""
+
+        async def secret_tool(payload: dict[str, Any]) -> str:
+            return f"ok:{payload.get('safe')}"
+
+        plan = Plan(
+            id="plan-1",
+            goal="Call tool",
+            steps=(
+                PlanStep(
+                    id="tool-step",
+                    type=StepType.TOOL,
+                    payload={
+                        "tool": "secret_tool",
+                        "args": {
+                            "payload": {
+                                "api_key": "sk-secret-123",
+                                "nested": {"private_key": "very-secret"},
+                                "safe": "visible",
+                            }
+                        },
+                    },
+                ),
+                PlanStep(
+                    id="terminal",
+                    type=StepType.TERMINAL,
+                    payload={"output": "done"},
+                    dependencies=("tool-step",),
+                ),
+            ),
+        )
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=mock_planner,
+            telemetry=[mock_telemetry],
+            tools={"secret_tool": secret_tool},
+        )
+        ctx = await engine._initialize(
+            input_text="redact",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        await engine._act(ctx, plan)
+
+        tool_called_events = [e for e in mock_telemetry.events if e.type == "tool_called"]
+        assert tool_called_events
+        emitted_args = tool_called_events[0].data["args"]
+        assert emitted_args["payload"]["api_key"] == "[REDACTED]"
+        assert emitted_args["payload"]["nested"]["private_key"] == "[REDACTED]"
+        assert emitted_args["payload"]["safe"] == "visible"
+
 
 # =============================================================================
 # Adapter resolution tests (Task 16.2, 16.4)

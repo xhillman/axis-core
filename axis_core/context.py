@@ -30,6 +30,10 @@ if TYPE_CHECKING:
 from axis_core.attachments import AttachmentLike, serialize_attachments
 from axis_core.budget import Budget, BudgetState
 from axis_core.errors import AxisError, ErrorClass, ErrorRecord
+from axis_core.redaction import (
+    persist_sensitive_tool_data_enabled,
+    redact_sensitive_data,
+)
 
 # Size limits for context (AD-037)
 WARN_CONTEXT_SIZE = 50 * 1024 * 1024  # 50MB
@@ -835,11 +839,14 @@ def _deserialize_model_call_record(data: dict[str, Any]) -> ModelCallRecord:
 
 def _serialize_tool_call_record(record: Any) -> dict[str, Any]:
     """Serialize ToolCallRecord to dict."""
+    include_sensitive = persist_sensitive_tool_data_enabled()
+    args = record.args if include_sensitive else redact_sensitive_data(record.args)
+    result = record.result if include_sensitive else redact_sensitive_data(record.result)
     return {
         "tool_name": record.tool_name,
         "call_id": record.call_id,
-        "args": record.args,
-        "result": record.result,
+        "args": args,
+        "result": result,
         "error": record.error,
         "cached": record.cached,
         "duration_ms": record.duration_ms,

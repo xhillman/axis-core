@@ -7,58 +7,10 @@ a specified output stream. Uses IMMEDIATE buffering mode.
 from __future__ import annotations
 
 import sys
-from typing import Any, TextIO
+from typing import TextIO
 
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
-
-_REDACTED_VALUE = "[REDACTED]"
-_SENSITIVE_KEY_FRAGMENTS = (
-    "api_key",
-    "apikey",
-    "secret",
-    "token",
-    "password",
-    "authorization",
-    "bearer",
-    "access_key",
-    "private_key",
-)
-
-
-def _should_redact_key(key: str) -> bool:
-    """Check if a key should be redacted based on sensitive fragments.
-
-    Args:
-        key: The dictionary key to check
-
-    Returns:
-        True if the key contains a sensitive fragment (case-insensitive)
-    """
-    key_lower = key.lower()
-    return any(fragment in key_lower for fragment in _SENSITIVE_KEY_FRAGMENTS)
-
-
-def _redact_data(value: Any) -> Any:
-    """Recursively redact sensitive data from event data structures.
-
-    Args:
-        value: The value to redact (can be dict, list, tuple, or scalar)
-
-    Returns:
-        The same structure with sensitive values replaced with [REDACTED]
-    """
-    if isinstance(value, dict):
-        return {
-            k: _REDACTED_VALUE
-            if isinstance(k, str) and _should_redact_key(k)
-            else _redact_data(v)
-            for k, v in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_data(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_data(item) for item in value)
-    return value
+from axis_core.redaction import redact_sensitive_data
 
 
 class ConsoleSink:
@@ -121,7 +73,7 @@ class ConsoleSink:
         if event.duration_ms is not None:
             parts.append(f"duration={event.duration_ms:.1f}ms")
 
-        data = _redact_data(event.data) if self._redact else event.data
+        data = redact_sensitive_data(event.data) if self._redact else event.data
         if data:
             parts.append(f"data={data}")
 
@@ -146,7 +98,7 @@ class ConsoleSink:
         if event.duration_ms is not None:
             lines.append(f"  duration: {event.duration_ms:.1f}ms")
 
-        data = _redact_data(event.data) if self._redact else event.data
+        data = redact_sensitive_data(event.data) if self._redact else event.data
         if data:
             lines.append(f"  data: {data}")
 

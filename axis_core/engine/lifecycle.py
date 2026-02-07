@@ -54,6 +54,7 @@ from axis_core.errors import (
 )
 from axis_core.protocols.planner import Plan
 from axis_core.protocols.telemetry import TraceEvent
+from axis_core.redaction import redact_sensitive_data
 
 logger = logging.getLogger("axis_core.engine")
 T = TypeVar("T")
@@ -136,6 +137,12 @@ class LifecycleEngine:
         duration_ms: float | None = None,
     ) -> None:
         """Emit a telemetry event to all sinks."""
+        redacted_data = redact_sensitive_data(data or {})
+        event_data = (
+            redacted_data
+            if isinstance(redacted_data, dict)
+            else {"value": redacted_data}
+        )
         event = TraceEvent(
             type=event_type,
             timestamp=datetime.utcnow(),
@@ -143,7 +150,7 @@ class LifecycleEngine:
             phase=phase,
             cycle=cycle,
             step_id=step_id,
-            data=data or {},
+            data=event_data,
             duration_ms=duration_ms,
         )
         for sink in self.telemetry:
