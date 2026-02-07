@@ -1646,13 +1646,13 @@ class TestModelFallback:
             budget=Budget(),
         )
 
-        # Call the fallback method
-        response = await engine._call_model_with_fallback(
-            ctx=ctx,
-            messages=[{"role": "user", "content": "test"}],
-            system=None,
-            tools=None,
-        )
+        # Call the fallback method via call_fn pattern
+        async def call_fn(model: Any) -> ModelResponse:
+            return await model.complete(
+                messages=[{"role": "user", "content": "test"}],
+            )
+
+        response = await engine._try_models_with_fallback(ctx, call_fn)
 
         assert response.content == "Fallback response"
         assert primary.call_count == 1  # Primary tried once
@@ -1690,12 +1690,14 @@ class TestModelFallback:
         test_system = "You are a helpful assistant"
         test_tools = [{"name": "tool1"}]
 
-        await engine._call_model_with_fallback(
-            ctx=ctx,
-            messages=test_messages,
-            system=test_system,
-            tools=test_tools,
-        )
+        async def call_fn(model: Any) -> ModelResponse:
+            return await model.complete(
+                messages=test_messages,
+                system=test_system,
+                tools=test_tools,
+            )
+
+        await engine._try_models_with_fallback(ctx, call_fn)
 
         # Verify fallback received exact same parameters
         assert len(fallback.calls) == 1
@@ -1733,12 +1735,12 @@ class TestModelFallback:
             budget=Budget(),
         )
 
-        response = await engine._call_model_with_fallback(
-            ctx=ctx,
-            messages=[{"role": "user", "content": "test"}],
-            system=None,
-            tools=None,
-        )
+        async def call_fn(model: Any) -> ModelResponse:
+            return await model.complete(
+                messages=[{"role": "user", "content": "test"}],
+            )
+
+        response = await engine._try_models_with_fallback(ctx, call_fn)
 
         assert response.content == "Third model works"
         assert primary.call_count == 1
@@ -1767,13 +1769,13 @@ class TestModelFallback:
             budget=Budget(),
         )
 
-        with pytest.raises(ModelError, match="All models failed"):
-            await engine._call_model_with_fallback(
-                ctx=ctx,
+        async def call_fn(model: Any) -> ModelResponse:
+            return await model.complete(
                 messages=[{"role": "user", "content": "test"}],
-                system=None,
-                tools=None,
             )
+
+        with pytest.raises(ModelError, match="All models failed"):
+            await engine._try_models_with_fallback(ctx, call_fn)
 
         # Verify all models were tried
         assert primary.call_count == 1
@@ -1815,13 +1817,13 @@ class TestModelFallback:
             budget=Budget(),
         )
 
-        with pytest.raises(ModelError):
-            await engine._call_model_with_fallback(
-                ctx=ctx,
+        async def call_fn(model: Any) -> ModelResponse:
+            return await model.complete(
                 messages=[{"role": "user", "content": "test"}],
-                system=None,
-                tools=None,
             )
+
+        with pytest.raises(ModelError):
+            await engine._try_models_with_fallback(ctx, call_fn)
 
         # Fallback should not have been called
         assert len(fallback.calls) == 0
@@ -1874,12 +1876,12 @@ class TestModelFallback:
             budget=Budget(),
         )
 
-        await engine._call_model_with_fallback(
-            ctx=ctx,
-            messages=[{"role": "user", "content": "test"}],
-            system=None,
-            tools=None,
-        )
+        async def call_fn(model: Any) -> ModelResponse:
+            return await model.complete(
+                messages=[{"role": "user", "content": "test"}],
+            )
+
+        await engine._try_models_with_fallback(ctx, call_fn)
 
         # Check for model_fallback event
         fallback_events = [e for e in events if e.type == "model_fallback"]
