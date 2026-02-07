@@ -17,214 +17,67 @@ Example:
     result = agent.run("Greet the user named Alice")
 """
 
+import importlib
 from typing import Any
 
 __version__ = "0.4.1"
 
-# Public API - will be populated as modules are implemented
-__all__ = [
-    # Version
-    "__version__",
+# Lazy-loading registry: maps public name → (module_path, attribute_name)
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # Core
-    "Agent",
+    "Agent": ("axis_core.agent", "Agent"),
     # Tool system
-    "tool",
-    "ToolContext",
-    "ToolManifest",
-    "Capability",
+    "tool": ("axis_core.tool", "tool"),
+    "ToolContext": ("axis_core.tool", "ToolContext"),
+    "ToolManifest": ("axis_core.tool", "ToolManifest"),
+    "Capability": ("axis_core.tool", "Capability"),
     # Budget
-    "Budget",
-    "BudgetState",
+    "Budget": ("axis_core.budget", "Budget"),
+    "BudgetState": ("axis_core.budget", "BudgetState"),
     # Configuration
-    "config",
-    "Timeouts",
-    "RetryPolicy",
-    "RateLimits",
-    "CacheConfig",
+    "config": ("axis_core.config", "config"),
+    "Timeouts": ("axis_core.config", "Timeouts"),
+    "RetryPolicy": ("axis_core.config", "RetryPolicy"),
+    "RateLimits": ("axis_core.config", "RateLimits"),
+    "CacheConfig": ("axis_core.config", "CacheConfig"),
     # Errors
-    "AxisError",
-    "InputError",
-    "ConfigError",
-    "PlanError",
-    "ToolError",
-    "ModelError",
-    "BudgetError",
-    "TimeoutError",
-    "CancelledError",
-    "ConcurrencyError",
-    "ErrorClass",
-    "ErrorRecord",
+    "AxisError": ("axis_core.errors", "AxisError"),
+    "InputError": ("axis_core.errors", "InputError"),
+    "ConfigError": ("axis_core.errors", "ConfigError"),
+    "PlanError": ("axis_core.errors", "PlanError"),
+    "ToolError": ("axis_core.errors", "ToolError"),
+    "ModelError": ("axis_core.errors", "ModelError"),
+    "BudgetError": ("axis_core.errors", "BudgetError"),
+    "TimeoutError": ("axis_core.errors", "TimeoutError"),
+    "CancelledError": ("axis_core.errors", "CancelledError"),
+    "ConcurrencyError": ("axis_core.errors", "ConcurrencyError"),
+    "ErrorClass": ("axis_core.errors", "ErrorClass"),
+    "ErrorRecord": ("axis_core.errors", "ErrorRecord"),
     # Results
-    "RunResult",
-    "StreamEvent",
-    "RunStats",
+    "RunResult": ("axis_core.result", "RunResult"),
+    "StreamEvent": ("axis_core.result", "StreamEvent"),
+    "RunStats": ("axis_core.result", "RunStats"),
     # Context
-    "RunContext",
-    "RunState",
-    "Session",
-    "Message",
-    "Attachment",
-    "Image",
-    "PDF",
-    "CancelToken",
-]
+    "RunContext": ("axis_core.context", "RunContext"),
+    "RunState": ("axis_core.context", "RunState"),
+    "Session": ("axis_core.session", "Session"),
+    "Message": ("axis_core.session", "Message"),
+    "Attachment": ("axis_core.attachments", "Attachment"),
+    "Image": ("axis_core.attachments", "Image"),
+    "PDF": ("axis_core.attachments", "PDF"),
+    "CancelToken": ("axis_core.cancel", "CancelToken"),
+}
+
+# Public API
+__all__ = ["__version__", *_LAZY_IMPORTS.keys()]
 
 
 def __getattr__(name: str) -> Any:
     """Lazy loading of submodules to avoid circular imports and missing module errors."""
-    # Core
-    if name == "Agent":
-        from axis_core.agent import Agent
-
-        return Agent
-
-    # Tool system
-    if name == "tool":
-        from axis_core.tool import tool
-
-        return tool
-    if name == "ToolContext":
-        from axis_core.tool import ToolContext
-
-        return ToolContext
-    if name == "ToolManifest":
-        from axis_core.tool import ToolManifest
-
-        return ToolManifest
-    if name == "Capability":
-        from axis_core.tool import Capability
-
-        return Capability
-
-    # Budget
-    if name == "Budget":
-        from axis_core.budget import Budget
-
-        return Budget
-    if name == "BudgetState":
-        from axis_core.budget import BudgetState
-
-        return BudgetState
-
-    # Configuration
-    if name == "config":
-        from axis_core.config import config
-
-        return config
-    if name == "Timeouts":
-        from axis_core.config import Timeouts
-
-        return Timeouts
-    if name == "RetryPolicy":
-        from axis_core.config import RetryPolicy
-
-        return RetryPolicy
-    if name == "RateLimits":
-        from axis_core.config import RateLimits
-
-        return RateLimits
-    if name == "CacheConfig":
-        from axis_core.config import CacheConfig
-
-        return CacheConfig
-
-    # Errors
-    if name == "AxisError":
-        from axis_core.errors import AxisError
-
-        return AxisError
-    if name == "InputError":
-        from axis_core.errors import InputError
-
-        return InputError
-    if name == "ConfigError":
-        from axis_core.errors import ConfigError
-
-        return ConfigError
-    if name == "PlanError":
-        from axis_core.errors import PlanError
-
-        return PlanError
-    if name == "ToolError":
-        from axis_core.errors import ToolError
-
-        return ToolError
-    if name == "ModelError":
-        from axis_core.errors import ModelError
-
-        return ModelError
-    if name == "BudgetError":
-        from axis_core.errors import BudgetError
-
-        return BudgetError
-    if name == "TimeoutError":
-        from axis_core.errors import TimeoutError
-
-        return TimeoutError
-    if name == "CancelledError":
-        from axis_core.errors import CancelledError
-
-        return CancelledError
-    if name == "ConcurrencyError":
-        from axis_core.errors import ConcurrencyError
-
-        return ConcurrencyError
-    if name == "ErrorClass":
-        from axis_core.errors import ErrorClass
-
-        return ErrorClass
-    if name == "ErrorRecord":
-        from axis_core.errors import ErrorRecord
-
-        return ErrorRecord
-
-    # Results
-    if name == "RunResult":
-        from axis_core.result import RunResult
-
-        return RunResult
-    if name == "StreamEvent":
-        from axis_core.result import StreamEvent
-
-        return StreamEvent
-    if name == "RunStats":
-        from axis_core.result import RunStats
-
-        return RunStats
-
-    # Context
-    if name == "RunContext":
-        from axis_core.context import RunContext
-
-        return RunContext
-    if name == "RunState":
-        from axis_core.context import RunState
-
-        return RunState
-    if name == "Session":
-        from axis_core.session import Session
-
-        return Session
-    if name == "Message":
-        from axis_core.session import Message
-
-        return Message
-    if name == "Attachment":
-        from axis_core.attachments import Attachment
-
-        return Attachment
-    if name == "Image":
-        from axis_core.attachments import Image
-
-        return Image
-    if name == "PDF":
-        from axis_core.attachments import PDF
-
-        return PDF
-    if name == "CancelToken":
-        from axis_core.cancel import CancelToken
-
-        return CancelToken
+    if name in _LAZY_IMPORTS:
+        module_path, attr_name = _LAZY_IMPORTS[name]
+        module = importlib.import_module(module_path)
+        return getattr(module, attr_name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

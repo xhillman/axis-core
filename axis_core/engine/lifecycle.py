@@ -642,24 +642,16 @@ class LifecycleEngine:
 
         return result
 
-    async def _call_model_with_fallback(
+    async def _try_models_with_fallback(
         self,
         ctx: RunContext,
-        messages: Any,
-        system: str | None,
-        tools: Any | None,
+        call_fn: Any,
     ) -> Any:
-        """Call model with fallback chain on recoverable errors (AD-013).
-
-        Attempts to call the primary model first. On recoverable errors,
-        tries each fallback model in order. Preserves exact request parameters
-        across all attempts per AD-013.
+        """Try primary model then fallbacks on recoverable errors (AD-013).
 
         Args:
             ctx: Current run context
-            messages: Messages to send to model
-            system: System prompt
-            tools: Tool manifests
+            call_fn: Async callable(model) -> ModelResponse
 
         Returns:
             ModelResponse from first successful model
@@ -667,106 +659,16 @@ class LifecycleEngine:
         Raises:
             ModelError: If all models (primary + fallbacks) fail
         """
-        # Build chain of models to try: primary first, then fallbacks
         models_to_try = [self.model] + self.fallback
         errors: list[Exception] = []
 
         for idx, model in enumerate(models_to_try):
-            is_fallback = idx > 0
             model_id = getattr(model, "model_id", "unknown")
 
             try:
-                response = await model.complete(
-                    messages=messages,
-                    system=system,
-                    tools=tools,
-                )
+                response = await call_fn(model)
 
-                # Success - emit fallback event if we used a fallback
-                if is_fallback:
-                    previous_model_id = getattr(
-                        models_to_try[idx - 1], "model_id", "unknown"
-                    )
-                    await self._emit(
-                        "model_fallback",
-                        run_id=ctx.run_id,
-                        phase=Phase.ACT.value,
-                        cycle=ctx.cycle_count,
-                        data={
-                            "from_model": previous_model_id,
-                            "to_model": model_id,
-                            "attempt": idx + 1,
-                        },
-                    )
-
-                return response
-
-            except Exception as e:
-                # Classify error as recoverable or not
-                model_error = ModelError.from_exception(e, model_id)
-                errors.append(model_error)
-
-                # If error is not recoverable, stop trying fallbacks
-                if not model_error.recoverable:
-                    logger.warning(
-                        "Non-recoverable error from model %s: %s",
-                        model_id,
-                        model_error.message,
-                    )
-                    raise model_error
-
-                # Log recoverable error and continue to next fallback
-                logger.info(
-                    "Recoverable error from model %s (attempt %d/%d): %s",
-                    model_id,
-                    idx + 1,
-                    len(models_to_try),
-                    model_error.message,
-                )
-
-                # If this was the last model, we're out of options
-                if idx == len(models_to_try) - 1:
-                    break
-
-        # All models failed with recoverable errors
-        error_messages = [str(e) for e in errors]
-        combined_error = ModelError(
-            message=(
-                f"All models failed after {len(models_to_try)} attempts. "
-                f"Errors: {'; '.join(error_messages)}"
-            ),
-            model_id="fallback_chain",
-            recoverable=False,
-            cause=errors[-1] if errors else None,
-        )
-        raise combined_error
-
-    async def _call_model_with_fallback_stream(
-        self,
-        ctx: RunContext,
-        messages: Any,
-        system: str | None,
-        tools: Any | None,
-        token_callback: Any,
-    ) -> ModelResponse:
-        """Call model with fallback chain using streaming responses."""
-        models_to_try = [self.model] + self.fallback
-        errors: list[Exception] = []
-
-        for idx, model in enumerate(models_to_try):
-            is_fallback = idx > 0
-            model_id = getattr(model, "model_id", "unknown")
-
-            try:
-                response = await self._stream_model_response(
-                    model=model,
-                    messages=messages,
-                    system=system,
-                    tools=tools,
-                    token_callback=token_callback,
-                )
-
-                if is_fallback:
+                if idx > 0:
                     previous_model_id = getattr(
                         models_to_try[idx - 1], "model_id", "unknown"
                     )
@@ -786,7 +688,8 @@ class LifecycleEngine:
 
             except Exception as e:
                 model_error = (
-                    e if isinstance(e, ModelError) else ModelError.from_exception(e, model_id)
+                    e if isinstance(e, ModelError)
+                    else ModelError.from_exception(e, model_id)
                 )
                 errors.append(model_error)
 
@@ -806,11 +709,8 @@ class LifecycleEngine:
                     model_error.message,
                 )
 
-                if idx == len(models_to_try) - 1:
-                    break
-
         error_messages = [str(e) for e in errors]
-        combined_error = ModelError(
+        raise ModelError(
             message=(
                 f"All models failed after {len(models_to_try)} attempts. "
                 f"Errors: {'; '.join(error_messages)}"
@@ -819,7 +719,6 @@ class LifecycleEngine:
             recoverable=False,
             cause=errors[-1] if errors else None,
         )
-        raise combined_error
 
     async def _stream_model_response(
         self,
@@ -1011,20 +910,22 @@ class LifecycleEngine:
         start = time.monotonic()
         # Use fallback chain if configured (Task 15.0)
         if self._token_callback is not None:
-            response = await self._call_model_with_fallback_stream(
-                ctx=ctx,
-                messages=messages,
-                system=system,
-                tools=tools,
-                token_callback=self._token_callback,
-            )
+            token_cb = self._token_callback
+
+            async def _stream_call(m: Any) -> Any:
+                return await self._stream_model_response(
+                    model=m, messages=messages, system=system,
+                    tools=tools, token_callback=token_cb,
+                )
+
+            response = await self._try_models_with_fallback(ctx, _stream_call)
         else:
-            response = await self._call_model_with_fallback(
-                ctx=ctx,
-                messages=messages,
-                system=system,
-                tools=tools,
-            )
+            async def _complete_call(m: Any) -> Any:
+                return await m.complete(
+                    messages=messages, system=system, tools=tools,
+                )
+
+            response = await self._try_models_with_fallback(ctx, _complete_call)
         duration_ms = (time.monotonic() - start) * 1000
 
         # Track budget
@@ -1117,9 +1018,7 @@ class LifecycleEngine:
 
         # 1. Check cancellation
         if ctx.cancel_token and ctx.cancel_token.is_cancelled:
-            reason = getattr(ctx.cancel_token, "reason", None) or getattr(
-                ctx.cancel_token, "_reason", None
-            ) or "Cancelled"
+            reason = self._cancel_reason(ctx.cancel_token)
             decision = EvalDecision(
                 done=True,
                 error=CancelledError(message=reason),
@@ -1168,6 +1067,15 @@ class LifecycleEngine:
         )
 
         return decision
+
+    @staticmethod
+    def _cancel_reason(cancel_token: Any) -> str:
+        """Extract cancellation reason from a CancelToken."""
+        return (
+            getattr(cancel_token, "reason", None)
+            or getattr(cancel_token, "_reason", None)
+            or "Cancelled"
+        )
 
     def _has_terminal_step(self, plan: Plan) -> bool:
         """Check if plan contains a TERMINAL step."""
@@ -1337,10 +1245,9 @@ class LifecycleEngine:
 
                     # Check cancellation at cycle start (AD-028)
                     if ctx.cancel_token and ctx.cancel_token.is_cancelled:
-                        reason = getattr(ctx.cancel_token, "reason", None) or getattr(
-                            ctx.cancel_token, "_reason", None
-                        ) or "Cancelled"
-                        termination_error = CancelledError(message=reason)
+                        termination_error = CancelledError(
+                            message=self._cancel_reason(ctx.cancel_token)
+                        )
                         break
 
                     # Check budget before starting cycle

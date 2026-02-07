@@ -164,6 +164,52 @@ def _register_builtin_adapters() -> None:
 _register_builtin_adapters()
 
 
+def make_lazy_factory(
+    module_path: str,
+    class_name: str,
+    *,
+    defaults: dict[str, Any] | None = None,
+    missing_dep_message: str | None = None,
+) -> type[Any]:
+    """Create a lazy-loading factory class for an adapter.
+
+    The actual implementation module is imported only when the factory is
+    instantiated. This avoids upfront dependency on optional packages and
+    prevents circular imports.
+
+    Args:
+        module_path: Dotted import path (e.g., "axis_core.adapters.models.anthropic")
+        class_name: Name of the class to import from the module
+        defaults: Default kwargs to set on the instance (via setdefault)
+        missing_dep_message: Error message if ImportError occurs (implies optional dep)
+    """
+    from axis_core.errors import ConfigError
+
+    class _LazyFactory:
+        def __init__(self, **kwargs: Any) -> None:
+            try:
+                import importlib
+
+                mod = importlib.import_module(module_path)
+                cls = getattr(mod, class_name)
+            except ImportError as e:
+                if missing_dep_message:
+                    raise ConfigError(message=missing_dep_message) from e
+                raise
+
+            if defaults:
+                for k, v in defaults.items():
+                    kwargs.setdefault(k, v)
+
+            instance = cls(**kwargs)
+            self.__dict__.update(instance.__dict__)
+            self.__class__ = instance.__class__
+
+    _LazyFactory.__qualname__ = f"Lazy{class_name}"
+    _LazyFactory.__name__ = f"Lazy{class_name}"
+    return _LazyFactory
+
+
 __all__ = [
     "AdapterRegistry",
     "ModelRegistry",
@@ -172,4 +218,5 @@ __all__ = [
     "model_registry",
     "memory_registry",
     "planner_registry",
+    "make_lazy_factory",
 ]

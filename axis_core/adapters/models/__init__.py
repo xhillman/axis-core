@@ -9,59 +9,18 @@ Available adapters (when dependencies are installed):
 - OllamaModel: Local models via Ollama (requires: pip install axis-core[ollama])
 """
 
-from typing import Any
-
-from axis_core.engine.registry import model_registry
-from axis_core.errors import ConfigError
+from axis_core.engine.registry import make_lazy_factory, model_registry
 
 __all__: list[str] = []
 
+_ANTHROPIC_MODULE = "axis_core.adapters.models.anthropic"
+_OPENAI_MODULE = "axis_core.adapters.models.openai"
+
 
 # ===========================================================================
-# Lazy factory for Anthropic models
-# ===========================================================================
-
-
-def _make_lazy_anthropic_factory(model_id: str) -> type[Any]:
-    """Create a lazy-loading factory for a specific Anthropic model.
-
-    The import is deferred until the factory is instantiated, avoiding
-    upfront dependency on the anthropic package.
-
-    Args:
-        model_id: The Anthropic model identifier (e.g., "claude-sonnet-4-20250514")
-
-    Returns:
-        A factory class that lazy-loads AnthropicModel on instantiation
-    """
-
-    class LazyAnthropicFactory:
-        """Lazy factory for Anthropic model that defers import."""
-
-        def __init__(self, **kwargs: Any) -> None:
-            # Lazy import - only happens when someone actually uses this model
-            try:
-                from axis_core.adapters.models.anthropic import AnthropicModel
-            except ImportError as e:
-                raise ConfigError(
-                    f"Model '{model_id}' requires the anthropic package. "
-                    f"Install with: pip install 'axis-core[anthropic]'"
-                ) from e
-
-            # Set model_id default, allow override
-            kwargs.setdefault("model_id", model_id)
-
-            # Create the actual AnthropicModel instance and copy its attributes
-            # This makes the factory transparent - it behaves like AnthropicModel
-            instance = AnthropicModel(**kwargs)
-            self.__dict__.update(instance.__dict__)
-            self.__class__ = instance.__class__  # type: ignore[assignment]
-
-    return LazyAnthropicFactory
-
-
 # Register built-in Anthropic models (Task 16.1)
-# These are registered unconditionally - import happens lazily on use
+# ===========================================================================
+
 _anthropic_models = [
     "claude-3-haiku-20240307",
     "claude-sonnet-4-20250514",
@@ -72,21 +31,46 @@ _anthropic_models = [
     "claude-opus-4-5-20251101",
 ]
 
-for model_id in _anthropic_models:
-    model_registry.register(model_id, _make_lazy_anthropic_factory(model_id))
+for _model_id in _anthropic_models:
+    model_registry.register(
+        _model_id,
+        make_lazy_factory(
+            _ANTHROPIC_MODULE,
+            "AnthropicModel",
+            defaults={"model_id": _model_id},
+            missing_dep_message=(
+                f"Model '{_model_id}' requires the anthropic package. "
+                f"Install with: pip install 'axis-core[anthropic]'"
+            ),
+        ),
+    )
 
-# Register convenience aliases for latest versions
-model_registry.register("claude-haiku", _make_lazy_anthropic_factory("claude-haiku-4-5-20251001"))
-model_registry.register("claude-sonnet", _make_lazy_anthropic_factory("claude-sonnet-4-5-20250929"))
-model_registry.register("claude-opus", _make_lazy_anthropic_factory("claude-opus-4-5-20251101"))
+# Convenience aliases for latest versions
+_anthropic_aliases = {
+    "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-sonnet": "claude-sonnet-4-5-20250929",
+    "claude-opus": "claude-opus-4-5-20251101",
+}
+
+for _alias, _target in _anthropic_aliases.items():
+    model_registry.register(
+        _alias,
+        make_lazy_factory(
+            _ANTHROPIC_MODULE,
+            "AnthropicModel",
+            defaults={"model_id": _target},
+            missing_dep_message=(
+                f"Model '{_alias}' requires the anthropic package. "
+                f"Install with: pip install 'axis-core[anthropic]'"
+            ),
+        ),
+    )
 
 
 # ===========================================================================
 # Eager export of AnthropicModel class (for direct use)
 # ===========================================================================
 
-# Try to export the actual class for users who want to import it directly
-# This is optional - if anthropic isn't installed, just skip the export
 try:
     from axis_core.adapters.models.anthropic import (
         MODEL_PRICING,  # noqa: F401 - re-exported
@@ -95,55 +79,13 @@ try:
 
     __all__.extend(["AnthropicModel", "MODEL_PRICING"])
 except ImportError:
-    # anthropic package not installed - that's fine, lazy registration still works
     pass
 
 
 # ===========================================================================
-# Lazy factory for OpenAI models
+# Register built-in OpenAI models (Task 16.1)
 # ===========================================================================
 
-
-def _make_lazy_openai_factory(model_id: str) -> type[Any]:
-    """Create a lazy-loading factory for a specific OpenAI model.
-
-    The import is deferred until the factory is instantiated, avoiding
-    upfront dependency on the openai package.
-
-    Args:
-        model_id: The OpenAI model identifier (e.g., "gpt-4", "gpt-4o")
-
-    Returns:
-        A factory class that lazy-loads OpenAIModel on instantiation
-    """
-
-    class LazyOpenAIFactory:
-        """Lazy factory for OpenAI model that defers import."""
-
-        def __init__(self, **kwargs: Any) -> None:
-            # Lazy import - only happens when someone actually uses this model
-            try:
-                from axis_core.adapters.models.openai import OpenAIModel
-            except ImportError as e:
-                raise ConfigError(
-                    f"Model '{model_id}' requires the openai package. "
-                    f"Install with: pip install 'axis-core[openai]'"
-                ) from e
-
-            # Set model_id default, allow override
-            kwargs.setdefault("model_id", model_id)
-
-            # Create the actual OpenAIModel instance and copy its attributes
-            # This makes the factory transparent - it behaves like OpenAIModel
-            instance = OpenAIModel(**kwargs)
-            self.__dict__.update(instance.__dict__)
-            self.__class__ = instance.__class__  # type: ignore[assignment]
-
-    return LazyOpenAIFactory
-
-
-# Register built-in OpenAI models (Task 16.1)
-# These are registered unconditionally - import happens lazily on use
 _openai_models = [
     # GPT-5 series
     "gpt-5.2",
@@ -206,16 +148,25 @@ _openai_models = [
     "gpt-image-1-mini",
 ]
 
-for model_id in _openai_models:
-    model_registry.register(model_id, _make_lazy_openai_factory(model_id))
+for _model_id in _openai_models:
+    model_registry.register(
+        _model_id,
+        make_lazy_factory(
+            _OPENAI_MODULE,
+            "OpenAIModel",
+            defaults={"model_id": _model_id},
+            missing_dep_message=(
+                f"Model '{_model_id}' requires the openai package. "
+                f"Install with: pip install 'axis-core[openai]'"
+            ),
+        ),
+    )
 
 
 # ===========================================================================
 # Eager export of OpenAIModel class (for direct use)
 # ===========================================================================
 
-# Try to export the actual class for users who want to import it directly
-# This is optional - if openai isn't installed, just skip the export
 try:
     from axis_core.adapters.models.openai import (
         MODEL_PRICING as OPENAI_PRICING,  # noqa: F401 - re-exported
@@ -226,10 +177,4 @@ try:
 
     __all__.extend(["OpenAIModel", "OPENAI_PRICING"])
 except ImportError:
-    # openai package not installed - that's fine, lazy registration still works
     pass
-
-
-# ===========================================================================
-# Future adapters will follow the same pattern
-# ===========================================================================

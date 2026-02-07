@@ -14,102 +14,39 @@ All protocols use structural subtyping via typing.Protocol - implementations
 don't need to explicitly inherit from these interfaces.
 """
 
-__all__ = [
+import importlib
+
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # Model protocol
-    "ModelAdapter",
-    "ModelResponse",
-    "ModelChunk",
-    "ToolCall",
-    "UsageStats",
+    "ModelAdapter": ("axis_core.protocols.model", "ModelAdapter"),
+    "ModelResponse": ("axis_core.protocols.model", "ModelResponse"),
+    "ModelChunk": ("axis_core.protocols.model", "ModelChunk"),
+    "ToolCall": ("axis_core.protocols.model", "ToolCall"),
+    "UsageStats": ("axis_core.protocols.model", "UsageStats"),
     # Memory protocol
-    "MemoryAdapter",
-    "MemoryItem",
-    "MemoryCapability",
-    "SessionStore",
+    "MemoryAdapter": ("axis_core.protocols.memory", "MemoryAdapter"),
+    "MemoryItem": ("axis_core.protocols.memory", "MemoryItem"),
+    "MemoryCapability": ("axis_core.protocols.memory", "MemoryCapability"),
+    "SessionStore": ("axis_core.protocols.memory", "SessionStore"),
     # Planner protocol
-    "Planner",
-    "Plan",
-    "PlanStep",
-    "StepType",
+    "Planner": ("axis_core.protocols.planner", "Planner"),
+    "Plan": ("axis_core.protocols.planner", "Plan"),
+    "PlanStep": ("axis_core.protocols.planner", "PlanStep"),
+    "StepType": ("axis_core.protocols.planner", "StepType"),
     # Telemetry protocol
-    "TelemetrySink",
-    "TraceEvent",
-    "BufferMode",
-]
+    "TelemetrySink": ("axis_core.protocols.telemetry", "TelemetrySink"),
+    "TraceEvent": ("axis_core.protocols.telemetry", "TraceEvent"),
+    "BufferMode": ("axis_core.protocols.telemetry", "BufferMode"),
+}
+
+__all__ = list(_LAZY_IMPORTS.keys())
 
 
 def __getattr__(name: str) -> object:
     """Lazy loading of protocol classes to avoid circular imports."""
-    # Model protocol
-    if name == "ModelAdapter":
-        from axis_core.protocols.model import ModelAdapter
-
-        return ModelAdapter
-    if name == "ModelResponse":
-        from axis_core.protocols.model import ModelResponse
-
-        return ModelResponse
-    if name == "ModelChunk":
-        from axis_core.protocols.model import ModelChunk
-
-        return ModelChunk
-    if name == "ToolCall":
-        from axis_core.protocols.model import ToolCall
-
-        return ToolCall
-    if name == "UsageStats":
-        from axis_core.protocols.model import UsageStats
-
-        return UsageStats
-
-    # Memory protocol
-    if name == "MemoryAdapter":
-        from axis_core.protocols.memory import MemoryAdapter
-
-        return MemoryAdapter
-    if name == "MemoryItem":
-        from axis_core.protocols.memory import MemoryItem
-
-        return MemoryItem
-    if name == "MemoryCapability":
-        from axis_core.protocols.memory import MemoryCapability
-
-        return MemoryCapability
-    if name == "SessionStore":
-        from axis_core.protocols.memory import SessionStore
-
-        return SessionStore
-
-    # Planner protocol
-    if name == "Planner":
-        from axis_core.protocols.planner import Planner
-
-        return Planner
-    if name == "Plan":
-        from axis_core.protocols.planner import Plan
-
-        return Plan
-    if name == "PlanStep":
-        from axis_core.protocols.planner import PlanStep
-
-        return PlanStep
-    if name == "StepType":
-        from axis_core.protocols.planner import StepType
-
-        return StepType
-
-    # Telemetry protocol
-    if name == "TelemetrySink":
-        from axis_core.protocols.telemetry import TelemetrySink
-
-        return TelemetrySink
-    if name == "TraceEvent":
-        from axis_core.protocols.telemetry import TraceEvent
-
-        return TraceEvent
-    if name == "BufferMode":
-        from axis_core.protocols.telemetry import BufferMode
-
-        return BufferMode
+    if name in _LAZY_IMPORTS:
+        module_path, attr_name = _LAZY_IMPORTS[name]
+        module = importlib.import_module(module_path)
+        return getattr(module, attr_name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

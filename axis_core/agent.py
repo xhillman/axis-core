@@ -23,7 +23,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget, BudgetState
@@ -86,70 +86,32 @@ class _StreamTelemetrySink:
         pass
 
 
-def _coerce_budget(value: dict[str, Any] | Budget | None) -> Budget:
-    """Coerce a dict or Budget into a Budget instance."""
+T = TypeVar("T")
+
+
+def _coerce(
+    value: dict[str, Any] | T | None,
+    cls: type[T],
+    arg_name: str,
+    default: T | None = None,
+) -> T | None:
+    """Coerce a dict, instance, or None into the target type.
+
+    Args:
+        value: Value to coerce (dict, instance of cls, or None)
+        cls: Target dataclass type to construct from dict
+        arg_name: Argument name for error messages
+        default: Value to return when input is None
+    """
     if value is None:
-        return Budget()
-    if isinstance(value, Budget):
+        return default
+    if isinstance(value, cls):
         return value
     if isinstance(value, dict):
-        return Budget(**value)
+        return cls(**value)
     raise TypeError(
-        f"Argument 'budget' must be Budget or dict, got {type(value).__name__}"
-    )
-
-
-def _coerce_timeouts(value: dict[str, Any] | Timeouts | None) -> Timeouts:
-    """Coerce a dict or Timeouts into a Timeouts instance."""
-    if value is None:
-        return Timeouts()
-    if isinstance(value, Timeouts):
-        return value
-    if isinstance(value, dict):
-        return Timeouts(**value)
-    raise TypeError(
-        f"Argument 'timeouts' must be Timeouts or dict, got {type(value).__name__}"
-    )
-
-
-def _coerce_retry(value: dict[str, Any] | RetryPolicy | None) -> RetryPolicy | None:
-    """Coerce a dict or RetryPolicy into a RetryPolicy instance."""
-    if value is None:
-        return None
-    if isinstance(value, RetryPolicy):
-        return value
-    if isinstance(value, dict):
-        return RetryPolicy(**value)
-    raise TypeError(
-        f"Argument 'retry' must be RetryPolicy or dict, got {type(value).__name__}"
-    )
-
-
-def _coerce_rate_limits(
-    value: dict[str, Any] | RateLimits | None,
-) -> RateLimits | None:
-    """Coerce a dict or RateLimits into a RateLimits instance."""
-    if value is None:
-        return None
-    if isinstance(value, RateLimits):
-        return value
-    if isinstance(value, dict):
-        return RateLimits(**value)
-    raise TypeError(
-        f"Argument 'rate_limits' must be RateLimits or dict, got {type(value).__name__}"
-    )
-
-
-def _coerce_cache(value: dict[str, Any] | CacheConfig | None) -> CacheConfig | None:
-    """Coerce a dict or CacheConfig into a CacheConfig instance."""
-    if value is None:
-        return None
-    if isinstance(value, CacheConfig):
-        return value
-    if isinstance(value, dict):
-        return CacheConfig(**value)
-    raise TypeError(
-        f"Argument 'cache' must be CacheConfig or dict, got {type(value).__name__}"
+        f"Argument '{arg_name}' must be {cls.__name__} or dict, "
+        f"got {type(value).__name__}"
     )
 
 
@@ -274,11 +236,11 @@ class Agent:
         self._fallback: list[Any] = fallback or []
         self._memory = config.default_memory if memory is _UNSET else memory
         self._planner = config.default_planner if planner is _UNSET else planner
-        self._budget = _coerce_budget(budget)
-        self._timeouts = _coerce_timeouts(timeouts)
-        self._rate_limits = _coerce_rate_limits(rate_limits)
-        self._retry = _coerce_retry(retry)
-        self._cache = _coerce_cache(cache)
+        self._budget = _coerce(budget, Budget, "budget", default=Budget()) or Budget()
+        self._timeouts = _coerce(timeouts, Timeouts, "timeouts", default=Timeouts()) or Timeouts()
+        self._rate_limits = _coerce(rate_limits, RateLimits, "rate_limits")
+        self._retry = _coerce(retry, RetryPolicy, "retry")
+        self._cache = _coerce(cache, CacheConfig, "cache")
         self._verbose = verbose
         self._auth = auth
 
