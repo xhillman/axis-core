@@ -483,6 +483,9 @@ pytest --cov=axis_core
 # Skip slow integration tests
 pytest -m "not slow"
 
+# Run the live Anthropic integration test (skips automatically if key is missing)
+ANTHROPIC_API_KEY=sk-ant-... pytest tests/engine/test_real_llm_integration.py
+
 # Type checking (strict mode enforced)
 mypy axis_core --strict
 

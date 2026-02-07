@@ -93,18 +93,21 @@ dev/                     # SPEC.md, PRD, task list, process docs
 **Run tests:** `pytest` (all) · `pytest -m "not slow"` (fast) · `pytest tests/engine/test_lifecycle.py` (single)
 
 **Add a new adapter:**
+
 1. Create `axis_core/adapters/{category}/new_adapter.py` implementing the Protocol
 2. Add lazy factory registration in `axis_core/adapters/{category}/__init__.py`
 3. Add tests in `tests/adapters/{category}/test_new_adapter.py`
 4. If optional dep: add to `pyproject.toml` extras, wrap import in try/except
 
 **Fix a bug:**
+
 1. Identify the layer (Agent API → Engine → Adapter)
 2. Read the relevant phase module in `engine/phases/` or adapter file
 3. Write a failing test first (public-contract only)
 4. Fix, run `pytest && ruff check axis_core --fix && mypy axis_core --strict`
 
 **Add a feature:**
+
 1. Check `dev/tasks-axis-core-prd.md` for task context
 2. Check `dev/SPEC.md` for ADR constraints
 3. Follow TDD flow from `dev/process-tasks.md`

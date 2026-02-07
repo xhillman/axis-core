@@ -13,6 +13,7 @@ Before starting any task:
 5. If `REPO_MAP.md` is missing or outdated, regenerate it as the first step
 
 **Map files:**
+
 - `REPO_MAP.md` — root router (start here)
 - `.agent/maps/engine_lifecycle.md` — execution engine, phases, lifecycle loop
 - `.agent/maps/adapters.md` — model, memory, planner, telemetry adapters
