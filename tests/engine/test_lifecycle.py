@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from axis_core.budget import Budget
 from axis_core.cancel import CancelToken
+from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts
 from axis_core.context import (
     CycleState,
     EvalDecision,
@@ -35,6 +37,9 @@ from axis_core.errors import (
     CancelledError,
     ConfigError,
     PlanError,
+)
+from axis_core.errors import (
+    TimeoutError as AxisTimeoutError,
 )
 from axis_core.protocols.model import ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
@@ -2214,3 +2219,361 @@ class TestModelFallback:
         assert len(fallback_events) == 1
         assert fallback_events[0].data.get("original_planner") == "sequential"
         assert "API error" in fallback_events[0].data.get("reason", "")
+
+
+def _runtime_config(
+    *,
+    timeouts: Timeouts | None = None,
+    retry: RetryPolicy | None = None,
+    rate_limits: RateLimits | None = None,
+    cache: CacheConfig | None = None,
+) -> Any:
+    """Build a minimal runtime config object for LifecycleEngine.execute()."""
+    return SimpleNamespace(
+        timeouts=timeouts,
+        retry=retry,
+        rate_limits=rate_limits,
+        cache=cache,
+    )
+
+
+class TestExecutionPoliciesTask17:
+    """Task 17 tests for timeout/retry/rate-limit/cache enforcement."""
+
+    @pytest.mark.asyncio
+    async def test_execute_enforces_plan_phase_timeout(self, mock_model: MockModelAdapter) -> None:
+        class SlowPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                await asyncio.sleep(0.05)
+                return Plan(
+                    id="slow-plan",
+                    goal="slow",
+                    steps=(
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                        ),
+                    ),
+                )
+
+        engine = LifecycleEngine(model=mock_model, planner=SlowPlanner())
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(timeouts=Timeouts(plan=0.01, total=5.0)),
+        )
+
+        assert result["success"] is False
+        assert isinstance(result["error"], AxisTimeoutError)
+        assert result["error"].phase == Phase.PLAN.value
+
+    @pytest.mark.asyncio
+    async def test_model_retry_policy_retries_recoverable_failures(self) -> None:
+        class FlakyModel(MockModelAdapter):
+            def __init__(self) -> None:
+                super().__init__(
+                    responses=[
+                        ModelResponse(
+                            content="model-ok",
+                            tool_calls=None,
+                            usage=UsageStats(
+                                input_tokens=5,
+                                output_tokens=5,
+                                total_tokens=10,
+                            ),
+                            cost_usd=0.0005,
+                        )
+                    ]
+                )
+                self.attempts = 0
+
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                self.attempts += 1
+                if self.attempts < 3:
+                    exc_class = type("RateLimitError", (Exception,), {})
+                    raise exc_class("transient")
+                return await super().complete(*args, **kwargs)
+
+        class ModelThenTerminalPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="model-then-terminal",
+                    goal="retry model",
+                    steps=(
+                        PlanStep(id="model", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("model",),
+                        ),
+                    ),
+                )
+
+        model = FlakyModel()
+        engine = LifecycleEngine(model=model, planner=ModelThenTerminalPlanner())
+
+        result = await engine.execute(
+            input_text="retry model",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(
+                retry=RetryPolicy(
+                    max_attempts=3,
+                    backoff="fixed",
+                    initial_delay=0.0,
+                    max_delay=0.0,
+                    jitter=False,
+                )
+            ),
+        )
+
+        assert result["success"] is True
+        assert model.attempts == 3
+        assert result["budget_state"].model_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_retry_policy_exhaustion_fails_step(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        from axis_core.tool import tool
+
+        calls = {"count": 0}
+
+        @tool(
+            retry=RetryPolicy(
+                max_attempts=2,
+                backoff="fixed",
+                initial_delay=0.0,
+                max_delay=0.0,
+                jitter=False,
+            )
+        )
+        def unstable_tool() -> str:
+            calls["count"] += 1
+            raise RuntimeError("boom")
+
+        class ToolPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="tool-plan",
+                    goal="retry tool",
+                    steps=(
+                        PlanStep(
+                            id="tool-step",
+                            type=StepType.TOOL,
+                            payload={"tool": "unstable_tool", "args": {}},
+                        ),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("tool-step",),
+                        ),
+                    ),
+                )
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=ToolPlanner(),
+            tools={"unstable_tool": unstable_tool},
+        )
+
+        result = await engine.execute(
+            input_text="retry tool",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(),
+        )
+
+        assert result["success"] is False
+        assert calls["count"] == 2
+        assert result["budget_state"].tool_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_rate_limit_breach_times_out_act_phase(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        from axis_core.tool import tool
+
+        @tool
+        def fast_tool(value: str) -> str:
+            return value
+
+        class TwoToolPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="two-tools",
+                    goal="rate limit",
+                    steps=(
+                        PlanStep(
+                            id="tool-1",
+                            type=StepType.TOOL,
+                            payload={"tool": "fast_tool", "args": {"value": "a"}},
+                        ),
+                        PlanStep(
+                            id="tool-2",
+                            type=StepType.TOOL,
+                            payload={"tool": "fast_tool", "args": {"value": "b"}},
+                        ),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("tool-1", "tool-2"),
+                        ),
+                    ),
+                )
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=TwoToolPlanner(),
+            tools={"fast_tool": fast_tool},
+        )
+
+        result = await engine.execute(
+            input_text="rate limit tool",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(
+                timeouts=Timeouts(act=0.02, total=5.0),
+                rate_limits=RateLimits(tool_calls="1/hour"),
+            ),
+        )
+
+        assert result["success"] is False
+        assert isinstance(result["error"], AxisTimeoutError)
+        assert result["error"].phase == Phase.ACT.value
+
+    @pytest.mark.asyncio
+    async def test_model_response_cache_hit_avoids_second_model_call(self) -> None:
+        class ModelThenModelPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="model-cache-plan",
+                    goal="model cache",
+                    steps=(
+                        PlanStep(id="model-1", type=StepType.MODEL, payload={}),
+                        PlanStep(id="model-2", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("model-1", "model-2"),
+                        ),
+                    ),
+                )
+
+        model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="cached-response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
+                    cost_usd=0.001,
+                )
+            ]
+        )
+        engine = LifecycleEngine(model=model, planner=ModelThenModelPlanner())
+
+        result = await engine.execute(
+            input_text="cache model",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(
+                cache=CacheConfig(
+                    enabled=True,
+                    model_responses=True,
+                    tool_results=False,
+                    ttl=60,
+                )
+            ),
+        )
+
+        assert result["success"] is True
+        assert len(model.calls) == 1
+        assert result["budget_state"].model_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_cache_and_non_cacheable_bypass(self, mock_model: MockModelAdapter) -> None:
+        from axis_core.tool import tool
+
+        cached_calls = {"count": 0}
+        uncached_calls = {"count": 0}
+
+        @tool(cache_ttl=60)
+        def cached_tool(value: str) -> str:
+            cached_calls["count"] += 1
+            return f"cached:{value}"
+
+        @tool
+        def uncached_tool(value: str) -> str:
+            uncached_calls["count"] += 1
+            return f"uncached:{value}"
+
+        class CachePlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="tool-cache",
+                    goal="tool cache",
+                    steps=(
+                        PlanStep(
+                            id="cached-1",
+                            type=StepType.TOOL,
+                            payload={"tool": "cached_tool", "args": {"value": "x"}},
+                        ),
+                        PlanStep(
+                            id="cached-2",
+                            type=StepType.TOOL,
+                            payload={"tool": "cached_tool", "args": {"value": "x"}},
+                        ),
+                        PlanStep(
+                            id="uncached-1",
+                            type=StepType.TOOL,
+                            payload={"tool": "uncached_tool", "args": {"value": "x"}},
+                        ),
+                        PlanStep(
+                            id="uncached-2",
+                            type=StepType.TOOL,
+                            payload={"tool": "uncached_tool", "args": {"value": "x"}},
+                        ),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("cached-2", "uncached-2"),
+                        ),
+                    ),
+                )
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=CachePlanner(),
+            tools={
+                "cached_tool": cached_tool,
+                "uncached_tool": uncached_tool,
+            },
+        )
+
+        result = await engine.execute(
+            input_text="tool cache",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(
+                cache=CacheConfig(
+                    enabled=True,
+                    model_responses=False,
+                    tool_results=True,
+                    ttl=60,
+                )
+            ),
+        )
+
+        assert result["success"] is True
+        assert cached_calls["count"] == 1
+        assert uncached_calls["count"] == 2

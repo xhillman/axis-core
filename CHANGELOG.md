@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added lifecycle policy enforcement tests covering phase timeouts, retry exhaustion, rate-limit
+  breach behavior, model/tool cache hits, and non-cacheable bypass.
+
+### Changed
+
+- Engine now enforces per-phase timeouts (`observe`, `plan`, `act`, `evaluate`, `finalize`) in
+  addition to wall-time budget limits.
+- Added runtime retry enforcement for model and tool steps using configured/global policy and
+  step/tool overrides.
+- Added runtime rate-limit enforcement for model calls and tool calls (global + tool-specific)
+  using `RateLimiter`.
+- Added in-memory TTL cache enforcement for model responses and cacheable tool results with
+  max-size eviction.
+- `Agent` now passes resolved runtime config into `LifecycleEngine.execute()` so timeout/retry/
+  rate-limit/cache policies are applied consistently for `run*` and `stream*`.
+
 ## [0.6.0] - 2026-02-08
 
 ### Added

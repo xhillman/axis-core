@@ -30,7 +30,14 @@ from typing import Any, TypeVar
 from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget, BudgetState
 from axis_core.cancel import CancelToken
-from axis_core.config import CacheConfig, RateLimits, RetryPolicy, Timeouts, config
+from axis_core.config import (
+    CacheConfig,
+    RateLimits,
+    ResolvedConfig,
+    RetryPolicy,
+    Timeouts,
+    config,
+)
 from axis_core.context import RunState
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.engine.registry import memory_registry
@@ -444,6 +451,21 @@ class Agent:
             return timeout
         return self._timeouts.total
 
+    def _resolved_config(self) -> ResolvedConfig:
+        """Build the resolved runtime config passed into the lifecycle engine."""
+        return ResolvedConfig(
+            model=self._model,
+            planner=self._planner,
+            memory=self._memory,
+            budget=self._budget,
+            timeouts=self._timeouts,
+            rate_limits=self._rate_limits,
+            retry=self._retry,
+            cache=self._cache,
+            telemetry_enabled=self._telemetry_enabled,
+            verbose=self._verbose,
+        )
+
     def _build_failure_result(
         self,
         error: AxisError,
@@ -587,6 +609,7 @@ class Agent:
                 trace_collector = TraceCollector() if self._telemetry_enabled else None
                 extra_sinks = [trace_collector] if trace_collector else []
                 engine = self._build_engine(extra_sinks=extra_sinks)
+                runtime_config = self._resolved_config()
 
                 input_text = input if isinstance(input, str) else str(input)
 
@@ -598,6 +621,7 @@ class Agent:
                         context=context,
                         attachments=attachments,
                         cancel_token=cancel_token,
+                        config=runtime_config,
                     )
                     if effective_timeout is None:
                         raw = await execute_coro
@@ -724,6 +748,7 @@ class Agent:
                     extra_sinks.append(_StreamTelemetrySink(queue))
 
                 engine = self._build_engine(extra_sinks=extra_sinks)
+                runtime_config = self._resolved_config()
                 input_text = input if isinstance(input, str) else str(input)
 
                 async def _on_token(token: str) -> None:
@@ -753,6 +778,7 @@ class Agent:
                             context=context,
                             attachments=attachments,
                             cancel_token=cancel_token,
+                            config=runtime_config,
                             token_callback=_on_token,
                         )
                         if effective_timeout is None:

@@ -12,6 +12,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - **Protocol-based adapters** — Pluggable models, memory, planners, and telemetry
 - **Model fallback** — Automatic fallback to secondary models on recoverable errors
 - **Tool system** — Simple `@tool` decorator with automatic schema generation
+- **Runtime policy enforcement** — Per-phase timeouts, retries, rate limits, and in-memory caching
 - **Session support** — Multi-turn conversations with optimistic locking (persistence via memory adapters)
 - **Budget tracking** — Cost, token, and cycle limits with real-time tracking
 - **Attachments & cancellation** — Image/PDF attachments (10MB limit) and cooperative cancellation
@@ -159,7 +160,7 @@ Each agent run follows this cycle:
 ### Agent
 
 ```python
-from axis_core import Agent
+from axis_core import Agent, Budget, CacheConfig, RateLimits, RetryPolicy, Timeouts
 
 agent = Agent(
     tools=[...],              # List of @tool-decorated functions
@@ -171,6 +172,13 @@ agent = Agent(
         max_cycles=10,
         max_cost_usd=1.00,
     ),
+    timeouts=Timeouts(        # Per-phase + total timeout policy
+        act=60.0,
+        total=300.0,
+    ),
+    retry=RetryPolicy(max_attempts=3, backoff="exponential"),
+    rate_limits=RateLimits(model_calls="60/minute", tool_calls="30/minute"),
+    cache=CacheConfig(enabled=True, model_responses=True, tool_results=True, ttl=3600),
 )
 
 # Synchronous
@@ -365,7 +373,7 @@ agent = Agent(
 
 - `@tool` decorator with automatic JSON schema generation
 - Capability declarations (NETWORK, FILESYSTEM, DESTRUCTIVE, etc.)
-- Tool metadata for rate limits/timeouts (runtime enforcement in progress)
+- Runtime enforcement for global and tool-level timeout/retry/rate-limit/cache policies
 - Tool context with budget access
 
 **Memory Adapters:**
@@ -403,7 +411,6 @@ These are scoped targets tied to the current task list and near-term releases.
 **Execution & Safety:**
 
 - **Confirmation Handler** — User approval for destructive operations (AD-002)
-- **Runtime Enforcement** — Timeouts, rate limits, retries, and cache behavior
 - **Checkpoint/Resume** — Persist and resume agent runs at phase boundaries (AD-005)
 
 **Telemetry & Memory:**
