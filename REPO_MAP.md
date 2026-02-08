@@ -20,6 +20,7 @@
 | Change budget / config / environment loading | [configs_env.md](.agent/maps/configs_env.md) |
 | Add/fix tests | [testing_quality.md](.agent/maps/testing_quality.md) |
 | Change build, packaging, CI, or release process | [build_release.md](.agent/maps/build_release.md) |
+| Update process docs, prompt templates, workflow skills, agent guidance, or execution memory/log docs (`AGENTS.md`, `CLAUDE.md`, `dev/spec-driven.md`, `dev/process-tasks.md`, `dev/memory.md`, `dev/task-summaries.md`, `dev/production-safety-gate.md`, `dev/skills/*`) | [meta_process.md](.agent/maps/meta_process.md) |
 | Add telemetry / observability features | [adapters.md](.agent/maps/adapters.md) |
 | Add a new tool or modify tool system | [domain_core.md](.agent/maps/domain_core.md) |
 | Work on examples | [adapters.md](.agent/maps/adapters.md) (for planner/model context) |

@@ -10,6 +10,8 @@ Before starting any task:
 4. Work from those maps — avoid reading unrelated files to minimize context usage
 5. If `REPO_MAP.md` is missing or outdated, regenerate it as the first step
 
+For meta-process or prompt-document updates, route via `REPO_MAP.md` to `.agent/maps/meta_process.md`.
+
 ## Project Structure & Module Organization
 
 - `axis_core/` is the core package. Key areas include `adapters/`, `engine/`, `loadouts/`, `protocols/`, and `testing/`.
@@ -115,7 +117,25 @@ Treat these as mandatory checks before marking work complete:
 
 ## Project Authority Map
 
+- Repo Router: `REPO_MAP.md` (entrypoint for minimal-context routing)
 - Task List: tasks-axis-core-prd.md (source of truth for task IDs, sub-tasks, file targets)
 - Architecture & Constraints: SPEC.md (ADRs, invariants, design rules)
-- Execution Process: process-tasks.md (TDD flow, pacing, completion protocol)
+- Execution Process: process-tasks.md (canonical source for TDD, quality gates, completion, failure handling)
+- Assistant Memory: `dev/memory.md` (persistent user preferences + mistakes log)
+- Task Summaries: `dev/task-summaries.md` (one concise summary per completed parent task)
+- Production Safety Gate: `dev/production-safety-gate.md` (required before production release)
+- Workflow Skills: `dev/skills/*/SKILL.md` (route, execute, gates, memory/summary, release safety)
 - Product Intent (only if needed): axis-core-prd.md
+- Execution Prompt Template: `dev/spec-driven.md` (behavioral guardrails; references process doc instead of duplicating mechanics)
+
+## Process Ownership (Avoid Drift)
+
+- Keep execution mechanics in `dev/process-tasks.md` only.
+- Keep behavioral prompt constraints in `dev/spec-driven.md`.
+- Keep routing guidance in `REPO_MAP.md` and `.agent/maps/*.md`.
+- Keep persistent preferences/mistakes in `dev/memory.md` and update it as needed during execution.
+- Keep completed-task summaries in `dev/task-summaries.md` and append entries after parent completion.
+- Post the same concise parent-task summary in chat after completion.
+- Run acceptance checks before parent execution and production safety checks before production release.
+- When process policy changes, update `AGENTS.md`, `CLAUDE.md`, and related map docs in the same change.
+- After policy-doc edits, run `python3 scripts/check_doc_policy_consistency.py`.

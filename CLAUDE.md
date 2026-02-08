@@ -12,6 +12,8 @@ Before starting any task:
 4. Work from those maps — avoid reading unrelated files to minimize context usage
 5. If `REPO_MAP.md` is missing or outdated, regenerate it as the first step
 
+For meta-process or prompt-document updates, route via `REPO_MAP.md` to `.agent/maps/meta_process.md`.
+
 **Map files:**
 
 - `REPO_MAP.md` — root router (start here)
@@ -22,6 +24,7 @@ Before starting any task:
 - `.agent/maps/testing_quality.md` — tests, quality checks, conventions
 - `.agent/maps/configs_env.md` — config, budget, environment variables
 - `.agent/maps/build_release.md` — packaging, publishing, dependencies
+- `.agent/maps/meta_process.md` — execution/prompt docs, task/process policy alignment
 
 ## Project Overview
 
@@ -203,7 +206,25 @@ Treat these as mandatory checks before marking work complete:
 
 ## Project Authority Map
 
+- Repo Router: `REPO_MAP.md` (entrypoint for minimal-context routing)
 - Task List: tasks-axis-core-prd.md (source of truth for task IDs, sub-tasks, file targets)
 - Architecture & Constraints: SPEC.md (ADRs, invariants, design rules)
-- Execution Process: process-tasks.md (TDD flow, pacing, completion protocol)
+- Execution Process: process-tasks.md (canonical source for TDD, quality gates, completion, failure handling)
+- Assistant Memory: `dev/memory.md` (persistent user preferences + mistakes log)
+- Task Summaries: `dev/task-summaries.md` (one concise summary per completed parent task)
+- Production Safety Gate: `dev/production-safety-gate.md` (required before production release)
+- Workflow Skills: `dev/skills/*/SKILL.md` (route, execute, gates, memory/summary, release safety)
 - Product Intent (only if needed): axis-core-prd.md
+- Execution Prompt Template: `dev/spec-driven.md` (behavioral guardrails only; references process doc for mechanics)
+
+## Process Ownership (Avoid Drift)
+
+- Keep execution mechanics in `dev/process-tasks.md`.
+- Keep behavioral prompt constraints in `dev/spec-driven.md`.
+- Keep routing rules in `REPO_MAP.md` and `.agent/maps/*.md`.
+- Keep persistent preferences/mistakes in `dev/memory.md` and update it as needed during execution.
+- Keep completed-task summaries in `dev/task-summaries.md` and append entries after parent completion.
+- Post the same concise parent-task summary in chat after completion.
+- Run acceptance checks before parent execution and production safety checks before production release.
+- Do not duplicate detailed TDD/completion mechanics across multiple docs when a canonical source exists.
+- After policy-doc edits, run `python3 scripts/check_doc_policy_consistency.py`.

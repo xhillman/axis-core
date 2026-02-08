@@ -50,12 +50,20 @@ tests/
 
 | Command | Purpose |
 |---|---|
+| `pytest <affected-tests>` | Sub-task gate: validate touched behavior |
+| `ruff check <touched-paths>` | Sub-task gate: lint touched scope |
+| `mypy <touched-python-paths>` | Sub-task gate: type-check touched scope |
 | `pytest` | Run all 633 tests (~5s) |
 | `pytest --cov=axis_core` | With coverage |
 | `pytest -m "not slow"` | Skip slow tests |
 | `pytest tests/engine/test_lifecycle.py` | Single file |
-| `ruff check axis_core tests --fix` | Lint + autofix |
-| `mypy axis_core --strict` | Type check (5 pre-existing errors in sqlite.py, redis.py) |
+| `ruff check axis_core tests` | Parent-task gate: full lint |
+| `mypy axis_core --strict` | Parent-task gate: full type check |
+
+## Gate Levels
+
+- **Sub-task gate:** run touched-scope tests/lint/types before marking sub-task complete.
+- **Parent-task gate:** run full `pytest`, `ruff check axis_core tests`, and `mypy axis_core --strict` before marking parent complete.
 
 ## Testing Rules
 
@@ -74,12 +82,6 @@ tests/
 - Async: `@pytest.mark.asyncio` (asyncio_mode=auto in pytest.ini)
 - Pattern: `test_*.py` files, `Test*` classes, `test_*` functions
 - Absolute imports only: `from axis_core.* import ...`
-
-## Known Issues
-
-- mypy reports 5 errors: missing stubs for `redis.*` and `aiosqlite` (optional deps with `ignore_missing_imports`)
-- `RateLimiter` (tool.py) has tests but is not wired into lifecycle
-- `append_model_call`/`append_tool_call` (context.py) are defined and tested but not called by engine
 
 ## Common Change Patterns
 
