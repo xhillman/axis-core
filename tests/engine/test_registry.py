@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+
 import pytest
 
 from axis_core.engine.registry import (
@@ -99,6 +103,28 @@ class TestModelRegistry:
 
 class TestBuiltInModelRegistration:
     """Tests for built-in model registration."""
+
+    def test_auto_registration_works_without_manual_adapter_imports(self) -> None:
+        """Registry import should eagerly register built-in model aliases."""
+        script = """
+import json
+from axis_core.engine.registry import model_registry
+registered = model_registry.list()
+print(json.dumps({
+    "count": len(registered),
+    "has_claude_haiku": "claude-haiku" in registered,
+}))
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        data = json.loads(completed.stdout.strip())
+
+        assert data["count"] > 0
+        assert data["has_claude_haiku"] is True
 
     def test_anthropic_models_registered(self) -> None:
         """Built-in Anthropic models should be registered in global model_registry."""

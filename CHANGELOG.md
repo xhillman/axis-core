@@ -2,9 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-02-08
+
+### Fixed
+
+- Restored built-in adapter auto-registration during normal import paths (`from axis_core import Agent`).
+- Fixed registry initialization order that could leave model/memory/planner registries empty and raise:
+  `ConfigError: Unknown adapter 'claude-haiku'`.
+- Added regression coverage to validate built-in registrations in a fresh interpreter without manual adapter imports.
+
+## [0.5.0] - 2026-02-07
+
+### Added
+
+- Shared redaction utility and default redaction across telemetry, traces, and persisted run state.
+- Real Anthropic integration test (slow, API-key gated) for end-to-end `RunResult` validation.
+- Repository map and focused subsystem maps for low-context task routing.
+- Explicit roadmap labeling in README for committed vs exploratory features.
+- CHANGELOG/version bump policy documentation in CLAUDE.md and AGENTS.md.
+
+### Changed
+
+- Lifecycle engine split into per-phase modules under `axis_core/engine/phases/`.
+- Timeout and wall-clock budget enforcement now behaves as hard runtime limits.
+- Public package `config` export semantics clarified and validated.
+- OpenAI model registrations trimmed to validated model IDs.
+- Test suite hardened to prefer public-contract surfaces over private internals.
+
+### Fixed
+
+- Security hardening to prevent sensitive payload leakage in telemetry/trace/state.
+- Misleading `auth` Agent API surface removed/deprecated to avoid false credential isolation assumptions.
+- Attachment MIME validation tests and SQLite optional-dependency test import behavior.
+- Real-provider integration test now skips on transient connection failures.
+
 ## [0.4.0] - 2026-02-06
 
 ### Added
+
 - SQLiteMemory adapter with FTS5 keyword search and session support (`axis_core/adapters/memory/sqlite.py`).
 - RedisMemory adapter with TTL, namespace support, and session persistence (`axis_core/adapters/memory/redis.py`).
 - Lazy factory registration for SQLite and Redis memory adapters in the adapter registry.
@@ -13,6 +48,7 @@ All notable changes to this project will be documented in this file.
 ## [0.3.1] - 2026-02-06
 
 ### Added
+
 - Attachment types (Image, PDF) with size limits and metadata serialization.
 - CancelToken for cooperative cancellation.
 - Attachment and cancellation wiring through Agent, RunContext, and Lifecycle.
@@ -21,6 +57,7 @@ All notable changes to this project will be documented in this file.
 ## [0.3.0] - 2026-02-05
 
 ### Added
+
 - Session dataclass with message history, versioning, and serialization.
 - SessionStore protocol for session persistence backends.
 - `agent.session()` API for creating and resuming multi-turn conversations.
@@ -30,6 +67,7 @@ All notable changes to this project will be documented in this file.
 ## [0.2.0] - 2026-02-04
 
 ### Added
+
 - True streaming functionality (`stream()` and `stream_async()` methods).
 - ReAct planner with explicit reasoning steps.
 - AutoPlanner with LLM-based tool selection and ordering.
@@ -37,21 +75,25 @@ All notable changes to this project will be documented in this file.
 - OpenAI model adapter (GPT-4, GPT-4o, o1/o3/o4 series).
 
 ### Fixed
+
 - Run state overwrite bug in multi-cycle execution.
 - Default config resolution for environment variables.
 
 ## [0.1.3] - 2026-02-02
 
 ### Added
+
 - Auto-registration of adapters via lazy loading factories.
 - Release automation scripts and checklist.
 
 ### Fixed
+
 - Package testing script.
 
 ## [0.1.0] - 2026-01-30
 
 ### Added
+
 - Initial project skeleton.
 - Lifecycle engine with Observe → Plan → Act → Evaluate cycle.
 - Agent API with `run()` and `run_async()` methods.

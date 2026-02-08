@@ -102,6 +102,17 @@ README.md should be kept up to date to reflect the current state of the project.
 
 After completing significant features or changes, ensure that the README.md is updated accordingly.
 
+### README Currency Policy (Required)
+
+For every PR that changes user-facing behavior, update `README.md` in the same PR.
+
+Treat these as mandatory checks before marking work complete:
+
+1. Update README sections affected by the change (API, config/env vars, adapters/models, limits, examples).
+2. Ensure "Supported Models" and adapter capability statements match current registry/code behavior.
+3. Ensure roadmap language uses the current "Planned (Committed)" vs "Exploring (Not Committed)" distinction.
+4. If release/version messaging changes, keep README status/version references aligned with `CHANGELOG.md`.
+
 ## Project Authority Map
 
 - Task List: tasks-axis-core-prd.md (source of truth for task IDs, sub-tasks, file targets)

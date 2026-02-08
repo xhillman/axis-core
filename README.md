@@ -318,7 +318,7 @@ AXIS_MAX_CYCLE_CONTEXT=5            # Max cycles to include in context
 | Provider | Models | Status | Installation |
 | -------- | ------ | ------ | ------------ |
 | Anthropic | Claude Opus 4, Sonnet 4, Haiku | ✅ Stable | `pip install axis-core[anthropic]` |
-| OpenAI | GPT-4, GPT-4o, GPT-3.5-turbo, o1 | ✅ Stable | `pip install axis-core[openai]` |
+| OpenAI | GPT-5, GPT-4.1, GPT-4o, o1/o3/o4 | ✅ Stable | `pip install axis-core[openai]` |
 | Ollama | Local models | 🚧 Planned | `pip install axis-core[ollama]` |
 
 **Model Fallback**: Automatically fallback to secondary models on recoverable errors (rate limits, connection issues):
@@ -332,7 +332,7 @@ agent = Agent(
 
 ## Status
 
-**v0.4.0 (Alpha)** — Core features with sessions, attachments, and persistent memory:
+**v0.5.1 (Alpha)** — Core features with sessions, attachments, persistent memory, and hardened adapter auto-registration:
 
 ### ✅ Completed
 
@@ -355,6 +355,7 @@ agent = Agent(
 - OpenAI (GPT-4, GPT-4o, GPT-5, o1/o3/o4)
 - Model fallback system (automatic retry with secondary models)
 - String-based model resolution (`"claude-sonnet-4-20250514"` → adapter)
+- Built-in adapter auto-registration during standard `from axis_core import Agent` imports
 
 **Tool System:**
 

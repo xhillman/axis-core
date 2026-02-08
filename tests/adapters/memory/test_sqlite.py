@@ -2,12 +2,14 @@
 
 import pytest
 
-aiosqlite = pytest.importorskip("aiosqlite", reason="aiosqlite not installed")
-
-from axis_core.adapters.memory.sqlite import SQLiteMemory
 from axis_core.errors import ConcurrencyError
 from axis_core.protocols.memory import MemoryCapability, MemoryItem
 from axis_core.session import Session
+
+SQLiteMemory = pytest.importorskip(
+    "axis_core.adapters.memory.sqlite",
+    reason="aiosqlite not installed",
+).SQLiteMemory
 
 
 @pytest.mark.unit

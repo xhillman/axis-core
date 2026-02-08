@@ -129,7 +129,7 @@ class TestImageMimeValidation:
         """Image.from_file should still reject non-image files."""
         path = tmp_path / "note.txt"
         path.write_bytes(b"hello")
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="image/"):
             Image.from_file(str(path))
 
 
@@ -155,7 +155,7 @@ class TestPDFMimeValidation:
         """PDF.from_file should still reject non-PDF files."""
         path = tmp_path / "note.txt"
         path.write_bytes(b"hello")
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="application/pdf"):
             PDF.from_file(str(path))
 
 

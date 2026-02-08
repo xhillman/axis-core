@@ -160,10 +160,6 @@ def _register_builtin_adapters() -> None:
         pass
 
 
-# Auto-register built-in adapters when this module is loaded
-_register_builtin_adapters()
-
-
 def make_lazy_factory(
     module_path: str,
     class_name: str,
@@ -220,3 +216,9 @@ __all__ = [
     "planner_registry",
     "make_lazy_factory",
 ]
+
+
+# Auto-register built-in adapters when this module is loaded.
+# Keep this call after make_lazy_factory is defined so adapter modules can
+# import it during registration without circular import failures.
+_register_builtin_adapters()
