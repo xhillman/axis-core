@@ -336,7 +336,7 @@ agent = Agent(
 
 ## Status
 
-**v0.5.1 (Alpha)** — Core features with sessions, attachments, persistent memory, and hardened adapter auto-registration:
+**v0.6.0 (Alpha)** — Core features with sessions, attachments, persistent memory, and hardened adapter auto-registration:
 
 ### ✅ Completed
 
