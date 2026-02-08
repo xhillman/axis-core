@@ -15,7 +15,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - **Session support** — Multi-turn conversations with optimistic locking (persistence via memory adapters)
 - **Budget tracking** — Cost, token, and cycle limits with real-time tracking
 - **Attachments & cancellation** — Image/PDF attachments (10MB limit) and cooperative cancellation
-- **Built-in observability** — Phase-level telemetry and trace collection
+- **Built-in observability** — Phase-level telemetry, trace collection, and pluggable sinks
 - **Type-safe** — Full type hints with mypy strict mode
 - **Production-ready** — Async-native with comprehensive error handling and recovery
 
@@ -303,9 +303,13 @@ AXIS_MAX_TOOL_CALLS=50
 AXIS_MAX_MODEL_CALLS=20
 
 # Telemetry
-AXIS_TELEMETRY_SINK=console         # console, none
+AXIS_TELEMETRY_SINK=console         # console, file, callback, none
 AXIS_TELEMETRY_COMPACT=false        # Compact console output
 AXIS_TELEMETRY_REDACT=true          # Redact sensitive data
+AXIS_TELEMETRY_FILE=./axis_trace.jsonl  # JSONL output path (file sink)
+AXIS_TELEMETRY_CALLBACK=module:function # Callback import path (callback sink)
+AXIS_TELEMETRY_BUFFER_MODE=batched  # immediate, batched, phase, end (file sink)
+AXIS_TELEMETRY_BATCH_SIZE=100       # Flush threshold in batched mode (file sink)
 AXIS_PERSIST_SENSITIVE_TOOL_DATA=false  # Debug-only raw tool args/results in RunState
 
 # Advanced
@@ -380,7 +384,7 @@ agent = Agent(
 
 **Observability:**
 
-- Phase-level telemetry (console sink)
+- Phase-level telemetry (`ConsoleSink`, `FileSink`, `CallbackSink`)
 - Trace event collection
 - Budget warnings and exceeded events
 
@@ -404,8 +408,6 @@ These are scoped targets tied to the current task list and near-term releases.
 
 **Telemetry & Memory:**
 
-- **FileSink** — JSONL trace logs for production monitoring
-- **CallbackSink** — Custom telemetry handlers
 - Semantic search capabilities (vector-based)
 - Memory adapter URL resolution (`sqlite:///path/to/db`, `redis://host:port`)
 

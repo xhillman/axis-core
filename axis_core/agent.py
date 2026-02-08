@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -124,14 +125,27 @@ def _resolve_telemetry_sinks() -> list[Any]:
 
     Supported values:
         - "console": Creates ConsoleSink for stdout output
+        - "file": Creates FileSink for JSONL output
+        - "callback": Creates CallbackSink from AXIS_TELEMETRY_CALLBACK
         - "none": Returns empty list (telemetry disabled)
-        - "file": Not yet implemented (logs warning)
-        - "callback": Not yet implemented (logs warning)
 
     Returns:
         List of telemetry sink instances
     """
     sink_type = os.getenv("AXIS_TELEMETRY_SINK", "none").lower()
+    redact = os.getenv("AXIS_TELEMETRY_REDACT", "true").lower() == "true"
+
+    def _parse_buffer_mode(raw: str) -> BufferMode:
+        normalized = raw.strip().lower()
+        for mode in BufferMode:
+            if mode.value == normalized:
+                return mode
+        logger.warning(
+            "Unknown AXIS_TELEMETRY_BUFFER_MODE value '%s'. "
+            "Using 'batched'.",
+            raw,
+        )
+        return BufferMode.BATCHED
 
     if sink_type == "none":
         return []
@@ -142,25 +156,81 @@ def _resolve_telemetry_sinks() -> list[Any]:
 
         # Check if compact mode is requested via env var
         compact = os.getenv("AXIS_TELEMETRY_COMPACT", "false").lower() == "true"
-        # Redaction is enabled by default for security (MED-1)
-        redact = os.getenv("AXIS_TELEMETRY_REDACT", "true").lower() == "true"
         return [ConsoleSink(compact=compact, redact=redact)]
 
     if sink_type == "file":
-        # File sink not yet implemented
+        from axis_core.adapters.telemetry.file import FileSink
+
         file_path = os.getenv("AXIS_TELEMETRY_FILE", "./axis_trace.jsonl")
-        logger.warning(
-            "AXIS_TELEMETRY_SINK=file is not yet implemented. "
-            f"File path would be: {file_path}. Using no telemetry."
+        raw_batch_size = os.getenv("AXIS_TELEMETRY_BATCH_SIZE", "100")
+        buffer_mode = _parse_buffer_mode(
+            os.getenv("AXIS_TELEMETRY_BUFFER_MODE", "batched")
         )
-        return []
+        try:
+            batch_size = int(raw_batch_size)
+        except ValueError:
+            logger.warning(
+                "Invalid AXIS_TELEMETRY_BATCH_SIZE '%s'. Using 100.",
+                raw_batch_size,
+            )
+            batch_size = 100
+
+        return [
+            FileSink(
+                path=file_path,
+                batch_size=batch_size,
+                buffering=buffer_mode,
+                redact=redact,
+            )
+        ]
 
     if sink_type == "callback":
-        logger.warning(
-            "AXIS_TELEMETRY_SINK=callback requires passing sinks directly to Agent. "
-            "Using no telemetry."
-        )
-        return []
+        from axis_core.adapters.telemetry.callback import CallbackSink
+
+        callback_ref = os.getenv("AXIS_TELEMETRY_CALLBACK", "").strip()
+        if not callback_ref:
+            logger.warning(
+                "AXIS_TELEMETRY_SINK=callback requires AXIS_TELEMETRY_CALLBACK "
+                "formatted as 'module:function'. Using no telemetry."
+            )
+            return []
+
+        if ":" not in callback_ref:
+            logger.warning(
+                "Invalid AXIS_TELEMETRY_CALLBACK '%s'. Expected 'module:function'. "
+                "Using no telemetry.",
+                callback_ref,
+            )
+            return []
+
+        module_path, attr_name = callback_ref.split(":", 1)
+        if not module_path or not attr_name:
+            logger.warning(
+                "Invalid AXIS_TELEMETRY_CALLBACK '%s'. Expected 'module:function'. "
+                "Using no telemetry.",
+                callback_ref,
+            )
+            return []
+
+        try:
+            module = importlib.import_module(module_path)
+            callback = getattr(module, attr_name)
+        except (ImportError, AttributeError):
+            logger.warning(
+                "Unable to load AXIS_TELEMETRY_CALLBACK '%s'. Using no telemetry.",
+                callback_ref,
+                exc_info=True,
+            )
+            return []
+
+        if not callable(callback):
+            logger.warning(
+                "AXIS_TELEMETRY_CALLBACK '%s' is not callable. Using no telemetry.",
+                callback_ref,
+            )
+            return []
+
+        return [CallbackSink(handler=callback, redact=redact)]
 
     # Unknown sink type
     logger.warning(

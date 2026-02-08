@@ -15,8 +15,16 @@ def __getattr__(name: str) -> Any:
         from axis_core.adapters.telemetry.console import ConsoleSink
 
         return ConsoleSink
+    if name == "FileSink":
+        from axis_core.adapters.telemetry.file import FileSink
+
+        return FileSink
+    if name == "CallbackSink":
+        from axis_core.adapters.telemetry.callback import CallbackSink
+
+        return CallbackSink
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["ConsoleSink"]
+__all__ = ["ConsoleSink", "FileSink", "CallbackSink"]

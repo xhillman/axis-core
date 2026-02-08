@@ -151,6 +151,11 @@ class MockTelemetrySink:
         pass
 
 
+def _test_telemetry_callback_handler(event: Any) -> None:
+    """Importable callback used by callback-sink env resolution tests."""
+    del event
+
+
 # ---------------------------------------------------------------------------
 # Constructor tests (8.1)
 # ---------------------------------------------------------------------------
@@ -248,6 +253,55 @@ class TestAgentConstructor:
             assert len(agent._telemetry_sinks) == 1
             assert isinstance(agent._telemetry_sinks[0], ConsoleSink)
             assert agent._telemetry_enabled is True
+
+    def test_construction_telemetry_true_with_file_sink(self, tmp_path: Any) -> None:
+        """Test AXIS_TELEMETRY_SINK=file creates FileSink with configured path."""
+        import os
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from axis_core.adapters.telemetry.file import FileSink
+
+        trace_path = tmp_path / "trace.jsonl"
+        with patch.dict(
+            os.environ,
+            {
+                "AXIS_TELEMETRY_SINK": "file",
+                "AXIS_TELEMETRY_FILE": str(trace_path),
+            },
+        ):
+            agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+
+        assert len(agent._telemetry_sinks) == 1
+        sink = agent._telemetry_sinks[0]
+        assert isinstance(sink, FileSink)
+        assert sink._path == Path(trace_path)
+        assert agent._telemetry_enabled is True
+
+    def test_construction_telemetry_true_with_callback_sink(self) -> None:
+        """Test AXIS_TELEMETRY_SINK=callback resolves callback handler from env."""
+        import os
+        from unittest.mock import patch
+
+        import axis_core.agent as agent_module
+        from axis_core.adapters.telemetry.callback import CallbackSink
+
+        setattr(agent_module, "_test_telemetry_callback_handler", _test_telemetry_callback_handler)
+        try:
+            with patch.dict(
+                os.environ,
+                {
+                    "AXIS_TELEMETRY_SINK": "callback",
+                    "AXIS_TELEMETRY_CALLBACK": "axis_core.agent:_test_telemetry_callback_handler",
+                },
+            ):
+                agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+        finally:
+            delattr(agent_module, "_test_telemetry_callback_handler")
+
+        assert len(agent._telemetry_sinks) == 1
+        assert isinstance(agent._telemetry_sinks[0], CallbackSink)
+        assert agent._telemetry_enabled is True
 
     def test_telemetry_redaction_enabled_by_default(self) -> None:
         """Test that AXIS_TELEMETRY_REDACT defaults to true (MED-1 security fix)."""

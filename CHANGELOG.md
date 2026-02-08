@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Added `FileSink` telemetry adapter with JSONL output and configurable buffering.
+- Added `CallbackSink` telemetry adapter for user-supplied sync or async handlers.
+- Added telemetry adapter tests for file and callback sinks.
+
+### Changed
+
+- Wired `AXIS_TELEMETRY_SINK=file` and `AXIS_TELEMETRY_SINK=callback` into `Agent`
+  environment-based sink resolution.
+
 ## [0.5.1] - 2026-02-08
 
 ### Fixed
