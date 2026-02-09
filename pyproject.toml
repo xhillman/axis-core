@@ -36,15 +36,15 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.18"]
 openai = ["openai>=1.0"]
+openrouter = ["openai>=1.0"]
 redis = ["redis>=5.0"]
 sqlite = ["aiosqlite>=0.19"]
-ollama = ["ollama>=0.1"]
 full = [
     "axis-core[anthropic]",
     "axis-core[openai]",
+    "axis-core[openrouter]",
     "axis-core[redis]",
     "axis-core[sqlite]",
-    "axis-core[ollama]",
 ]
 dev = [
     "pytest>=8.0",

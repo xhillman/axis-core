@@ -6,7 +6,8 @@ for optional dependencies (per AD-040).
 Available adapters (when dependencies are installed):
 - AnthropicModel: Claude models via Anthropic API (requires: pip install axis-core[anthropic])
 - OpenAIModel: GPT models via OpenAI API (requires: pip install axis-core[openai])
-- OllamaModel: Local models via Ollama (requires: pip install axis-core[ollama])
+- OpenRouter via OpenAIModel: OpenAI-compatible endpoint
+  (requires: pip install axis-core[openrouter])
 """
 
 from axis_core.engine.registry import make_lazy_factory, model_registry

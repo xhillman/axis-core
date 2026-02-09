@@ -34,8 +34,11 @@ pip install axis-core[anthropic]
 # With OpenAI
 pip install axis-core[openai]
 
+# With OpenRouter (OpenAI-compatible endpoint)
+pip install axis-core[openrouter]
+
 # With both providers
-pip install axis-core[anthropic,openai]
+pip install axis-core[anthropic,openai,openrouter]
 
 # With Redis memory adapter
 pip install axis-core[redis]
@@ -334,6 +337,7 @@ or a secret manager), not passed through agent constructor/runtime context objec
 # API Keys
 ANTHROPIC_API_KEY=sk-ant-...        # Required for Anthropic models
 OPENAI_API_KEY=sk-...               # Required for OpenAI models
+OPENAI_BASE_URL=https://openrouter.ai/api/v1  # Optional OpenAI-compatible endpoint base URL
 
 # Default Configuration
 AXIS_DEFAULT_MODEL=claude-sonnet-4-20250514
@@ -367,7 +371,14 @@ AXIS_MAX_CYCLE_CONTEXT=5            # Max cycles to include in context
 | -------- | ------ | ------ | ------------ |
 | Anthropic | Claude Opus 4, Sonnet 4, Haiku | ✅ Stable | `pip install axis-core[anthropic]` |
 | OpenAI | GPT-5, GPT-4.1, GPT-4o, o1/o3/o4 | ✅ Stable | `pip install axis-core[openai]` |
-| Ollama | Local models | 🚧 Planned | `pip install axis-core[ollama]` |
+| OpenRouter | OpenAI-compatible hosted models | ✅ Supported via OpenAI adapter | `pip install axis-core[openrouter]` |
+
+OpenRouter uses the OpenAI-compatible adapter path. Configure:
+
+```bash
+OPENAI_API_KEY=<openrouter-api-key>
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+```
 
 **Model Fallback**: Automatically fallback to secondary models on recoverable errors (rate limits, connection issues):
 
@@ -401,6 +412,7 @@ agent = Agent(
 
 - Anthropic (Claude Opus 4, Sonnet 4, Haiku)
 - OpenAI (GPT-4, GPT-4o, GPT-5, o1/o3/o4)
+- OpenRouter via OpenAI-compatible endpoint (`OPENAI_BASE_URL`)
 - Model fallback system (automatic retry with secondary models)
 - String-based model resolution (`"claude-sonnet-4-20250514"` → adapter)
 - Built-in adapter auto-registration during standard `from axis_core import Agent` imports
@@ -466,7 +478,7 @@ These are directional ideas. They are not scheduled and may change or be dropped
 
 **Potential Integrations:**
 
-- Additional model providers beyond current built-ins (for example: OpenRouter, Gemini)
+- Additional model providers beyond current built-ins (for example: Gemini)
 - Deeper model-specific optimizations (parallel tool calls, cache tuning)
 - Framework integrations (LangChain, FastAPI, Gradio/Streamlit, Jupyter)
 

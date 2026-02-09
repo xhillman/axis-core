@@ -33,6 +33,8 @@ All notable changes to this project will be documented in this file.
 - Lifecycle execution now persists deterministic checkpoints at phase boundaries
   (`initialize`, `observe`, `plan`, `act`, `evaluate`) and can resume from valid boundaries with
   explicit validation for corrupt/incompatible checkpoint state.
+- Optional provider scope now replaces `ollama` with `openrouter` extras/docs and documents
+  OpenRouter usage via the existing OpenAI-compatible adapter path.
 
 ## [0.6.0] - 2026-02-08
 

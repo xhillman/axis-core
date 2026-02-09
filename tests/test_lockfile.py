@@ -20,6 +20,16 @@ class TestDependencyLockfile:
         """Get expected lockfile path."""
         return repo_root / "requirements.lock"
 
+    @pytest.fixture
+    def pyproject_path(self, repo_root: Path) -> Path:
+        """Get project metadata file path."""
+        return repo_root / "pyproject.toml"
+
+    @pytest.fixture
+    def readme_path(self, repo_root: Path) -> Path:
+        """Get README path for install/documentation checks."""
+        return repo_root / "README.md"
+
     def test_lockfile_exists(self, lockfile_path: Path) -> None:
         """Verify that a dependency lockfile exists in the repository root."""
         assert lockfile_path.exists(), (
@@ -67,3 +77,29 @@ class TestDependencyLockfile:
         content = lockfile_path.read_text()
         assert len(content) > 0, "Lockfile should not be empty"
         assert content.strip(), "Lockfile should not be just whitespace"
+
+    def test_optional_provider_extras_swap_ollama_for_openrouter(
+        self,
+        pyproject_path: Path,
+    ) -> None:
+        """Verify provider extras match supported provider scope."""
+        content = pyproject_path.read_text()
+
+        assert re.search(r'^openrouter\s*=\s*\["openai>=1.0"\]$', content, re.MULTILINE), (
+            "Expected openrouter extra backed by OpenAI SDK."
+        )
+        assert not re.search(r"^ollama\s*=", content, re.MULTILINE), (
+            "Ollama extra should not be declared in current provider scope."
+        )
+        assert '"axis-core[openrouter]"' in content, (
+            "Full extra should include openrouter optional install target."
+        )
+        assert '"axis-core[ollama]"' not in content, (
+            "Full extra should not include deprecated ollama optional install target."
+        )
+
+    def test_readme_documents_openrouter_optional_install(self, readme_path: Path) -> None:
+        """Verify README includes OpenRouter install guidance."""
+        content = readme_path.read_text()
+        assert "OpenRouter" in content
+        assert "axis-core[openrouter]" in content

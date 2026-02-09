@@ -29,9 +29,9 @@
 |---|---|
 | `anthropic` | `anthropic>=0.18` |
 | `openai` | `openai>=1.0` |
+| `openrouter` | `openai>=1.0` (OpenAI-compatible endpoint path) |
 | `redis` | `redis>=5.0` |
 | `sqlite` | `aiosqlite>=0.19` |
-| `ollama` | `ollama>=0.1` |
 | `full` | All of the above |
 | `dev` | pytest, pytest-asyncio, pytest-cov, mypy, ruff, fakeredis |
 
