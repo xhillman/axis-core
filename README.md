@@ -12,6 +12,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - **Protocol-based adapters** — Pluggable models, memory, planners, and telemetry
 - **Model fallback** — Automatic fallback to secondary models on recoverable errors
 - **Tool system** — Simple `@tool` decorator with automatic schema generation
+- **Destructive tool safeguards** — `Capability.DESTRUCTIVE` tools require explicit confirmation
 - **Runtime policy enforcement** — Per-phase timeouts, retries, rate limits, and in-memory caching
 - **Session support** — Multi-turn conversations with optimistic locking (persistence via memory adapters)
 - **Budget tracking** — Cost, token, and cycle limits with real-time tracking
@@ -179,6 +180,7 @@ agent = Agent(
     retry=RetryPolicy(max_attempts=3, backoff="exponential"),
     rate_limits=RateLimits(model_calls="60/minute", tool_calls="30/minute"),
     cache=CacheConfig(enabled=True, model_responses=True, tool_results=True, ttl=3600),
+    confirmation_handler=lambda tool_name, args: True,  # Required for DESTRUCTIVE tools
 )
 
 # Synchronous
@@ -211,6 +213,14 @@ async def advanced_tool(url: str, max_retries: int = 3) -> str:
     """An advanced tool with capabilities."""
     # Implementation
     pass
+
+@tool(capabilities=[Capability.DESTRUCTIVE])
+def delete_record(record_id: str) -> str:
+    """Delete a record."""
+    return f"deleted {record_id}"
+
+agent = Agent(model="claude-sonnet-4-20250514", planner="sequential")
+agent.on_confirm(lambda tool_name, args: tool_name == "delete_record")
 ```
 
 ### Budget
@@ -374,6 +384,7 @@ agent = Agent(
 - `@tool` decorator with automatic JSON schema generation
 - Capability declarations (NETWORK, FILESYSTEM, DESTRUCTIVE, etc.)
 - Runtime enforcement for global and tool-level timeout/retry/rate-limit/cache policies
+- Confirmation handler enforcement for `Capability.DESTRUCTIVE` tools (`confirmation_handler`/`on_confirm`)
 - Tool context with budget access
 
 **Memory Adapters:**
@@ -410,7 +421,6 @@ These are scoped targets tied to the current task list and near-term releases.
 
 **Execution & Safety:**
 
-- **Confirmation Handler** — User approval for destructive operations (AD-002)
 - **Checkpoint/Resume** — Persist and resume agent runs at phase boundaries (AD-005)
 
 **Telemetry & Memory:**

@@ -23,7 +23,7 @@ import os
 import time
 import uuid
 import warnings
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from typing import Any, TypeVar
 
@@ -54,6 +54,7 @@ logger = logging.getLogger("axis_core.agent")
 # Sentinel value to distinguish "not provided" from "explicitly None"
 _UNSET = object()
 _STREAM_DONE = object()
+ConfirmationHandler = Callable[[str, dict[str, Any]], bool | Awaitable[bool]]
 
 
 def _trace_event_to_dict(event: TraceEvent) -> dict[str, Any]:
@@ -269,6 +270,7 @@ class Agent:
         telemetry: True (collect silently), False (disabled), or list of sinks
         verbose: Print events to console
         auth: Deprecated. Credentials must be managed inside tools.
+        confirmation_handler: Optional approval callback for destructive tools.
     """
 
     def __init__(
@@ -289,6 +291,7 @@ class Agent:
         telemetry: bool | list[Any] = True,
         verbose: bool = False,
         auth: dict[str, dict[str, Any]] | None = None,
+        confirmation_handler: ConfirmationHandler | None = None,
     ) -> None:
         # ----- AD-034: Runtime type validation -----
         if tools is not None and not isinstance(tools, list):
@@ -303,6 +306,11 @@ class Agent:
         if verbose is not None and not isinstance(verbose, bool):
             raise TypeError(
                 f"Argument 'verbose' must be bool, got {type(verbose).__name__}"
+            )
+        if confirmation_handler is not None and not callable(confirmation_handler):
+            raise TypeError(
+                f"Argument 'confirmation_handler' must be callable or None, "
+                f"got {type(confirmation_handler).__name__}"
             )
 
         # ----- Store configuration -----
@@ -321,6 +329,7 @@ class Agent:
         self._retry = _coerce(retry, RetryPolicy, "retry")
         self._cache = _coerce(cache, CacheConfig, "cache")
         self._verbose = verbose
+        self._confirmation_handler = confirmation_handler
 
         if auth is not None:
             warnings.warn(
@@ -462,9 +471,19 @@ class Agent:
             rate_limits=self._rate_limits,
             retry=self._retry,
             cache=self._cache,
+            confirmation_handler=self._confirmation_handler,
             telemetry_enabled=self._telemetry_enabled,
             verbose=self._verbose,
         )
+
+    def on_confirm(self, handler: ConfirmationHandler) -> Agent:
+        """Register a destructive-tool confirmation handler and return self."""
+        if not callable(handler):
+            raise TypeError(
+                f"Argument 'handler' must be callable, got {type(handler).__name__}"
+            )
+        self._confirmation_handler = handler
+        return self
 
     def _build_failure_result(
         self,

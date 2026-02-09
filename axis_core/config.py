@@ -11,6 +11,7 @@ Architecture Decisions:
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -233,6 +234,9 @@ class ResolvedConfig:
     rate_limits: RateLimits | None = None
     retry: RetryPolicy | None = None
     cache: CacheConfig | None = None
+    confirmation_handler: (
+        Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None
+    ) = None
     telemetry_enabled: bool = True
     verbose: bool = False
 

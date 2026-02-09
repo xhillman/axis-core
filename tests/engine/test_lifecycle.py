@@ -2227,6 +2227,7 @@ def _runtime_config(
     retry: RetryPolicy | None = None,
     rate_limits: RateLimits | None = None,
     cache: CacheConfig | None = None,
+    confirmation_handler: Any | None = None,
 ) -> Any:
     """Build a minimal runtime config object for LifecycleEngine.execute()."""
     return SimpleNamespace(
@@ -2234,6 +2235,7 @@ def _runtime_config(
         retry=retry,
         rate_limits=rate_limits,
         cache=cache,
+        confirmation_handler=confirmation_handler,
     )
 
 
@@ -2577,3 +2579,183 @@ class TestExecutionPoliciesTask17:
         assert result["success"] is True
         assert cached_calls["count"] == 1
         assert uncached_calls["count"] == 2
+
+
+class TestDestructiveToolConfirmationTask18:
+    """Task 18 tests for destructive tool confirmation flow."""
+
+    @staticmethod
+    def _planner_for_destructive_tool() -> Any:
+        class DestructivePlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="destructive-plan",
+                    goal="destructive execution",
+                    steps=(
+                        PlanStep(
+                            id="destructive-step",
+                            type=StepType.TOOL,
+                            payload={
+                                "tool": "destroy_data",
+                                "args": {"target": "record-1"},
+                            },
+                        ),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "completed"},
+                            dependencies=("destructive-step",),
+                        ),
+                    ),
+                )
+
+        return DestructivePlanner()
+
+    @pytest.mark.asyncio
+    async def test_destructive_tool_executes_with_confirmation_approval(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        from axis_core.tool import Capability, tool
+
+        approval_calls: list[tuple[str, dict[str, Any]]] = []
+        destructive_calls = {"count": 0}
+
+        @tool(capabilities=[Capability.DESTRUCTIVE])
+        def destroy_data(target: str) -> str:
+            destructive_calls["count"] += 1
+            return f"destroyed:{target}"
+
+        def confirm(tool_name: str, args: dict[str, Any]) -> bool:
+            approval_calls.append((tool_name, args))
+            return True
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_for_destructive_tool(),
+            tools={"destroy_data": destroy_data},
+        )
+
+        result = await engine.execute(
+            input_text="delete record",
+            agent_id="agent-task18",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(confirmation_handler=confirm),
+        )
+
+        assert result["success"] is True
+        assert destructive_calls["count"] == 1
+        assert result["budget_state"].tool_calls == 1
+        assert approval_calls == [("destroy_data", {"target": "record-1"})]
+
+    @pytest.mark.asyncio
+    async def test_destructive_tool_fails_without_confirmation_handler(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        from axis_core.tool import Capability, tool
+
+        destructive_calls = {"count": 0}
+
+        @tool(capabilities=[Capability.DESTRUCTIVE])
+        def destroy_data(target: str) -> str:
+            destructive_calls["count"] += 1
+            return f"destroyed:{target}"
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_for_destructive_tool(),
+            tools={"destroy_data": destroy_data},
+        )
+
+        result = await engine.execute(
+            input_text="delete record",
+            agent_id="agent-task18",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        assert result["success"] is False
+        assert destructive_calls["count"] == 0
+        assert any(
+            "requires confirmation handler" in record.error.message
+            for record in result["errors"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_destructive_tool_rejection_blocks_execution(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        from axis_core.tool import Capability, tool
+
+        approval_calls: list[tuple[str, dict[str, Any]]] = []
+        destructive_calls = {"count": 0}
+
+        @tool(capabilities=[Capability.DESTRUCTIVE])
+        def destroy_data(target: str) -> str:
+            destructive_calls["count"] += 1
+            return f"destroyed:{target}"
+
+        def reject(tool_name: str, args: dict[str, Any]) -> bool:
+            approval_calls.append((tool_name, args))
+            return False
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_for_destructive_tool(),
+            tools={"destroy_data": destroy_data},
+        )
+
+        result = await engine.execute(
+            input_text="delete record",
+            agent_id="agent-task18",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(confirmation_handler=reject),
+        )
+
+        assert result["success"] is False
+        assert destructive_calls["count"] == 0
+        assert approval_calls == [("destroy_data", {"target": "record-1"})]
+        assert any(
+            "rejected by confirmation handler" in record.error.message
+            for record in result["errors"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_destructive_tool_fails_on_malformed_confirmation_handler_result(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        from axis_core.tool import Capability, tool
+
+        destructive_calls = {"count": 0}
+
+        @tool(capabilities=[Capability.DESTRUCTIVE])
+        def destroy_data(target: str) -> str:
+            destructive_calls["count"] += 1
+            return f"destroyed:{target}"
+
+        def malformed_result(tool_name: str, args: dict[str, Any]) -> str:
+            _ = (tool_name, args)
+            return "yes"
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_for_destructive_tool(),
+            tools={"destroy_data": destroy_data},
+        )
+
+        result = await engine.execute(
+            input_text="delete record",
+            agent_id="agent-task18",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(confirmation_handler=malformed_result),
+        )
+
+        assert result["success"] is False
+        assert destructive_calls["count"] == 0
+        assert any(
+            "must return bool" in record.error.message
+            for record in result["errors"]
+        )

@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 - Added lifecycle policy enforcement tests covering phase timeouts, retry exhaustion, rate-limit
   breach behavior, model/tool cache hits, and non-cacheable bypass.
+- Added `Agent(confirmation_handler=...)` and chainable `agent.on_confirm(...)` APIs for
+  destructive tool approvals.
+- Added lifecycle tests for destructive-tool confirmation approval, rejection, missing-handler,
+  and malformed callback return paths.
 
 ### Changed
 
@@ -21,6 +25,8 @@ All notable changes to this project will be documented in this file.
   max-size eviction.
 - `Agent` now passes resolved runtime config into `LifecycleEngine.execute()` so timeout/retry/
   rate-limit/cache policies are applied consistently for `run*` and `stream*`.
+- Act-phase tool execution now enforces confirmation before any `Capability.DESTRUCTIVE` tool
+  runs, with deterministic errors for missing/rejected/malformed confirmation behavior.
 
 ## [0.6.0] - 2026-02-08
 

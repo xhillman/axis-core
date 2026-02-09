@@ -22,7 +22,7 @@ from axis_core.errors import (
 )
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
-from axis_core.tool import ToolCallRecord, ToolContext
+from axis_core.tool import Capability, ToolCallRecord, ToolContext
 
 if TYPE_CHECKING:
     from axis_core.engine.lifecycle import LifecycleEngine
@@ -106,6 +106,71 @@ def _record_retry_attempt(ctx: RunContext, step: PlanStep) -> None:
     retry_state = ctx.state._retry_state.get(step.id, {"attempts": 0})
     retry_state["attempts"] = int(retry_state.get("attempts", 0)) + 1
     ctx.state._retry_state[step.id] = retry_state
+
+
+async def _confirm_destructive_tool(
+    ctx: RunContext,
+    *,
+    tool_name: str,
+    args: Any,
+    capabilities: tuple[Capability, ...] | None,
+) -> None:
+    """Require explicit approval before destructive tool execution."""
+    if Capability.DESTRUCTIVE not in (capabilities or ()):
+        return
+
+    config = getattr(ctx, "config", None)
+    confirmation_handler = getattr(config, "confirmation_handler", None)
+
+    if confirmation_handler is None:
+        raise ToolError(
+            message=(
+                f"Tool '{tool_name}' requires confirmation handler for "
+                "Capability.DESTRUCTIVE"
+            ),
+            tool_name=tool_name,
+            recoverable=False,
+        )
+
+    if not callable(confirmation_handler):
+        raise ToolError(
+            message=(
+                f"Confirmation handler for tool '{tool_name}' is not callable"
+            ),
+            tool_name=tool_name,
+            recoverable=False,
+        )
+
+    confirmation_args = args if isinstance(args, dict) else {}
+
+    try:
+        decision = confirmation_handler(tool_name, confirmation_args)
+        if inspect.isawaitable(decision):
+            decision = await cast(Any, decision)
+    except Exception as e:
+        raise ToolError(
+            message=f"Confirmation handler failed for tool '{tool_name}': {e}",
+            tool_name=tool_name,
+            cause=e,
+            recoverable=False,
+        ) from e
+
+    if not isinstance(decision, bool):
+        raise ToolError(
+            message=(
+                f"Confirmation handler for tool '{tool_name}' must return bool, "
+                f"got {type(decision).__name__}"
+            ),
+            tool_name=tool_name,
+            recoverable=False,
+        )
+
+    if not decision:
+        raise ToolError(
+            message=f"Tool '{tool_name}' execution rejected by confirmation handler",
+            tool_name=tool_name,
+            recoverable=False,
+        )
 
 
 async def act(engine: LifecycleEngine, ctx: RunContext, plan_obj: Plan) -> ExecutionResult:
@@ -249,6 +314,18 @@ async def _execute_tool_step(
 
     tool_fn = engine.tools[tool_name]
     manifest = getattr(tool_fn, "_axis_manifest", None)
+    capabilities = cast(
+        tuple[Capability, ...] | None,
+        getattr(manifest, "capabilities", None),
+    )
+
+    await _confirm_destructive_tool(
+        ctx,
+        tool_name=tool_name,
+        args=args,
+        capabilities=capabilities,
+    )
+
     retry_policy = _resolve_retry_policy(
         ctx,
         step,

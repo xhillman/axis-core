@@ -398,6 +398,30 @@ class TestAgentConstructor:
 
         assert not hasattr(agent, "_auth")
 
+    def test_construction_with_confirmation_handler(self) -> None:
+        def confirm(tool_name: str, args: dict[str, Any]) -> bool:
+            return tool_name == "safe_tool" and isinstance(args, dict)
+
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            confirmation_handler=confirm,
+        )
+
+        runtime_config = agent._resolved_config()
+        assert runtime_config.confirmation_handler is confirm
+
+    def test_on_confirm_registers_confirmation_handler(self) -> None:
+        def confirm(tool_name: str, args: dict[str, Any]) -> bool:
+            return bool(tool_name and args is not None)
+
+        agent = Agent(model=MockModel(), planner=MockPlanner())
+        chained = agent.on_confirm(confirm)
+
+        runtime_config = agent._resolved_config()
+        assert chained is agent
+        assert runtime_config.confirmation_handler is confirm
+
 
 # ---------------------------------------------------------------------------
 # Type validation tests (8.2)
@@ -422,6 +446,14 @@ class TestAgentTypeValidation:
     def test_verbose_must_be_bool(self) -> None:
         with pytest.raises(TypeError, match="verbose"):
             Agent(model=MockModel(), planner=MockPlanner(), verbose="yes")  # type: ignore[arg-type]
+
+    def test_confirmation_handler_must_be_callable(self) -> None:
+        with pytest.raises(TypeError, match="confirmation_handler"):
+            Agent(
+                model=MockModel(),
+                planner=MockPlanner(),
+                confirmation_handler="invalid",  # type: ignore[arg-type]
+            )
 
 
 # ---------------------------------------------------------------------------
