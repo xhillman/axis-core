@@ -43,7 +43,7 @@ from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.engine.registry import memory_registry
 from axis_core.engine.resolver import resolve_adapter
 from axis_core.engine.trace_collector import TraceCollector
-from axis_core.errors import AxisError, ErrorClass
+from axis_core.errors import AxisError, ConfigError, ErrorClass
 from axis_core.errors import TimeoutError as AxisTimeoutError
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
 from axis_core.result import RunResult, RunStats, StreamEvent
@@ -271,6 +271,8 @@ class Agent:
         verbose: Print events to console
         auth: Deprecated. Credentials must be managed inside tools.
         confirmation_handler: Optional approval callback for destructive tools.
+        checkpoint: Enable automatic phase-boundary checkpoint persistence.
+        checkpoint_dir: Directory where checkpoints are stored when enabled.
     """
 
     def __init__(
@@ -292,6 +294,8 @@ class Agent:
         verbose: bool = False,
         auth: dict[str, dict[str, Any]] | None = None,
         confirmation_handler: ConfirmationHandler | None = None,
+        checkpoint: bool = False,
+        checkpoint_dir: str = "./checkpoints",
     ) -> None:
         # ----- AD-034: Runtime type validation -----
         if tools is not None and not isinstance(tools, list):
@@ -312,6 +316,14 @@ class Agent:
                 f"Argument 'confirmation_handler' must be callable or None, "
                 f"got {type(confirmation_handler).__name__}"
             )
+        if not isinstance(checkpoint, bool):
+            raise TypeError(
+                f"Argument 'checkpoint' must be bool, got {type(checkpoint).__name__}"
+            )
+        if not isinstance(checkpoint_dir, str):
+            raise TypeError(
+                f"Argument 'checkpoint_dir' must be str, got {type(checkpoint_dir).__name__}"
+            )
 
         # ----- Store configuration -----
         self._agent_id = str(uuid.uuid4())
@@ -330,6 +342,8 @@ class Agent:
         self._cache = _coerce(cache, CacheConfig, "cache")
         self._verbose = verbose
         self._confirmation_handler = confirmation_handler
+        self._checkpoint_enabled = checkpoint
+        self._checkpoint_dir = checkpoint_dir
 
         if auth is not None:
             warnings.warn(
@@ -389,7 +403,68 @@ class Agent:
             tools=self._tools,
             system=self._system,
             fallback=self._fallback,
+            checkpoint_handler=(
+                self._persist_checkpoint if self._checkpoint_enabled else None
+            ),
         )
+
+    def _checkpoint_path(self, run_id: str) -> str:
+        """Build checkpoint file path for a run ID."""
+        safe_run_id = run_id.replace("/", "_")
+        return os.path.join(self._checkpoint_dir, f"{safe_run_id}.json")
+
+    @staticmethod
+    def _write_checkpoint_file(path: str, payload: dict[str, Any]) -> None:
+        """Atomically write checkpoint payload to disk."""
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=True, sort_keys=True, indent=2)
+        os.replace(tmp_path, path)
+
+    async def _persist_checkpoint(self, payload: dict[str, Any]) -> None:
+        """Persist a checkpoint envelope to disk."""
+        context = payload.get("context")
+        if not isinstance(context, dict):
+            raise ConfigError(message="Checkpoint context is missing or corrupt.")
+
+        run_id = context.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise ConfigError(message="Checkpoint context is missing run_id.")
+
+        path = self._checkpoint_path(run_id)
+        await asyncio.to_thread(self._write_checkpoint_file, path, payload)
+
+    @staticmethod
+    def _load_checkpoint_payload(checkpoint: str | dict[str, Any]) -> dict[str, Any]:
+        """Load a checkpoint envelope from dict payload or JSON file path."""
+        if isinstance(checkpoint, dict):
+            return checkpoint
+
+        try:
+            with open(checkpoint, encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError as e:
+            raise ConfigError(
+                message=f"Checkpoint file not found: {checkpoint}"
+            ) from e
+        except json.JSONDecodeError as e:
+            raise ConfigError(
+                message=f"Checkpoint file is not valid JSON: {checkpoint}",
+                cause=e,
+            ) from e
+        except OSError as e:
+            raise ConfigError(
+                message=f"Failed to read checkpoint file: {checkpoint}",
+                cause=e,
+            ) from e
+
+        if not isinstance(data, dict):
+            raise ConfigError(message="Checkpoint payload must be a JSON object.")
+        return data
 
     def _build_result(
         self,
@@ -680,6 +755,103 @@ class Agent:
     # =========================================================================
     # run — sync wrapper (8.4, AD-027)
     # =========================================================================
+
+    async def resume_async(
+        self,
+        checkpoint: str | dict[str, Any],
+        *,
+        timeout: float | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> RunResult:
+        """Resume an agent run from a persisted checkpoint."""
+        if not isinstance(checkpoint, (str, dict)):
+            raise TypeError(
+                "Argument 'checkpoint' must be str path or dict payload, "
+                f"got {type(checkpoint).__name__}"
+            )
+
+        if self._lock.locked():
+            raise RuntimeError(
+                "Agent is already executing. "
+                "Create multiple Agent instances for concurrent execution."
+            )
+
+        async with self._lock:
+            self._running = True
+            start = time.monotonic()
+            try:
+                effective_timeout = self._effective_timeout(timeout)
+                trace_collector = TraceCollector() if self._telemetry_enabled else None
+                extra_sinks = [trace_collector] if trace_collector else []
+                engine = self._build_engine(extra_sinks=extra_sinks)
+                runtime_config = self._resolved_config()
+                checkpoint_payload = self._load_checkpoint_payload(checkpoint)
+
+                try:
+                    execute_coro = engine.resume(
+                        checkpoint=checkpoint_payload,
+                        cancel_token=cancel_token,
+                        config=runtime_config,
+                    )
+                    if effective_timeout is None:
+                        raw = await execute_coro
+                    else:
+                        raw = await asyncio.wait_for(execute_coro, timeout=effective_timeout)
+                except AxisError as e:
+                    trace = trace_collector.get_events() if trace_collector else []
+                    duration_ms = (time.monotonic() - start) * 1000
+                    return self._build_failure_result(
+                        error=e,
+                        duration_ms=duration_ms,
+                        trace=trace,
+                    )
+                except asyncio.TimeoutError:
+                    trace = trace_collector.get_events() if trace_collector else []
+                    duration_ms = (time.monotonic() - start) * 1000
+                    timeout_seconds = (
+                        effective_timeout if effective_timeout is not None else self._timeouts.total
+                    )
+                    timeout_error = AxisTimeoutError(
+                        message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
+                        details={"timeout_seconds": timeout_seconds},
+                    )
+                    return self._build_failure_result(
+                        error=timeout_error,
+                        duration_ms=duration_ms,
+                        trace=trace,
+                    )
+
+                duration_ms = (time.monotonic() - start) * 1000
+                trace = trace_collector.get_events() if trace_collector else []
+                return self._build_result(raw, duration_ms, trace=trace)
+            finally:
+                self._running = False
+
+    def resume(
+        self,
+        checkpoint: str | dict[str, Any],
+        *,
+        timeout: float | None = None,
+        cancel_token: CancelToken | None = None,
+    ) -> RunResult:
+        """Resume an agent run from checkpoint (sync wrapper)."""
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "agent.resume() cannot be called from async context. "
+                "Use await agent.resume_async() instead."
+            )
+        except RuntimeError as e:
+            if "cannot be called from async context" in str(e):
+                raise
+
+        return asyncio.run(
+            self.resume_async(
+                checkpoint,
+                timeout=timeout,
+                cancel_token=cancel_token,
+            )
+        )
 
     def run(
         self,

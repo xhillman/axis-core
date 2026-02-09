@@ -2759,3 +2759,110 @@ class TestDestructiveToolConfirmationTask18:
             "must return bool" in record.error.message
             for record in result["errors"]
         )
+
+
+class TestCheckpointResumeTask19:
+    """Task 19 tests for checkpoint persistence and resume."""
+
+    @pytest.mark.asyncio
+    async def test_execute_persists_phase_boundary_checkpoints(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        checkpoints: list[dict[str, Any]] = []
+
+        async def checkpoint_handler(checkpoint: dict[str, Any]) -> None:
+            checkpoints.append(checkpoint)
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+            checkpoint_handler=checkpoint_handler,
+        )
+
+        result = await engine.execute(
+            input_text="checkpoint me",
+            agent_id="agent-task19",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        assert result["success"] is True
+        assert [item["phase"] for item in checkpoints] == [
+            Phase.INITIALIZE.value,
+            Phase.OBSERVE.value,
+            Phase.PLAN.value,
+            Phase.ACT.value,
+            Phase.EVALUATE.value,
+        ]
+        for checkpoint in checkpoints:
+            assert checkpoint["version"] == 1
+            assert "saved_at" in checkpoint
+            assert checkpoint["context"]["run_id"] == result["run_id"]
+
+    @pytest.mark.asyncio
+    async def test_resume_from_plan_checkpoint_completes_run(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        checkpoints_by_phase: dict[str, dict[str, Any]] = {}
+
+        async def checkpoint_handler(checkpoint: dict[str, Any]) -> None:
+            checkpoints_by_phase[checkpoint["phase"]] = checkpoint
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+            checkpoint_handler=checkpoint_handler,
+        )
+
+        await engine.execute(
+            input_text="checkpoint resume",
+            agent_id="agent-task19",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        plan_checkpoint = checkpoints_by_phase[Phase.PLAN.value]
+        resumed_engine = LifecycleEngine(model=mock_model, planner=MockPlanner())
+        resumed_result = await resumed_engine.resume(
+            plan_checkpoint,
+            config=_runtime_config(),
+        )
+
+        assert resumed_result["success"] is True
+        assert resumed_result["output"] == "Task completed"
+        assert resumed_result["cycles_completed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_resume_rejects_invalid_phase_boundary_state(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        checkpoints_by_phase: dict[str, dict[str, Any]] = {}
+
+        async def checkpoint_handler(checkpoint: dict[str, Any]) -> None:
+            checkpoints_by_phase[checkpoint["phase"]] = checkpoint
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+            checkpoint_handler=checkpoint_handler,
+        )
+
+        await engine.execute(
+            input_text="checkpoint invalid",
+            agent_id="agent-task19",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        invalid_checkpoint = dict(checkpoints_by_phase[Phase.OBSERVE.value])
+        invalid_checkpoint["phase"] = Phase.PLAN.value
+
+        resumed_engine = LifecycleEngine(model=mock_model, planner=MockPlanner())
+        with pytest.raises(ConfigError, match="current_plan"):
+            await resumed_engine.resume(
+                invalid_checkpoint,
+                config=_runtime_config(),
+            )

@@ -536,6 +536,120 @@ class TestRunAsync:
         assert result.error.resource == "wall_time"
 
 
+class TestCheckpointResumeTask19:
+    """Task 19 tests for Agent checkpoint persistence and resume APIs."""
+
+    @pytest.mark.asyncio
+    async def test_run_async_persists_checkpoint_file(self, tmp_path: Any) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            checkpoint=True,
+            checkpoint_dir=str(tmp_path),
+        )
+        result = await agent.run_async("persist checkpoint")
+
+        checkpoint_path = tmp_path / f"{result.run_id}.json"
+        assert checkpoint_path.exists()
+
+        checkpoint = json.loads(checkpoint_path.read_text())
+        assert checkpoint["version"] == 1
+        assert checkpoint["context"]["run_id"] == result.run_id
+        assert checkpoint["phase"] == "evaluate"
+
+    @pytest.mark.asyncio
+    async def test_resume_async_from_checkpoint_path(self, tmp_path: Any) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            checkpoint=True,
+            checkpoint_dir=str(tmp_path),
+        )
+        first = await agent.run_async("resume from checkpoint")
+        checkpoint_path = tmp_path / f"{first.run_id}.json"
+
+        resumed = await agent.resume_async(str(checkpoint_path))
+
+        assert resumed.success is True
+        assert resumed.run_id == first.run_id
+        assert resumed.output == "mock response"
+
+    @pytest.mark.asyncio
+    async def test_resume_async_rejects_corrupt_checkpoint_data(self) -> None:
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+
+        result = await agent.resume_async({"invalid": "payload"})
+
+        assert result.success is False
+        assert result.error is not None
+        assert "checkpoint" in str(result.error).lower()
+
+    @pytest.mark.asyncio
+    async def test_resume_async_rejects_unsupported_checkpoint_version(
+        self,
+        tmp_path: Any,
+    ) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            checkpoint=True,
+            checkpoint_dir=str(tmp_path),
+        )
+        first = await agent.run_async("bad version")
+        checkpoint_path = tmp_path / f"{first.run_id}.json"
+        checkpoint = json.loads(checkpoint_path.read_text())
+        checkpoint["version"] = 999
+
+        result = await agent.resume_async(checkpoint)
+
+        assert result.success is False
+        assert result.error is not None
+        assert "version" in str(result.error).lower()
+
+    @pytest.mark.asyncio
+    async def test_resume_async_rejects_invalid_phase_boundary_state(
+        self,
+        tmp_path: Any,
+    ) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            checkpoint=True,
+            checkpoint_dir=str(tmp_path),
+        )
+        first = await agent.run_async("invalid boundary")
+        checkpoint_path = tmp_path / f"{first.run_id}.json"
+        checkpoint = json.loads(checkpoint_path.read_text())
+        checkpoint["phase"] = "plan"
+        checkpoint["context"]["state"]["current_plan"] = None
+
+        result = await agent.resume_async(checkpoint)
+
+        assert result.success is False
+        assert result.error is not None
+        assert "current_plan" in str(result.error)
+
+    def test_resume_sync_from_checkpoint_path(self, tmp_path: Any) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            checkpoint=True,
+            checkpoint_dir=str(tmp_path),
+        )
+        first = agent.run("sync resume")
+        checkpoint_path = tmp_path / f"{first.run_id}.json"
+
+        resumed = agent.resume(str(checkpoint_path))
+
+        assert resumed.success is True
+        assert resumed.run_id == first.run_id
+
+
 # ---------------------------------------------------------------------------
 # run (sync) tests (8.4)
 # ---------------------------------------------------------------------------

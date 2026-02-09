@@ -14,6 +14,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - **Tool system** — Simple `@tool` decorator with automatic schema generation
 - **Destructive tool safeguards** — `Capability.DESTRUCTIVE` tools require explicit confirmation
 - **Runtime policy enforcement** — Per-phase timeouts, retries, rate limits, and in-memory caching
+- **Checkpoint/resume** — Versioned phase-boundary checkpoints with public resume APIs
 - **Session support** — Multi-turn conversations with optimistic locking (persistence via memory adapters)
 - **Budget tracking** — Cost, token, and cycle limits with real-time tracking
 - **Attachments & cancellation** — Image/PDF attachments (10MB limit) and cooperative cancellation
@@ -181,6 +182,8 @@ agent = Agent(
     rate_limits=RateLimits(model_calls="60/minute", tool_calls="30/minute"),
     cache=CacheConfig(enabled=True, model_responses=True, tool_results=True, ttl=3600),
     confirmation_handler=lambda tool_name, args: True,  # Required for DESTRUCTIVE tools
+    checkpoint=True,         # Persist phase-boundary checkpoints
+    checkpoint_dir="./checkpoints",
 )
 
 # Synchronous
@@ -188,6 +191,10 @@ result = agent.run("Your prompt here")
 
 # Asynchronous  
 result = await agent.run_async("Your prompt here")
+
+# Resume from checkpoint path or payload
+resumed = agent.resume("./checkpoints/<run_id>.json")
+resumed_async = await agent.resume_async("./checkpoints/<run_id>.json")
 
 # Streaming
 for event in agent.stream("Your prompt here"):
@@ -256,6 +263,25 @@ result = session.run("What about Osaka?")
 # For durable persistence across restarts, use SQLite or Redis memory:
 # agent = Agent(model="claude-sonnet-4-20250514", memory="sqlite")
 # agent = Agent(model="claude-sonnet-4-20250514", memory="redis")
+```
+
+### Checkpoints & Resume
+
+```python
+from axis_core import Agent
+
+agent = Agent(
+    model="claude-sonnet-4-20250514",
+    planner="sequential",
+    checkpoint=True,
+    checkpoint_dir="./checkpoints",
+)
+
+result = agent.run("Draft a short release note")
+checkpoint_path = f"./checkpoints/{result.run_id}.json"
+
+# Resume in the same or a later process
+resumed = agent.resume(checkpoint_path)
 ```
 
 ### Attachments & Cancellation

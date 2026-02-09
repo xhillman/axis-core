@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
   destructive tool approvals.
 - Added lifecycle tests for destructive-tool confirmation approval, rejection, missing-handler,
   and malformed callback return paths.
+- Added versioned checkpoint envelopes (`version`, `phase`, `next_phase`, `saved_at`, serialized
+  `context`) built from `RunContext.serialize()`.
+- Added public `Agent.resume()` / `Agent.resume_async()` APIs for checkpoint-based run resumption.
 
 ### Changed
 
@@ -27,6 +30,9 @@ All notable changes to this project will be documented in this file.
   rate-limit/cache policies are applied consistently for `run*` and `stream*`.
 - Act-phase tool execution now enforces confirmation before any `Capability.DESTRUCTIVE` tool
   runs, with deterministic errors for missing/rejected/malformed confirmation behavior.
+- Lifecycle execution now persists deterministic checkpoints at phase boundaries
+  (`initialize`, `observe`, `plan`, `act`, `evaluate`) and can resume from valid boundaries with
+  explicit validation for corrupt/incompatible checkpoint state.
 
 ## [0.6.0] - 2026-02-08
 

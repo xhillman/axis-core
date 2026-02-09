@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import time
@@ -33,6 +34,7 @@ from typing import Any, TypeVar
 from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget
 from axis_core.cancel import CancelToken
+from axis_core.checkpoint import create_checkpoint, parse_checkpoint
 from axis_core.config import CacheConfig, RateLimits, Timeouts
 from axis_core.context import (
     CycleState,
@@ -112,6 +114,7 @@ class LifecycleEngine:
         tools: dict[str, Any] | None = None,
         system: str | None = None,
         fallback: list[Any] | None = None,
+        checkpoint_handler: Callable[[dict[str, Any]], Any] | None = None,
     ) -> None:
         # Resolve adapters from strings or pass through instances (Task 16.2)
         resolved_model = resolve_adapter(model, model_registry)
@@ -131,6 +134,7 @@ class LifecycleEngine:
         self.tools: dict[str, Any] = tools or {}
         self.system = system
         self._token_callback: Any | None = None
+        self._checkpoint_handler = checkpoint_handler
 
         # Resolve fallback models (Task 15.0)
         self.fallback: list[Any] = []
@@ -584,9 +588,377 @@ class LifecycleEngine:
             except Exception:
                 logger.warning("Telemetry sink cleanup failed", exc_info=True)
 
+    async def _persist_checkpoint(
+        self,
+        ctx: RunContext,
+        *,
+        phase: Phase,
+        next_phase: Phase | None,
+    ) -> None:
+        """Persist a checkpoint envelope if a handler is configured."""
+        if self._checkpoint_handler is None:
+            return
+
+        checkpoint = create_checkpoint(
+            ctx,
+            phase=phase.value,
+            next_phase=next_phase.value if next_phase else None,
+        )
+        try:
+            result = self._checkpoint_handler(checkpoint)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.warning(
+                "Checkpoint persistence failed at phase '%s'",
+                phase.value,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _phase_after(phase: Phase) -> Phase | None:
+        """Return the next phase boundary after a completed phase."""
+        phase_sequence = {
+            Phase.INITIALIZE: Phase.OBSERVE,
+            Phase.OBSERVE: Phase.PLAN,
+            Phase.PLAN: Phase.ACT,
+            Phase.ACT: Phase.EVALUATE,
+            Phase.EVALUATE: Phase.OBSERVE,
+        }
+        return phase_sequence.get(phase)
+
+    @staticmethod
+    def _coerce_phase(raw_phase: str, *, field_name: str) -> Phase:
+        """Parse a checkpoint phase string into Phase enum."""
+        try:
+            return Phase(raw_phase)
+        except ValueError as e:
+            raise ConfigError(
+                message=f"Checkpoint {field_name} '{raw_phase}' is invalid."
+            ) from e
+
+    @staticmethod
+    def _validate_checkpoint_boundary_state(ctx: RunContext, phase: Phase) -> None:
+        """Validate that checkpoint state matches the declared phase boundary."""
+        if phase in (Phase.OBSERVE, Phase.PLAN, Phase.ACT, Phase.EVALUATE):
+            if ctx.state.current_observation is None:
+                raise ConfigError(
+                    message=(
+                        "Checkpoint is incompatible with phase boundary: "
+                        "current_observation is required."
+                    )
+                )
+        if phase in (Phase.PLAN, Phase.ACT, Phase.EVALUATE):
+            if ctx.state.current_plan is None:
+                raise ConfigError(
+                    message=(
+                        "Checkpoint is incompatible with phase boundary: "
+                        "current_plan is required."
+                    )
+                )
+        if phase in (Phase.ACT, Phase.EVALUATE) and ctx.state.current_execution is None:
+            raise ConfigError(
+                message=(
+                    "Checkpoint is incompatible with phase boundary: "
+                    "current_execution is required."
+                )
+            )
+
+    def _restore_checkpoint(
+        self,
+        checkpoint: dict[str, Any],
+    ) -> tuple[RunContext, Phase]:
+        """Parse and validate checkpoint payload for resume."""
+        ctx, phase_raw, next_phase_raw = parse_checkpoint(checkpoint)
+        phase = self._coerce_phase(phase_raw, field_name="phase")
+        self._validate_checkpoint_boundary_state(ctx, phase)
+
+        next_phase: Phase | None
+        if next_phase_raw is not None:
+            next_phase = self._coerce_phase(
+                next_phase_raw,
+                field_name="next_phase",
+            )
+        else:
+            next_phase = self._phase_after(phase)
+
+        if next_phase is None:
+            raise ConfigError(
+                message=(
+                    "Checkpoint phase boundary is not resumable. "
+                    "Only pre-finalize boundaries are supported."
+                )
+            )
+
+        return ctx, next_phase
+
     # =========================================================================
     # Main execution loop (7.8)
     # =========================================================================
+
+    async def _execute_from_context(
+        self,
+        ctx: RunContext,
+        *,
+        run_started_monotonic: float,
+        start_phase: Phase,
+    ) -> dict[str, Any]:
+        """Continue lifecycle execution from a prepared RunContext."""
+        self._update_wall_time(ctx, run_started_monotonic)
+
+        async def _run_with_time_budget(
+            phase: Phase,
+            operation: Callable[[], Awaitable[T]],
+        ) -> T:
+            self._update_wall_time(ctx, run_started_monotonic)
+            remaining = (
+                ctx.budget.max_wall_time_seconds
+                - ctx.state.budget_state.wall_time_seconds
+            )
+            if remaining <= 0:
+                raise self._wall_time_budget_error(ctx)
+
+            phase_timeout = self._phase_timeout_seconds(phase)
+            if phase_timeout is not None and phase_timeout <= 0:
+                raise self._phase_timeout_error(phase, phase_timeout)
+
+            timeout_budget = remaining
+            timeout_source = "wall"
+            if phase_timeout is not None and phase_timeout < timeout_budget:
+                timeout_budget = phase_timeout
+                timeout_source = "phase"
+
+            try:
+                result = await asyncio.wait_for(operation(), timeout=timeout_budget)
+            except asyncio.TimeoutError as e:
+                self._update_wall_time(ctx, run_started_monotonic)
+                if timeout_source == "phase":
+                    raise self._phase_timeout_error(phase, timeout_budget) from e
+                raise self._wall_time_budget_error(ctx) from e
+            self._update_wall_time(ctx, run_started_monotonic)
+            return result
+
+        await self._emit(
+            "run_started",
+            run_id=ctx.run_id,
+            data={"agent_id": ctx.agent_id},
+        )
+
+        termination_error: Exception | None = None
+
+        try:
+            first_cycle = True
+            phase_cursor = start_phase
+
+            while phase_cursor != Phase.FINALIZE:
+                cycle_start = time.monotonic()
+                self._update_wall_time(ctx, run_started_monotonic)
+                await self._emit(
+                    "cycle_started",
+                    run_id=ctx.run_id,
+                    cycle=ctx.cycle_count,
+                )
+
+                # Check cancellation at cycle start (AD-028)
+                if ctx.cancel_token and ctx.cancel_token.is_cancelled:
+                    from axis_core.engine.phases.evaluate import _cancel_reason
+
+                    termination_error = CancelledError(
+                        message=_cancel_reason(ctx.cancel_token)
+                    )
+                    break
+
+                # Check budget before starting cycle
+                if ctx.state.budget_state.is_exhausted(ctx.budget):
+                    resource = identify_exhausted_resource(ctx)
+                    termination_error = BudgetError(
+                        message=f"Budget exhausted: {resource}",
+                        resource=resource,
+                    )
+                    break
+
+                cycle_start_time = datetime.utcnow()
+                observation: Observation
+                plan: Plan
+                execution: ExecutionResult
+
+                if first_cycle and phase_cursor in (Phase.PLAN, Phase.ACT, Phase.EVALUATE):
+                    if ctx.state.current_observation is None:
+                        raise ConfigError(
+                            message=(
+                                "Checkpoint is incompatible with resume phase: "
+                                "current_observation is required."
+                            )
+                        )
+                    observation = ctx.state.current_observation
+                else:
+                    observation = await _run_with_time_budget(
+                        Phase.OBSERVE,
+                        lambda: self._observe(ctx),
+                    )
+                    await self._persist_checkpoint(
+                        ctx,
+                        phase=Phase.OBSERVE,
+                        next_phase=Phase.PLAN,
+                    )
+
+                if ctx.state.budget_state.is_exhausted(ctx.budget):
+                    resource = identify_exhausted_resource(ctx)
+                    termination_error = BudgetError(
+                        message=f"Budget exhausted: {resource}",
+                        resource=resource,
+                    )
+                    break
+
+                if first_cycle and phase_cursor in (Phase.ACT, Phase.EVALUATE):
+                    if ctx.state.current_plan is None:
+                        raise ConfigError(
+                            message=(
+                                "Checkpoint is incompatible with resume phase: "
+                                "current_plan is required."
+                            )
+                        )
+                    plan = ctx.state.current_plan
+                else:
+                    plan = await _run_with_time_budget(
+                        Phase.PLAN,
+                        lambda: self._plan(ctx, observation),
+                    )
+                    await self._persist_checkpoint(
+                        ctx,
+                        phase=Phase.PLAN,
+                        next_phase=Phase.ACT,
+                    )
+
+                if ctx.state.budget_state.is_exhausted(ctx.budget):
+                    resource = identify_exhausted_resource(ctx)
+                    termination_error = BudgetError(
+                        message=f"Budget exhausted: {resource}",
+                        resource=resource,
+                    )
+                    break
+
+                if first_cycle and phase_cursor == Phase.EVALUATE:
+                    if ctx.state.current_execution is None:
+                        raise ConfigError(
+                            message=(
+                                "Checkpoint is incompatible with resume phase: "
+                                "current_execution is required."
+                            )
+                        )
+                    execution = ctx.state.current_execution
+                else:
+                    execution = await _run_with_time_budget(
+                        Phase.ACT,
+                        lambda: self._act(ctx, plan),
+                    )
+                    await self._persist_checkpoint(
+                        ctx,
+                        phase=Phase.ACT,
+                        next_phase=Phase.EVALUATE,
+                    )
+
+                if ctx.state.budget_state.is_exhausted(ctx.budget):
+                    resource = identify_exhausted_resource(ctx)
+                    termination_error = BudgetError(
+                        message=f"Budget exhausted: {resource}",
+                        resource=resource,
+                    )
+                    break
+
+                decision = await _run_with_time_budget(
+                    Phase.EVALUATE,
+                    lambda: self._evaluate(ctx, plan, execution),
+                )
+                if ctx.state.budget_state.is_exhausted(ctx.budget):
+                    resource = identify_exhausted_resource(ctx)
+                    decision = EvalDecision(
+                        done=True,
+                        error=BudgetError(
+                            message=f"Budget exhausted: {resource}",
+                            resource=resource,
+                        ),
+                        reason=f"Budget exhausted: {resource}",
+                    )
+
+                cycle_end_time = datetime.utcnow()
+
+                # Record completed cycle
+                cycle_state = CycleState(
+                    cycle_number=ctx.cycle_count,
+                    observation=observation,
+                    plan=plan,
+                    execution=execution,
+                    evaluation=decision,
+                    started_at=cycle_start_time,
+                    ended_at=cycle_end_time,
+                )
+                ctx.state.append_cycle(cycle_state)
+
+                # Increment cycle count and budget
+                ctx.cycle_count += 1
+                ctx.state.budget_state.cycles += 1
+
+                cycle_duration_ms = (time.monotonic() - cycle_start) * 1000
+                await self._emit(
+                    "cycle_completed",
+                    run_id=ctx.run_id,
+                    cycle=ctx.cycle_count - 1,
+                    duration_ms=cycle_duration_ms,
+                    data={"done": decision.done},
+                )
+
+                next_phase = Phase.FINALIZE if decision.done else Phase.OBSERVE
+                await self._persist_checkpoint(
+                    ctx,
+                    phase=Phase.EVALUATE,
+                    next_phase=next_phase,
+                )
+
+                if decision.done:
+                    termination_error = decision.error
+                    break
+
+                # Reset current-cycle state for next cycle after checkpoint capture.
+                ctx.state.current_observation = None
+                ctx.state.current_plan = None
+                ctx.state.current_execution = None
+                phase_cursor = Phase.OBSERVE
+                first_cycle = False
+
+        except AxisError as e:
+            termination_error = e
+        except Exception as e:
+            termination_error = AxisError(
+                message=f"Unexpected error: {e}",
+                error_class=ErrorClass.RUNTIME,
+                cause=e,
+            )
+
+        # Finalize (always runs)
+        self._update_wall_time(ctx, run_started_monotonic)
+        try:
+            result = await _run_with_time_budget(
+                Phase.FINALIZE,
+                lambda: self._finalize(ctx, error=termination_error),
+            )
+        except (BudgetError, AxisTimeoutError) as e:
+            termination_error = e
+            result = self._build_failed_result(ctx, e)
+            await self._cleanup_telemetry()
+        self._update_wall_time(ctx, run_started_monotonic)
+
+        event_type = "run_completed" if result["success"] else "run_failed"
+        await self._emit(
+            event_type,
+            run_id=ctx.run_id,
+            data={
+                "success": result["success"],
+                "cycles": result["cycles_completed"],
+            },
+        )
+
+        return result
 
     async def execute(
         self,
@@ -599,27 +971,11 @@ class LifecycleEngine:
         config: Any | None = None,
         token_callback: Any | None = None,
     ) -> dict[str, Any]:
-        """Execute the full lifecycle: Initialize → [Observe→Plan→Act→Evaluate]* → Finalize.
-
-        Args:
-            input_text: User input text
-            agent_id: Agent identifier
-            budget: Budget limits
-            context: Optional context dict
-            attachments: Optional attachments
-            cancel_token: Optional cancellation token
-            config: Optional resolved config
-            token_callback: Optional callback for streaming model tokens
-
-        Returns:
-            Result dict from _finalize
-        """
+        """Execute the full lifecycle from Initialize through Finalize."""
         self._token_callback = token_callback
         run_started_monotonic = time.monotonic()
         try:
             self._configure_runtime_policies(config)
-
-            # Initialize
             ctx = await self._initialize(
                 input_text=input_text,
                 agent_id=agent_id,
@@ -630,202 +986,42 @@ class LifecycleEngine:
                 config=config,
             )
             self._update_wall_time(ctx, run_started_monotonic)
-
-            async def _run_with_time_budget(
-                phase: Phase,
-                operation: Callable[[], Awaitable[T]],
-            ) -> T:
-                self._update_wall_time(ctx, run_started_monotonic)
-                remaining = (
-                    ctx.budget.max_wall_time_seconds
-                    - ctx.state.budget_state.wall_time_seconds
-                )
-                if remaining <= 0:
-                    raise self._wall_time_budget_error(ctx)
-
-                phase_timeout = self._phase_timeout_seconds(phase)
-                if phase_timeout is not None and phase_timeout <= 0:
-                    raise self._phase_timeout_error(phase, phase_timeout)
-
-                timeout_budget = remaining
-                timeout_source = "wall"
-                if phase_timeout is not None and phase_timeout < timeout_budget:
-                    timeout_budget = phase_timeout
-                    timeout_source = "phase"
-
-                try:
-                    result = await asyncio.wait_for(operation(), timeout=timeout_budget)
-                except asyncio.TimeoutError as e:
-                    self._update_wall_time(ctx, run_started_monotonic)
-                    if timeout_source == "phase":
-                        raise self._phase_timeout_error(phase, timeout_budget) from e
-                    raise self._wall_time_budget_error(ctx) from e
-                self._update_wall_time(ctx, run_started_monotonic)
-                return result
-
-            await self._emit(
-                "run_started",
-                run_id=ctx.run_id,
-                data={"agent_id": agent_id},
+            await self._persist_checkpoint(
+                ctx,
+                phase=Phase.INITIALIZE,
+                next_phase=Phase.OBSERVE,
             )
-
-            termination_error: Exception | None = None
-
-            try:
-                # Main cycle loop
-                while True:
-                    cycle_start = time.monotonic()
-                    self._update_wall_time(ctx, run_started_monotonic)
-                    await self._emit(
-                        "cycle_started",
-                        run_id=ctx.run_id,
-                        cycle=ctx.cycle_count,
-                    )
-
-                    # Check cancellation at cycle start (AD-028)
-                    if ctx.cancel_token and ctx.cancel_token.is_cancelled:
-                        from axis_core.engine.phases.evaluate import _cancel_reason
-
-                        termination_error = CancelledError(
-                            message=_cancel_reason(ctx.cancel_token)
-                        )
-                        break
-
-                    # Check budget before starting cycle
-                    if ctx.state.budget_state.is_exhausted(ctx.budget):
-                        resource = identify_exhausted_resource(ctx)
-                        termination_error = BudgetError(
-                            message=f"Budget exhausted: {resource}",
-                            resource=resource,
-                        )
-                        break
-
-                    cycle_start_time = datetime.utcnow()
-
-                    # Observe
-                    observation = await _run_with_time_budget(
-                        Phase.OBSERVE,
-                        lambda: self._observe(ctx)
-                    )
-                    if ctx.state.budget_state.is_exhausted(ctx.budget):
-                        resource = identify_exhausted_resource(ctx)
-                        termination_error = BudgetError(
-                            message=f"Budget exhausted: {resource}",
-                            resource=resource,
-                        )
-                        break
-
-                    # Plan
-                    plan = await _run_with_time_budget(
-                        Phase.PLAN,
-                        lambda: self._plan(ctx, observation)
-                    )
-                    if ctx.state.budget_state.is_exhausted(ctx.budget):
-                        resource = identify_exhausted_resource(ctx)
-                        termination_error = BudgetError(
-                            message=f"Budget exhausted: {resource}",
-                            resource=resource,
-                        )
-                        break
-
-                    # Act
-                    execution = await _run_with_time_budget(
-                        Phase.ACT,
-                        lambda: self._act(ctx, plan)
-                    )
-                    if ctx.state.budget_state.is_exhausted(ctx.budget):
-                        resource = identify_exhausted_resource(ctx)
-                        termination_error = BudgetError(
-                            message=f"Budget exhausted: {resource}",
-                            resource=resource,
-                        )
-                        break
-
-                    # Evaluate
-                    decision = await _run_with_time_budget(
-                        Phase.EVALUATE,
-                        lambda: self._evaluate(ctx, plan, execution)
-                    )
-                    if ctx.state.budget_state.is_exhausted(ctx.budget):
-                        resource = identify_exhausted_resource(ctx)
-                        decision = EvalDecision(
-                            done=True,
-                            error=BudgetError(
-                                message=f"Budget exhausted: {resource}",
-                                resource=resource,
-                            ),
-                            reason=f"Budget exhausted: {resource}",
-                        )
-
-                    cycle_end_time = datetime.utcnow()
-
-                    # Record completed cycle
-                    cycle_state = CycleState(
-                        cycle_number=ctx.cycle_count,
-                        observation=observation,
-                        plan=plan,
-                        execution=execution,
-                        evaluation=decision,
-                        started_at=cycle_start_time,
-                        ended_at=cycle_end_time,
-                    )
-                    ctx.state.append_cycle(cycle_state)
-
-                    # Increment cycle count and budget
-                    ctx.cycle_count += 1
-                    ctx.state.budget_state.cycles += 1
-
-                    cycle_duration_ms = (time.monotonic() - cycle_start) * 1000
-                    await self._emit(
-                        "cycle_completed",
-                        run_id=ctx.run_id,
-                        cycle=ctx.cycle_count - 1,
-                        duration_ms=cycle_duration_ms,
-                        data={"done": decision.done},
-                    )
-
-                    if decision.done:
-                        termination_error = decision.error
-                        break
-
-                    # Reset current-cycle state for next cycle
-                    ctx.state.current_observation = None
-                    ctx.state.current_plan = None
-                    ctx.state.current_execution = None
-
-            except AxisError as e:
-                termination_error = e
-            except Exception as e:
-                termination_error = AxisError(
-                    message=f"Unexpected error: {e}",
-                    error_class=ErrorClass.RUNTIME,
-                    cause=e,
-                )
-
-            # Finalize (always runs)
-            self._update_wall_time(ctx, run_started_monotonic)
-            try:
-                result = await _run_with_time_budget(
-                    Phase.FINALIZE,
-                    lambda: self._finalize(ctx, error=termination_error),
-                )
-            except (BudgetError, AxisTimeoutError) as e:
-                termination_error = e
-                result = self._build_failed_result(ctx, e)
-                await self._cleanup_telemetry()
-            self._update_wall_time(ctx, run_started_monotonic)
-
-            event_type = "run_completed" if result["success"] else "run_failed"
-            await self._emit(
-                event_type,
-                run_id=ctx.run_id,
-                data={
-                    "success": result["success"],
-                    "cycles": result["cycles_completed"],
-                },
+            return await self._execute_from_context(
+                ctx,
+                run_started_monotonic=run_started_monotonic,
+                start_phase=Phase.OBSERVE,
             )
+        finally:
+            self._token_callback = None
 
-            return result
+    async def resume(
+        self,
+        checkpoint: dict[str, Any],
+        *,
+        cancel_token: CancelToken | None = None,
+        config: Any | None = None,
+        token_callback: Any | None = None,
+    ) -> dict[str, Any]:
+        """Resume lifecycle execution from a checkpoint payload."""
+        self._token_callback = token_callback
+        run_started_monotonic = time.monotonic()
+        try:
+            self._configure_runtime_policies(config)
+            ctx, next_phase = self._restore_checkpoint(checkpoint)
+            if config is not None:
+                ctx.config = config
+            if cancel_token is not None:
+                ctx.cancel_token = cancel_token
+            return await self._execute_from_context(
+                ctx,
+                run_started_monotonic=run_started_monotonic,
+                start_phase=next_phase,
+            )
         finally:
             self._token_callback = None
 
