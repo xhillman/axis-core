@@ -234,3 +234,30 @@ async def test_max_cycle_context_env_var(monkeypatch: pytest.MonkeyPatch) -> Non
     # Check that context was limited to max 2 cycles on later calls
     # (This is a smoke test - detailed verification would require inspecting message counts)
     assert mock_model.call_count >= 5
+
+
+@pytest.mark.asyncio
+async def test_invalid_max_cycle_context_env_var_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid AXIS_MAX_CYCLE_CONTEXT should not fail execution."""
+    import axis_core.adapters.planners  # noqa: F401
+
+    monkeypatch.setenv("AXIS_CONTEXT_STRATEGY", "smart")
+    monkeypatch.setenv("AXIS_MAX_CYCLE_CONTEXT", "not-an-int")
+
+    mock_model = IntegrationMockModel()
+    engine = LifecycleEngine(
+        model=mock_model,
+        planner="sequential",
+        tools={"search": mock_search_tool},
+    )
+
+    result = await engine.execute(
+        input_text="Test invalid max cycles",
+        agent_id="test-agent",
+        budget=Budget(max_cycles=10),
+    )
+
+    assert result["success"] is True
+    assert mock_model.call_count >= 2

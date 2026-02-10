@@ -759,7 +759,28 @@ async def _execute_model_step(
         # Get context strategy from environment or use default
         import os
         strategy = os.getenv("AXIS_CONTEXT_STRATEGY", "smart")
-        max_cycles = int(os.getenv("AXIS_MAX_CYCLE_CONTEXT", "5"))
+        if strategy not in {"smart", "full", "minimal"}:
+            logger.warning(
+                "Invalid AXIS_CONTEXT_STRATEGY='%s'; falling back to 'smart'",
+                strategy,
+            )
+            strategy = "smart"
+
+        raw_max_cycles = os.getenv("AXIS_MAX_CYCLE_CONTEXT", "5")
+        try:
+            max_cycles = int(raw_max_cycles)
+        except ValueError:
+            logger.warning(
+                "Invalid AXIS_MAX_CYCLE_CONTEXT='%s'; falling back to 5",
+                raw_max_cycles,
+            )
+            max_cycles = 5
+        if max_cycles < 0:
+            logger.warning(
+                "Negative AXIS_MAX_CYCLE_CONTEXT=%d; falling back to 5",
+                max_cycles,
+            )
+            max_cycles = 5
         messages = ctx.state.build_messages(ctx, strategy=strategy, max_cycles=max_cycles)
     else:
         messages = step.payload["messages"]

@@ -44,6 +44,13 @@ All notable changes to this project will be documented in this file.
 - Registered OpenAI Responses model IDs for codex/search/deep-research/computer-use under the
   existing `[openai]` optional extra and documented usage in README.
 
+### Fixed
+
+- Invalid `AXIS_MAX_CYCLE_CONTEXT` values no longer crash model-step execution; runtime now falls
+  back to a safe default context window.
+- Repeated per-step warnings for non-decorated tools (missing `_axis_manifest`) were reduced to a
+  single warning per tool per engine instance.
+
 ## [0.6.0] - 2026-02-08
 
 ### Added

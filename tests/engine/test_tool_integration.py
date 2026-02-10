@@ -6,6 +6,8 @@ and the complete agent → model → tools → result flow works correctly.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from axis_core.budget import Budget
@@ -368,3 +370,60 @@ class TestToolIntegration:
         assert model.call_count == 1
         # bad_tool should have been skipped, so model sees no tools
         assert model.last_tools is None
+
+    @pytest.mark.asyncio
+    async def test_tool_manifest_missing_warning_emitted_once(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Missing tool-manifest warnings should not repeat every model step."""
+        import axis_core.adapters.planners  # noqa: F401
+
+        class TwoModelCalls:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            @property
+            def model_id(self) -> str:
+                return "two-model-calls"
+
+            async def complete(self, messages, system: str | None = None, tools=None):
+                self.call_count += 1
+                if self.call_count == 1:
+                    return ModelResponse(
+                        content="Need tool",
+                        tool_calls=(
+                            ToolCall(id="call_1", name="bad_tool", arguments={"x": 2}),
+                        ),
+                        usage=UsageStats(input_tokens=10, output_tokens=10, total_tokens=20),
+                        cost_usd=0.001,
+                    )
+                return ModelResponse(
+                    content="done",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=10, total_tokens=20),
+                    cost_usd=0.001,
+                )
+
+        async def bad_tool(x: int) -> int:
+            return x * 2
+
+        engine = LifecycleEngine(
+            model=TwoModelCalls(),
+            planner="sequential",
+            tools={"bad_tool": bad_tool},  # Missing _axis_manifest by design
+        )
+
+        caplog.set_level(logging.WARNING, logger="axis_core.engine")
+        result = await engine.execute(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(max_cycles=10),
+        )
+
+        assert result["success"] is True
+        missing_manifest_logs = [
+            record for record in caplog.records
+            if "missing _axis_manifest" in record.getMessage()
+        ]
+        assert len(missing_manifest_logs) == 1

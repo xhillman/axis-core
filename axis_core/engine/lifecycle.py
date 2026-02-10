@@ -153,6 +153,7 @@ class LifecycleEngine:
         self._tool_specific_rate_limiters: dict[str, RateLimiter] = {}
         self._cache_store: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._cache_size_bytes = 0
+        self._tools_missing_manifest_warned: set[str] = set()
 
     # =========================================================================
     # Telemetry helpers
@@ -212,10 +213,12 @@ class LifecycleEngine:
         for tool_name, tool_fn in self.tools.items():
             # Check if tool has manifest (created by @tool decorator)
             if not hasattr(tool_fn, "_axis_manifest"):
-                logger.warning(
-                    "Tool '%s' missing _axis_manifest, skipping",
-                    tool_name,
-                )
+                if tool_name not in self._tools_missing_manifest_warned:
+                    logger.warning(
+                        "Tool '%s' missing _axis_manifest, skipping",
+                        tool_name,
+                    )
+                    self._tools_missing_manifest_warned.add(tool_name)
                 continue
 
             manifest = tool_fn._axis_manifest
