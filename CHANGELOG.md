@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - Added versioned checkpoint envelopes (`version`, `phase`, `next_phase`, `saved_at`, serialized
   `context`) built from `RunContext.serialize()`.
 - Added public `Agent.resume()` / `Agent.resume_async()` APIs for checkpoint-based run resumption.
+- Added `OpenAIResponsesModel` adapter for OpenAI Responses API payloads (`responses.create`) with
+  normalization into existing `ModelResponse`/`ModelChunk` contracts.
+- Added unit coverage for OpenAI Responses routing/mapping and a gated live integration test
+  (`OPENAI_API_KEY`) for Responses-backed model execution.
 
 ### Changed
 
@@ -35,6 +39,10 @@ All notable changes to this project will be documented in this file.
   explicit validation for corrupt/incompatible checkpoint state.
 - Optional provider scope now replaces `ollama` with `openrouter` extras/docs and documents
   OpenRouter usage via the existing OpenAI-compatible adapter path.
+- `OpenAIModel` now routes by model ID to Chat Completions or Responses API backends transparently,
+  preserving the existing user-facing model adapter surface.
+- Registered OpenAI Responses model IDs for codex/search/deep-research/computer-use under the
+  existing `[openai]` optional extra and documented usage in README.
 
 ## [0.6.0] - 2026-02-08
 

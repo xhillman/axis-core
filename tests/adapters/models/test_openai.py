@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from axis_core.protocols.model import ModelResponse
+from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 
 # Test that import provides helpful error message if openai not installed
 try:
@@ -47,6 +47,55 @@ class TestOpenAIModel:
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="OPENAI_API_KEY"):
                 OpenAIModel(model_id="gpt-4")
+
+    def test_init_routes_responses_api_models(self) -> None:
+        """Responses-only model IDs should route through the Responses adapter."""
+        model = OpenAIModel(model_id="gpt-5-codex", api_key="test_key")
+        assert model._responses_model is not None
+        assert model._client is None
+
+    @pytest.mark.asyncio
+    async def test_complete_routes_to_responses_adapter_for_responses_models(self) -> None:
+        """Responses-model complete() should delegate to OpenAIResponsesModel."""
+        model = OpenAIModel(model_id="gpt-5-codex", api_key="test_key")
+        assert model._responses_model is not None
+
+        expected = ModelResponse(
+            content="responses-output",
+            tool_calls=None,
+            usage=UsageStats(input_tokens=1, output_tokens=2, total_tokens=3),
+            cost_usd=0.001,
+        )
+
+        with patch.object(
+            model._responses_model,
+            "complete",
+            new=AsyncMock(return_value=expected),
+        ) as mock_complete:
+            actual = await model.complete(messages=[{"role": "user", "content": "hi"}])
+
+        assert actual == expected
+        mock_complete.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stream_routes_to_responses_adapter_for_responses_models(self) -> None:
+        """Responses-model stream() should delegate to OpenAIResponsesModel."""
+        model = OpenAIModel(model_id="gpt-5-codex", api_key="test_key")
+        assert model._responses_model is not None
+
+        async def mock_stream(*args, **kwargs):
+            yield ModelChunk(content="hello", tool_call_delta=None, is_final=False)
+            yield ModelChunk(content="", tool_call_delta=None, is_final=True)
+
+        with patch.object(model._responses_model, "stream", new=mock_stream):
+            chunks = [
+                chunk
+                async for chunk in model.stream(messages=[{"role": "user", "content": "hi"}])
+            ]
+
+        assert len(chunks) == 2
+        assert chunks[0].content == "hello"
+        assert chunks[-1].is_final is True
 
     @pytest.mark.asyncio
     async def test_complete_basic(self) -> None:

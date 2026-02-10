@@ -37,6 +37,15 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "gpt-5-chat-latest": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
     "gpt-5.2-pro": {"input_per_mtok": 21.00, "output_per_mtok": 168.00},
     "gpt-5-pro": {"input_per_mtok": 15.00, "output_per_mtok": 120.00},
+    # GPT-5 codex/search series (Responses API)
+    "gpt-5.2-codex": {"input_per_mtok": 1.75, "output_per_mtok": 14.00},
+    "gpt-5.1-codex-max": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
+    "gpt-5.1-codex": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
+    "gpt-5-codex": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
+    "gpt-5.1-codex-mini": {"input_per_mtok": 0.25, "output_per_mtok": 2.00},
+    "codex-mini-latest": {"input_per_mtok": 0.25, "output_per_mtok": 2.00},
+    "gpt-5-search": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
+    "gpt-5-search-api": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
     # GPT-4.1 series
     "gpt-4.1": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
     "gpt-4.1-mini": {"input_per_mtok": 0.40, "output_per_mtok": 1.60},
@@ -53,6 +62,10 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "o3-pro": {"input_per_mtok": 20.00, "output_per_mtok": 80.00},
     "o3-mini": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
     "o4-mini": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
+    # Deep research / computer use (Responses API)
+    "o3-deep-research": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
+    "o4-mini-deep-research": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
+    "computer-use-preview": {"input_per_mtok": 2.50, "output_per_mtok": 10.00},
 }
 
 
@@ -112,6 +125,25 @@ class OpenAIModel:
         "gpt-5-search-api",
     }
 
+    # Models that should route through the OpenAI Responses API
+    _RESPONSES_API_MODELS = {
+        # Codex
+        "gpt-5.2-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex",
+        "gpt-5-codex",
+        "gpt-5.1-codex-mini",
+        "codex-mini-latest",
+        # Search
+        "gpt-5-search",
+        "gpt-5-search-api",
+        # Deep research
+        "o3-deep-research",
+        "o4-mini-deep-research",
+        # Computer use
+        "computer-use-preview",
+    }
+
     def __init__(
         self,
         model_id: str,
@@ -142,12 +174,30 @@ class OpenAIModel:
                 "Provide it via api_key parameter or set OPENAI_API_KEY environment variable."
             )
 
-        # Initialize OpenAI client
+        self._responses_model: Any | None = None
+        self._client: AsyncOpenAI | None = None
+
+        if self._uses_responses_api():
+            from axis_core.adapters.models.openai_responses import OpenAIResponsesModel
+
+            self._responses_model = OpenAIResponsesModel(
+                model_id=model_id,
+                api_key=self._api_key,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return
+
+        # Initialize OpenAI client for Chat Completions API
         self._client = AsyncOpenAI(api_key=self._api_key)
 
     def _uses_completion_tokens(self) -> bool:
         """Check if this model uses max_completion_tokens instead of max_tokens."""
         return self._model_id in self._COMPLETION_TOKENS_MODELS
+
+    def _uses_responses_api(self) -> bool:
+        """Check if this model should use the OpenAI Responses API backend."""
+        return self._model_id in self._RESPONSES_API_MODELS
 
     @property
     def model_id(self) -> str:
@@ -306,6 +356,23 @@ class OpenAIModel:
         Raises:
             ModelError: If the API call fails
         """
+        if self._responses_model is not None:
+            return cast(
+                ModelResponse,
+                await self._responses_model.complete(
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stop_sequences=stop_sequences,
+                    metadata=metadata,
+                ),
+            )
+
+        client = self._client
+        assert client is not None
+
         try:
             # Convert messages from internal format to OpenAI format
             openai_messages = self._convert_messages_to_openai(messages)
@@ -341,7 +408,7 @@ class OpenAIModel:
                 kwargs["stop"] = stop_sequences
 
             # Call OpenAI API
-            response = await self._client.chat.completions.create(**kwargs)
+            response = await client.chat.completions.create(**kwargs)
 
             # Extract content and tool calls
             message = response.choices[0].message
@@ -475,6 +542,22 @@ class OpenAIModel:
         Raises:
             ModelError: If the API call fails
         """
+        if self._responses_model is not None:
+            async for chunk in self._responses_model.stream(
+                messages=messages,
+                system=system,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stop_sequences=stop_sequences,
+                metadata=metadata,
+            ):
+                yield chunk
+            return
+
+        client = self._client
+        assert client is not None
+
         try:
             # Convert messages from internal format to OpenAI format
             openai_messages = self._convert_messages_to_openai(messages)
@@ -516,7 +599,7 @@ class OpenAIModel:
             # in its overload signatures, which requires a static keyword).
             stream = cast(
                 AsyncIterator[ChatCompletionChunk],
-                self._client.chat.completions.create(**kwargs),
+                client.chat.completions.create(**kwargs),
             )
             async for chunk in stream:
                 if chunk.choices and len(chunk.choices) > 0:
@@ -610,6 +693,9 @@ class OpenAIModel:
         Returns:
             Estimated token count (roughly 1 token per 4 characters)
         """
+        if self._responses_model is not None:
+            return int(self._responses_model.estimate_tokens(text))
+
         if not text:
             return 0
 
@@ -629,6 +715,9 @@ class OpenAIModel:
         Returns:
             Estimated cost in USD
         """
+        if self._responses_model is not None:
+            return float(self._responses_model.estimate_cost(input_tokens, output_tokens))
+
         pricing = MODEL_PRICING.get(self._model_id, {})
 
         if not pricing:

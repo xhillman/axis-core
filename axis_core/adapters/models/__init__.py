@@ -131,6 +131,39 @@ for _model_id in _openai_models:
         ),
     )
 
+# Responses API models (routed internally by OpenAIModel)
+_openai_responses_models = [
+    # Codex
+    "gpt-5.2-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex",
+    "gpt-5-codex",
+    "gpt-5.1-codex-mini",
+    "codex-mini-latest",
+    # Search
+    "gpt-5-search",
+    "gpt-5-search-api",
+    # Deep research
+    "o3-deep-research",
+    "o4-mini-deep-research",
+    # Computer use
+    "computer-use-preview",
+]
+
+for _model_id in _openai_responses_models:
+    model_registry.register(
+        _model_id,
+        make_lazy_factory(
+            _OPENAI_MODULE,
+            "OpenAIModel",
+            defaults={"model_id": _model_id},
+            missing_dep_message=(
+                f"Model '{_model_id}' requires the openai package. "
+                f"Install with: pip install 'axis-core[openai]'"
+            ),
+        ),
+    )
+
 
 # ===========================================================================
 # Eager export of OpenAIModel class (for direct use)
@@ -143,7 +176,10 @@ try:
     from axis_core.adapters.models.openai import (
         OpenAIModel,  # noqa: F401 - re-exported
     )
+    from axis_core.adapters.models.openai_responses import (
+        OpenAIResponsesModel,  # noqa: F401 - re-exported
+    )
 
-    __all__.extend(["OpenAIModel", "OPENAI_PRICING"])
+    __all__.extend(["OpenAIModel", "OpenAIResponsesModel", "OPENAI_PRICING"])
 except ImportError:
     pass

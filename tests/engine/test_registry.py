@@ -228,6 +228,26 @@ print(json.dumps({
         assert isinstance(opus, AnthropicModel)
         assert opus.model_id == "claude-opus-4-5-20251101"
 
+    def test_openai_responses_models_registered(self) -> None:
+        """Responses API model IDs should be available in built-in model registry."""
+        from axis_core.engine.registry import model_registry
+
+        try:
+            import axis_core.adapters.models  # noqa: F401
+        except ImportError:
+            pytest.skip("OpenAI package not installed")
+
+        registered = model_registry.list()
+        expected_models = [
+            "gpt-5-codex",
+            "codex-mini-latest",
+            "gpt-5-search-api",
+            "o3-deep-research",
+            "computer-use-preview",
+        ]
+        for model in expected_models:
+            assert model in registered, f"Expected Responses model {model} to be registered"
+
 
 # ---------------------------------------------------------------------------
 # MemoryRegistry tests

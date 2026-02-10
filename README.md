@@ -18,6 +18,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - **Session support** — Multi-turn conversations with optimistic locking (persistence via memory adapters)
 - **Budget tracking** — Cost, token, and cycle limits with real-time tracking
 - **Attachments & cancellation** — Image/PDF attachments (10MB limit) and cooperative cancellation
+- **OpenAI Responses routing** — Codex/search/deep-research/computer-use model IDs auto-route
 - **Built-in observability** — Phase-level telemetry, trace collection, and pluggable sinks
 - **Type-safe** — Full type hints with mypy strict mode
 - **Production-ready** — Async-native with comprehensive error handling and recovery
@@ -370,7 +371,7 @@ AXIS_MAX_CYCLE_CONTEXT=5            # Max cycles to include in context
 | Provider | Models | Status | Installation |
 | -------- | ------ | ------ | ------------ |
 | Anthropic | Claude Opus 4, Sonnet 4, Haiku | ✅ Stable | `pip install axis-core[anthropic]` |
-| OpenAI | GPT-5, GPT-4.1, GPT-4o, o1/o3/o4 | ✅ Stable | `pip install axis-core[openai]` |
+| OpenAI | GPT-5, GPT-4.1, GPT-4o, o1/o3/o4 + Responses (codex/search/deep-research/computer-use) | ✅ Stable | `pip install axis-core[openai]` |
 | OpenRouter | OpenAI-compatible hosted models | ✅ Supported via OpenAI adapter | `pip install axis-core[openrouter]` |
 
 OpenRouter uses the OpenAI-compatible adapter path. Configure:
@@ -379,6 +380,9 @@ OpenRouter uses the OpenAI-compatible adapter path. Configure:
 OPENAI_API_KEY=<openrouter-api-key>
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
 ```
+
+Responses API models are selected automatically by model ID (no extra flags required). Examples:
+`gpt-5-codex`, `gpt-5-search-api`, `o3-deep-research`, `computer-use-preview`.
 
 **Model Fallback**: Automatically fallback to secondary models on recoverable errors (rate limits, connection issues):
 
@@ -412,6 +416,7 @@ agent = Agent(
 
 - Anthropic (Claude Opus 4, Sonnet 4, Haiku)
 - OpenAI (GPT-4, GPT-4o, GPT-5, o1/o3/o4)
+- OpenAI Responses model routing (codex/search/deep-research/computer-use IDs)
 - OpenRouter via OpenAI-compatible endpoint (`OPENAI_BASE_URL`)
 - Model fallback system (automatic retry with secondary models)
 - String-based model resolution (`"claude-sonnet-4-20250514"` → adapter)
@@ -468,7 +473,6 @@ These are scoped targets tied to the current task list and near-term releases.
 
 **Platform & API:**
 
-- OpenAI Responses API routing support
 - `research_agent()`, `support_agent()`, and `code_agent()` loadouts
 - Planner fallback and plan confidence scoring
 
