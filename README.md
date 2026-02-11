@@ -20,6 +20,8 @@ A modular, observable AI agent framework for building production-ready agents in
 - **Attachments & cancellation** — Image/PDF attachments (10MB limit) and cooperative cancellation
 - **OpenAI Responses routing** — Codex/search/deep-research/computer-use model IDs auto-route
 - **Built-in observability** — Phase-level telemetry, trace collection, and pluggable sinks
+- **Security redaction hardening** — Hyphenated secret keys and free-form error strings are
+  redacted in telemetry and persisted run-state records
 - **Type-safe** — Full type hints with mypy strict mode
 - **Production-ready** — Async-native with comprehensive error handling and recovery
 

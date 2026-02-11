@@ -50,6 +50,10 @@ All notable changes to this project will be documented in this file.
   back to a safe default context window.
 - Repeated per-step warnings for non-decorated tools (missing `_axis_manifest`) were reduced to a
   single warning per tool per engine instance.
+- Security redaction now covers hyphenated secret-key variants (for example `x-api-key`) and
+  free-form error strings before telemetry/checkpoint serialization.
+- Act-phase failure telemetry and persisted `RunState` error/tool-call records now sanitize
+  secret-like values in messages and exception causes.
 
 ## [0.6.0] - 2026-02-08
 

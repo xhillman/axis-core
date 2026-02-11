@@ -738,15 +738,19 @@ def _deserialize_eval_decision(data: dict[str, Any]) -> EvalDecision:
 def _serialize_axis_error(error: AxisError) -> dict[str, Any]:
     """Serialize AxisError to dict."""
     return {
-        "message": error.message,
+        "message": redact_sensitive_data(error.message),
         "error_class": error.error_class.value,
         "phase": error.phase,
         "cycle": error.cycle,
         "step_id": error.step_id,
         "recoverable": error.recoverable,
         "retry_after": error.retry_after,
-        "details": error.details,
-        "cause": str(error.cause) if error.cause else None,
+        "details": redact_sensitive_data(error.details),
+        "cause": (
+            redact_sensitive_data(str(error.cause))
+            if error.cause
+            else None
+        ),
     }
 
 
@@ -842,12 +846,13 @@ def _serialize_tool_call_record(record: Any) -> dict[str, Any]:
     include_sensitive = persist_sensitive_tool_data_enabled()
     args = record.args if include_sensitive else redact_sensitive_data(record.args)
     result = record.result if include_sensitive else redact_sensitive_data(record.result)
+    error = record.error if include_sensitive else redact_sensitive_data(record.error)
     return {
         "tool_name": record.tool_name,
         "call_id": record.call_id,
         "args": args,
         "result": result,
-        "error": record.error,
+        "error": error,
         "cached": record.cached,
         "duration_ms": record.duration_ms,
         "timestamp": record.timestamp,

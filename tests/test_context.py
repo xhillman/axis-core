@@ -580,6 +580,33 @@ class TestRunState:
         assert serialized_call["result"]["access_token"] == "[REDACTED]"
         assert serialized_call["result"]["safe_result"] == "visible"
 
+    def test_to_dict_redacts_sensitive_tool_error_string_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tool error strings should be redacted in serialized state by default."""
+        from axis_core.context import RunState
+
+        monkeypatch.delenv("AXIS_PERSIST_SENSITIVE_TOOL_DATA", raising=False)
+
+        state = RunState()
+        state.append_tool_call(
+            ToolCallRecord(
+                tool_name="search",
+                call_id="call-1",
+                args={"safe": "ok"},
+                result=None,
+                error="failed with x-api-key=sk-secret-123",
+                cached=False,
+                duration_ms=1.0,
+                timestamp=1704067200.0,
+            )
+        )
+
+        data = state.to_dict()
+        serialized_call = data["tool_calls"][0]
+        assert "sk-secret-123" not in serialized_call["error"]
+        assert "[REDACTED]" in serialized_call["error"]
+
     def test_to_dict_allows_sensitive_tool_data_when_opted_in(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1032,6 +1059,34 @@ class TestSerializationRoundTrip:
         assert restored.errors[0].phase == "act"
         assert restored.errors[0].cycle == 1
         assert restored.errors[0].recovered is False
+
+    def test_error_serialization_redacts_sensitive_message_and_cause(self) -> None:
+        """Serialized errors should not persist raw secret-like values."""
+        from axis_core.context import RunState
+
+        state = RunState()
+
+        cause = ValueError("authorization: Bearer tok_abc123")
+        error = AxisError(
+            message="tool failed with x-api-key=sk-secret-123",
+            error_class=ErrorClass.TOOL,
+            cause=cause,
+        )
+        record = ErrorRecord(
+            error=error,
+            timestamp=datetime.now(timezone.utc),
+            phase="act",
+            cycle=1,
+            recovered=False,
+        )
+        state.append_error(record)
+
+        data = state.to_dict()
+        serialized_error = data["errors"][0]["error"]
+        assert "sk-secret-123" not in serialized_error["message"]
+        assert "tok_abc123" not in serialized_error["cause"]
+        assert "[REDACTED]" in serialized_error["message"]
+        assert "[REDACTED]" in serialized_error["cause"]
 
 
 # =============================================================================

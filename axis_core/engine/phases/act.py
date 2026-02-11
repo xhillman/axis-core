@@ -22,6 +22,7 @@ from axis_core.errors import (
 )
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
+from axis_core.redaction import redact_sensitive_data
 from axis_core.tool import Capability, ToolCallRecord, ToolContext
 
 if TYPE_CHECKING:
@@ -235,6 +236,7 @@ async def act(engine: LifecycleEngine, ctx: RunContext, plan_obj: Plan) -> Execu
         except Exception as e:
             axis_error = _wrap_error(e, step)
             errors[step.id] = axis_error
+            redacted_error = str(redact_sensitive_data(str(axis_error)))
 
             # Record error in state
             ctx.state.append_error(
@@ -253,10 +255,10 @@ async def act(engine: LifecycleEngine, ctx: RunContext, plan_obj: Plan) -> Execu
                 phase=Phase.ACT.value,
                 cycle=ctx.cycle_count,
                 step_id=step.id,
-                data={"error": str(e)},
+                data={"error": redacted_error},
             )
 
-            logger.warning("Step %s failed: %s", step.id, e)
+            logger.warning("Step %s failed: %s", step.id, redacted_error)
 
     execution_result = ExecutionResult(
         results=results,
@@ -426,7 +428,9 @@ async def _execute_tool_step(
             await _sleep_for_retry(retry_policy, attempt)
 
     if last_error is not None:
-        error_msg = f"Tool '{tool_name}' failed: {last_error}"
+        error_msg = str(redact_sensitive_data(
+            f"Tool '{tool_name}' failed: {last_error}"
+        ))
         duration_ms = (time.monotonic() - start) * 1000
         ctx.state.append_tool_call(ToolCallRecord(
             tool_name=tool_name,
@@ -931,12 +935,12 @@ def _wrap_error(e: Exception, step: PlanStep) -> AxisError:
         return e
     if step.type == StepType.TOOL:
         return ToolError(
-            message=f"Tool step '{step.id}' failed: {e}",
+            message=str(redact_sensitive_data(f"Tool step '{step.id}' failed: {e}")),
             tool_name=step.payload.get("tool"),
             cause=e,
         )
     return AxisError(
-        message=f"Step '{step.id}' failed: {e}",
+        message=str(redact_sensitive_data(f"Step '{step.id}' failed: {e}")),
         error_class=ErrorClass.RUNTIME,
         cause=e,
     )

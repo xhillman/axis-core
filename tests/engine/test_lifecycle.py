@@ -1555,6 +1555,54 @@ class TestTelemetryEmission:
         assert emitted_args["payload"]["nested"]["private_key"] == "[REDACTED]"
         assert emitted_args["payload"]["safe"] == "visible"
 
+    @pytest.mark.asyncio
+    async def test_tool_failed_error_payload_is_redacted_before_sink(
+        self,
+        mock_model: MockModelAdapter,
+        mock_planner: MockPlanner,
+        mock_telemetry: MockTelemetrySink,
+    ) -> None:
+        """Free-form tool error messages should be redacted before telemetry sinks."""
+
+        async def broken_tool() -> str:
+            raise RuntimeError(
+                "downstream rejected authorization: Bearer tok_abc123 "
+                "x-api-key=sk-secret-123"
+            )
+
+        plan = Plan(
+            id="plan-1",
+            goal="Call tool",
+            steps=(
+                PlanStep(
+                    id="tool-step",
+                    type=StepType.TOOL,
+                    payload={"tool": "broken_tool", "args": {}},
+                ),
+            ),
+        )
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=mock_planner,
+            telemetry=[mock_telemetry],
+            tools={"broken_tool": broken_tool},
+        )
+        ctx = await engine._initialize(
+            input_text="redact",
+            agent_id="test-agent",
+            budget=Budget(),
+        )
+
+        await engine._act(ctx, plan)
+
+        failed_events = [e for e in mock_telemetry.events if e.type == "tool_failed"]
+        assert failed_events
+        emitted_error = failed_events[0].data["error"]
+        assert "sk-secret-123" not in emitted_error
+        assert "tok_abc123" not in emitted_error
+        assert "[REDACTED]" in emitted_error
+
 
 # =============================================================================
 # Adapter resolution tests (Task 16.2, 16.4)
