@@ -307,6 +307,7 @@ class TestAnthropicModel:
     def test_model_pricing_table(self) -> None:
         """Test that MODEL_PRICING table has expected models."""
         assert "claude-opus-4-20250514" in MODEL_PRICING
+        assert "claude-opus-4-6" in MODEL_PRICING
         assert "claude-sonnet-4-20250514" in MODEL_PRICING
         assert "claude-haiku" in MODEL_PRICING
 

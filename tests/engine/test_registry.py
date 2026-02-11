@@ -146,6 +146,7 @@ print(json.dumps({
             "claude-sonnet-4-5-20250929",
             "claude-haiku-4-5-20251001",
             "claude-opus-4-5-20251101",
+            "claude-opus-4-6",
         ]
         for model in expected_models:
             assert model in registered, f"Expected model {model} to be registered"
@@ -226,7 +227,7 @@ print(json.dumps({
         assert sonnet.model_id == "claude-sonnet-4-5-20250929"
 
         assert isinstance(opus, AnthropicModel)
-        assert opus.model_id == "claude-opus-4-5-20251101"
+        assert opus.model_id == "claude-opus-4-6"
 
     def test_openai_responses_models_registered(self) -> None:
         """Responses API model IDs should be available in built-in model registry."""
@@ -242,6 +243,8 @@ print(json.dumps({
             "gpt-5-codex",
             "codex-mini-latest",
             "gpt-5-search-api",
+            "gpt-4o-search-preview",
+            "gpt-4o-mini-search-preview",
             "o3-deep-research",
             "computer-use-preview",
         ]

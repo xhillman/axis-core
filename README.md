@@ -112,7 +112,7 @@ for event in agent.stream("Solve 42 * 137"):
 ```python
 # Primary model might hit rate limits, fallback chain handles gracefully
 agent = Agent(
-    model="claude-opus-4-20250514",   # Primary (expensive, might hit limits)
+    model="claude-opus-4-6",          # Primary (expensive, might hit limits)
     fallback=[
         "claude-sonnet-4-20250514",   # First fallback
         "gpt-4o",                      # Second fallback
@@ -372,8 +372,8 @@ AXIS_MAX_CYCLE_CONTEXT=5            # Max cycles to include in context
 
 | Provider | Models | Status | Installation |
 | -------- | ------ | ------ | ------------ |
-| Anthropic | Claude Opus 4, Sonnet 4, Haiku | ✅ Stable | `pip install axis-core[anthropic]` |
-| OpenAI | GPT-5, GPT-4.1, GPT-4o, o1/o3/o4 + Responses (codex/search/deep-research/computer-use) | ✅ Stable | `pip install axis-core[openai]` |
+| Anthropic | Claude Opus 4.6, Sonnet 4.5, Haiku 4.5 | ✅ Stable | `pip install axis-core[anthropic]` |
+| OpenAI | GPT-5, GPT-4.1, GPT-4o, o1/o3/o4 + Responses (codex/search/deep-research/computer-use/search-preview) | ✅ Stable | `pip install axis-core[openai]` |
 | OpenRouter | OpenAI-compatible hosted models | ✅ Supported via OpenAI adapter | `pip install axis-core[openrouter]` |
 
 OpenRouter uses the OpenAI-compatible adapter path. Configure:
@@ -384,7 +384,7 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 ```
 
 Responses API models are selected automatically by model ID (no extra flags required). Examples:
-`gpt-5-codex`, `gpt-5-search-api`, `o3-deep-research`, `computer-use-preview`.
+`gpt-5-codex`, `gpt-5-search-api`, `gpt-4o-search-preview`, `o3-deep-research`, `computer-use-preview`.
 
 **Model Fallback**: Automatically fallback to secondary models on recoverable errors (rate limits, connection issues):
 

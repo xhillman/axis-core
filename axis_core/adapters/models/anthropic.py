@@ -23,7 +23,7 @@ from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, Usage
 from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
-# Source: https://platform.claude.com/docs/en/about-claude/pricing (as of 2026-01)
+# Source: https://docs.anthropic.com/en/docs/about-claude/models/all-models (as of 2026-02)
 MODEL_PRICING: dict[str, dict[str, float]] = {
   # Exact API model names
   "claude-opus-4-20250514": {
@@ -35,6 +35,10 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "output_per_mtok": 75.00
   },
   "claude-opus-4-5-20251101": {
+    "input_per_mtok": 5.00,
+    "output_per_mtok": 25.00
+  },
+  "claude-opus-4-6": {
     "input_per_mtok": 5.00,
     "output_per_mtok": 25.00
   },

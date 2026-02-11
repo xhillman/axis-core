@@ -30,6 +30,7 @@ _anthropic_models = [
     "claude-sonnet-4-5-20250929",
     "claude-haiku-4-5-20251001",
     "claude-opus-4-5-20251101",
+    "claude-opus-4-6",
 ]
 
 for _model_id in _anthropic_models:
@@ -50,7 +51,7 @@ for _model_id in _anthropic_models:
 _anthropic_aliases = {
     "claude-haiku": "claude-haiku-4-5-20251001",
     "claude-sonnet": "claude-sonnet-4-5-20250929",
-    "claude-opus": "claude-opus-4-5-20251101",
+    "claude-opus": "claude-opus-4-6",
 }
 
 for _alias, _target in _anthropic_aliases.items():
@@ -143,6 +144,8 @@ _openai_responses_models = [
     # Search
     "gpt-5-search",
     "gpt-5-search-api",
+    "gpt-4o-search-preview",
+    "gpt-4o-mini-search-preview",
     # Deep research
     "o3-deep-research",
     "o4-mini-deep-research",

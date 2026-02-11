@@ -24,7 +24,7 @@ from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, Usage
 from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
-# Source: https://openai.com/api/pricing/ (as of 2026-01)
+# Source: https://platform.openai.com/docs/pricing (standard pricing, as of 2026-02)
 MODEL_PRICING: dict[str, dict[str, float]] = {
     # GPT-5 series
     "gpt-5.2": {"input_per_mtok": 1.75, "output_per_mtok": 14.00},
@@ -43,9 +43,11 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "gpt-5.1-codex": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
     "gpt-5-codex": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
     "gpt-5.1-codex-mini": {"input_per_mtok": 0.25, "output_per_mtok": 2.00},
-    "codex-mini-latest": {"input_per_mtok": 0.25, "output_per_mtok": 2.00},
+    "codex-mini-latest": {"input_per_mtok": 1.50, "output_per_mtok": 6.00},
     "gpt-5-search": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
     "gpt-5-search-api": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
+    "gpt-4o-search-preview": {"input_per_mtok": 2.50, "output_per_mtok": 10.00},
+    "gpt-4o-mini-search-preview": {"input_per_mtok": 0.15, "output_per_mtok": 0.60},
     # GPT-4.1 series
     "gpt-4.1": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
     "gpt-4.1-mini": {"input_per_mtok": 0.40, "output_per_mtok": 1.60},
@@ -63,9 +65,9 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "o3-mini": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
     "o4-mini": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
     # Deep research / computer use (Responses API)
-    "o3-deep-research": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
-    "o4-mini-deep-research": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
-    "computer-use-preview": {"input_per_mtok": 2.50, "output_per_mtok": 10.00},
+    "o3-deep-research": {"input_per_mtok": 10.00, "output_per_mtok": 40.00},
+    "o4-mini-deep-research": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
+    "computer-use-preview": {"input_per_mtok": 3.00, "output_per_mtok": 12.00},
 }
 
 
@@ -137,6 +139,8 @@ class OpenAIModel:
         # Search
         "gpt-5-search",
         "gpt-5-search-api",
+        "gpt-4o-search-preview",
+        "gpt-4o-mini-search-preview",
         # Deep research
         "o3-deep-research",
         "o4-mini-deep-research",

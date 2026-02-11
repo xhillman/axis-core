@@ -45,6 +45,9 @@ All notable changes to this project will be documented in this file.
   preserving the existing user-facing model adapter surface.
 - Registered OpenAI Responses model IDs for codex/search/deep-research/computer-use under the
   existing `[openai]` optional extra and documented usage in README.
+- Refreshed built-in provider model coverage to include Anthropic `claude-opus-4-6` and OpenAI
+  `gpt-4o-search-preview` / `gpt-4o-mini-search-preview`, and updated affected OpenAI Responses
+  pricing entries (`codex-mini-latest`, deep-research, computer-use) to current standard rates.
 - Aligned beta-facing docs to shipped behavior: removed checkpoint/resume from planned roadmap
   items, refreshed PRD implementation-status notes, clarified OpenRouter as OpenAI-compatible
   routing (no dedicated `OpenRouterModel` class), and clarified memory string resolution as

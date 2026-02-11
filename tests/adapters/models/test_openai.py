@@ -54,6 +54,12 @@ class TestOpenAIModel:
         assert model._responses_model is not None
         assert model._client is None
 
+    def test_init_routes_search_preview_models_to_responses_api(self) -> None:
+        """Search preview IDs should route through the Responses adapter."""
+        model = OpenAIModel(model_id="gpt-4o-search-preview", api_key="test_key")
+        assert model._responses_model is not None
+        assert model._client is None
+
     @pytest.mark.asyncio
     async def test_complete_routes_to_responses_adapter_for_responses_models(self) -> None:
         """Responses-model complete() should delegate to OpenAIResponsesModel."""
@@ -432,6 +438,8 @@ class TestOpenAIModel:
         assert "gpt-5" in MODEL_PRICING
         assert "gpt-4o" in MODEL_PRICING
         assert "o1" in MODEL_PRICING
+        assert "gpt-4o-search-preview" in MODEL_PRICING
+        assert "gpt-4o-mini-search-preview" in MODEL_PRICING
 
         # Verify pricing structure
         gpt5_pricing = MODEL_PRICING["gpt-5"]
