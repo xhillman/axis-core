@@ -278,6 +278,132 @@ class TestAutoPlanner:
         assert plan.metadata.get("fallback") is True
 
     @pytest.mark.asyncio
+    async def test_fallback_on_malformed_json_fixture(self) -> None:
+        """Malformed JSON should deterministically fall back to sequential planning."""
+        malformed_json = (
+            '{"reasoning":"broken","steps":[{"type":"tool","tool":"search",'
+            '"args":{"query":"x"},}]}'
+        )
+
+        mock_model = AsyncMock()
+        mock_model.complete = AsyncMock(
+            return_value=_make_model_response(malformed_json)
+        )
+
+        planner = AutoPlanner(model=mock_model)
+        observation = _make_observation(
+            tool_requests=(
+                ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+            ),
+        )
+        ctx = _make_ctx()
+
+        plan = await planner.plan(observation, ctx)
+
+        assert plan.metadata.get("planner") == "sequential"
+        assert plan.metadata.get("fallback") is True
+        assert str(plan.metadata.get("fallback_reason", "")).startswith("json_parse_error:")
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_partial_json_fixture(self) -> None:
+        """Partial/truncated JSON should deterministically fall back to sequential planning."""
+        partial_json = (
+            '{"reasoning":"partial","steps":[{"type":"tool","tool":"search",'
+            '"args":{"query":"x"}}'
+        )
+
+        mock_model = AsyncMock()
+        mock_model.complete = AsyncMock(
+            return_value=_make_model_response(partial_json)
+        )
+
+        planner = AutoPlanner(model=mock_model)
+        observation = _make_observation(
+            tool_requests=(
+                ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+            ),
+        )
+        ctx = _make_ctx()
+
+        plan = await planner.plan(observation, ctx)
+
+        assert plan.metadata.get("planner") == "sequential"
+        assert plan.metadata.get("fallback") is True
+        assert str(plan.metadata.get("fallback_reason", "")).startswith(
+            "json_extraction_error:"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_tool_args_schema_mismatch(self) -> None:
+        """Tool-step args must be an object or planner should fall back deterministically."""
+        mismatch_plan = _valid_plan_json(
+            steps=[
+                {
+                    "type": "tool",
+                    "tool": "search",
+                    "args": "query=test",
+                    "reason": "Invalid args type",
+                }
+            ]
+        )
+
+        mock_model = AsyncMock()
+        mock_model.complete = AsyncMock(
+            return_value=_make_model_response(mismatch_plan)
+        )
+
+        planner = AutoPlanner(model=mock_model)
+        observation = _make_observation(
+            tool_requests=(
+                ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+            ),
+        )
+        ctx = _make_ctx()
+
+        plan = await planner.plan(observation, ctx)
+
+        assert plan.metadata.get("planner") == "sequential"
+        assert plan.metadata.get("fallback") is True
+        assert str(plan.metadata.get("fallback_reason", "")).startswith(
+            "plan_validation_error:"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_unknown_tool_in_model_plan(self) -> None:
+        """Unknown tool references should fall back before lifecycle validation."""
+        mismatch_plan = _valid_plan_json(
+            steps=[
+                {
+                    "type": "tool",
+                    "tool": "unknown_tool",
+                    "args": {"query": "test"},
+                    "reason": "Invalid tool name",
+                }
+            ]
+        )
+
+        mock_model = AsyncMock()
+        mock_model.complete = AsyncMock(
+            return_value=_make_model_response(mismatch_plan)
+        )
+
+        planner = AutoPlanner(model=mock_model)
+        observation = _make_observation(
+            tool_requests=(
+                ToolCall(id="call_1", name="search", arguments={"query": "test"}),
+            ),
+        )
+        ctx = _make_ctx(tools={"search": "Search the web for information"})
+
+        plan = await planner.plan(observation, ctx)
+
+        assert plan.metadata.get("planner") == "sequential"
+        assert plan.metadata.get("fallback") is True
+        assert str(plan.metadata.get("fallback_reason", "")).startswith(
+            "plan_validation_error:"
+        )
+
+    @pytest.mark.asyncio
     async def test_confidence_scoring_from_model(self) -> None:
         """Test that confidence is extracted from model response."""
         plan_json = _valid_plan_json(confidence=0.92)

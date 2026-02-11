@@ -67,6 +67,47 @@ Rules:
 """
 
 
+class _AutoPlannerError(ValueError):
+    """Base error type for deterministic AutoPlanner fallback classification."""
+
+
+class _ModelCallError(_AutoPlannerError):
+    """Raised when the planner model call fails."""
+
+
+class _JsonExtractionError(_AutoPlannerError):
+    """Raised when planner response text does not contain an extractable JSON object."""
+
+
+class _JsonParseError(_AutoPlannerError):
+    """Raised when extracted JSON cannot be decoded."""
+
+
+class _PlanValidationError(_AutoPlannerError):
+    """Raised when decoded plan structure is invalid for execution."""
+
+
+def _format_fallback_reason(exc: Exception) -> str:
+    """Return a deterministic fallback reason code with compact detail text."""
+    if isinstance(exc, _ModelCallError):
+        code = "model_error"
+    elif isinstance(exc, _JsonExtractionError):
+        code = "json_extraction_error"
+    elif isinstance(exc, _JsonParseError):
+        code = "json_parse_error"
+    elif isinstance(exc, _PlanValidationError):
+        code = "plan_validation_error"
+    else:
+        code = "unexpected_error"
+
+    detail = re.sub(r"\s+", " ", str(exc)).strip()
+    if not detail:
+        detail = exc.__class__.__name__
+    if len(detail) > 200:
+        detail = f"{detail[:197]}..."
+    return f"{code}:{detail}"
+
+
 def _build_planning_message(
     observation: Observation,
     available_tools: dict[str, str],
@@ -155,10 +196,14 @@ def _extract_json(text: str) -> str:
                         # Found complete JSON object
                         return text[start : i + 1]
 
-    raise ValueError(f"No valid JSON object found in response: {text[:200]}")
+    raise _JsonExtractionError(f"No valid JSON object found in response: {text[:200]}")
 
 
-def _parse_step(raw_step: dict[str, Any], index: int) -> PlanStep:
+def _parse_step(
+    raw_step: dict[str, Any],
+    index: int,
+    available_tool_names: set[str],
+) -> PlanStep:
     """Parse a raw step dict from the model into a PlanStep.
 
     Args:
@@ -176,18 +221,35 @@ def _parse_step(raw_step: dict[str, Any], index: int) -> PlanStep:
 
     try:
         step_type = StepType(raw_type)
-    except ValueError:
-        raise ValueError(f"Invalid step type '{raw_type}' at step {index}")
+    except ValueError as exc:
+        raise _PlanValidationError(f"Invalid step type '{raw_type}' at step {index}") from exc
 
     payload: dict[str, Any] = {}
 
     if step_type == StepType.TOOL:
         tool_name = raw_step.get("tool")
         if not tool_name:
-            raise ValueError(f"TOOL step at index {index} missing 'tool' field")
+            raise _PlanValidationError(
+                f"TOOL step at index {index} missing 'tool' field",
+            )
+        if not isinstance(tool_name, str):
+            raise _PlanValidationError(
+                f"TOOL step at index {index} has non-string 'tool' field",
+            )
+        if available_tool_names and tool_name not in available_tool_names:
+            raise _PlanValidationError(
+                f"TOOL step at index {index} references unknown tool '{tool_name}'",
+            )
         payload["tool"] = tool_name
         payload["tool_call_id"] = f"auto_{uuid.uuid4().hex[:8]}"
-        payload["args"] = raw_step.get("args", {})
+        args = raw_step.get("args", {})
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            raise _PlanValidationError(
+                f"TOOL step at index {index} has non-object 'args' field",
+            )
+        payload["args"] = args
 
     elif step_type == StepType.TERMINAL:
         payload["output"] = raw_step.get("output", "")
@@ -286,11 +348,12 @@ class AutoPlanner:
         try:
             return await self._plan_with_model(observation, ctx)
         except Exception as exc:
+            fallback_reason = _format_fallback_reason(exc)
             logger.warning(
                 "AutoPlanner failed, falling back to SequentialPlanner: %s",
-                exc,
+                fallback_reason,
             )
-            return await self._fallback_plan(observation, ctx, reason=str(exc))
+            return await self._fallback_plan(observation, ctx, reason=fallback_reason)
 
     async def _plan_with_model(
         self,
@@ -328,31 +391,40 @@ class AutoPlanner:
 
         # Call model for planning
         messages = [{"role": "user", "content": user_message}]
-        response = await self._model.complete(
-            messages=messages,
-            system=_PLANNING_SYSTEM_PROMPT,
-            temperature=0.0,  # Deterministic planning
-            max_tokens=2048,
-        )
+        try:
+            response = await self._model.complete(
+                messages=messages,
+                system=_PLANNING_SYSTEM_PROMPT,
+                temperature=0.0,  # Deterministic planning
+                max_tokens=2048,
+            )
+        except Exception as exc:
+            raise _ModelCallError("planning model call failed") from exc
 
         # Extract and parse JSON
         raw_json = _extract_json(response.content)
-        plan_data = json.loads(raw_json)
+        try:
+            plan_data = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            raise _JsonParseError(
+                f"{exc.msg} at line {exc.lineno} column {exc.colno}",
+            ) from exc
 
         # Validate minimum structure
         if not isinstance(plan_data, dict):
-            raise ValueError("Model response is not a JSON object")
+            raise _PlanValidationError("Model response is not a JSON object")
 
         raw_steps = plan_data.get("steps")
         if not isinstance(raw_steps, list) or len(raw_steps) == 0:
-            raise ValueError("Plan has no steps")
+            raise _PlanValidationError("Plan has no steps")
 
         # Parse steps
         steps: list[PlanStep] = []
+        available_tool_names = set(available_tools.keys())
         for i, raw_step in enumerate(raw_steps):
             if not isinstance(raw_step, dict):
-                raise ValueError(f"Step {i} is not a dict: {raw_step}")
-            steps.append(_parse_step(raw_step, i))
+                raise _PlanValidationError(f"Step {i} is not a dict")
+            steps.append(_parse_step(raw_step, i, available_tool_names))
 
         # Extract reasoning and confidence
         reasoning = plan_data.get("reasoning", "LLM-generated plan")

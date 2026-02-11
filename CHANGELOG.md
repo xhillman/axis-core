@@ -56,6 +56,9 @@ All notable changes to this project will be documented in this file.
   free-form error strings before telemetry/checkpoint serialization.
 - Act-phase failure telemetry and persisted `RunState` error/tool-call records now sanitize
   secret-like values in messages and exception causes.
+- AutoPlanner now hardens malformed/partial JSON extraction and uses deterministic fallback-reason
+  codes while validating tool-step schema mismatches (`tool` name and `args` object shape) before
+  returning auto plans.
 
 ## [0.6.0] - 2026-02-08
 
