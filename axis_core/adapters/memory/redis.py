@@ -85,6 +85,17 @@ class RedisMemory:
             return full_key[len(prefix):]
         return full_key
 
+    @staticmethod
+    def _normalize_scan_cursor(cursor: int | bytes) -> int:
+        """Normalize Redis SCAN cursor values to int.
+
+        Redis clients may return cursor values as either int or ASCII bytes.
+        We normalize here so subsequent SCAN calls always pass an int cursor.
+        """
+        if isinstance(cursor, bytes):
+            return int(cursor.decode("ascii"))
+        return cursor
+
     async def store(
         self,
         key: str,
@@ -167,12 +178,13 @@ class RedisMemory:
             pattern = f"{self._prefix}*{query}*"
 
         results: list[MemoryItem] = []
-        cursor: int | bytes = 0
+        cursor = 0
 
         while True:
-            cursor, keys = await self._client.scan(
+            raw_cursor, keys = await self._client.scan(
                 cursor=cursor, match=pattern, count=100
             )
+            cursor = self._normalize_scan_cursor(raw_cursor)
             for full_key in keys:
                 key_str = full_key if isinstance(full_key, str) else full_key.decode()
 
@@ -247,12 +259,13 @@ class RedisMemory:
             pattern = f"{self._prefix}*"
 
         total = 0
-        cursor: int | bytes = 0
+        cursor = 0
 
         while True:
-            cursor, keys = await self._client.scan(
+            raw_cursor, keys = await self._client.scan(
                 cursor=cursor, match=pattern, count=100
             )
+            cursor = self._normalize_scan_cursor(raw_cursor)
             if keys:
                 # Filter out metadata keys for counting (each item has value + meta)
                 data_keys = [

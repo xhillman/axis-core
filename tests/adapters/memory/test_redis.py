@@ -1,5 +1,7 @@
 """Tests for RedisMemory adapter."""
 
+import json
+
 import pytest
 
 redis_pkg = pytest.importorskip("redis", reason="redis not installed")
@@ -298,3 +300,66 @@ class TestRedisMemory:
         assert item.key == "obs:1"
         assert item.value == "data1"
         assert item.metadata == metadata
+
+    @pytest.mark.asyncio
+    async def test_search_handles_bytes_scan_cursor(self) -> None:
+        """Search should normalize Redis byte cursors before the next SCAN call."""
+
+        class BytesCursorSearchClient:
+            def __init__(self) -> None:
+                self._scan_calls = 0
+                self._store = {
+                    "axis:user:1": json.dumps({"name": "Alice"}),
+                    "axis:user:1:__meta__": json.dumps({"type": "observation"}),
+                }
+
+            async def scan(
+                self, *, cursor: int, match: str, count: int
+            ) -> tuple[int | bytes, list[str]]:
+                if not isinstance(cursor, int):
+                    raise TypeError("cursor must be int")
+                self._scan_calls += 1
+                if self._scan_calls == 1:
+                    return b"1", ["axis:user:1", "axis:user:1:__meta__"]
+                return b"0", []
+
+            async def get(self, key: str) -> str | None:
+                return self._store.get(key)
+
+        memory = RedisMemory(client=BytesCursorSearchClient())  # type: ignore[arg-type]
+        results = await memory.search("user")
+
+        assert len(results) == 1
+        assert results[0].key == "user:1"
+        assert results[0].value == {"name": "Alice"}
+        assert results[0].metadata == {"type": "observation"}
+
+    @pytest.mark.asyncio
+    async def test_clear_handles_bytes_scan_cursor(self) -> None:
+        """Clear should normalize Redis byte cursors before the next SCAN call."""
+
+        class BytesCursorClearClient:
+            def __init__(self) -> None:
+                self._scan_calls = 0
+                self.deleted_keys: list[str] = []
+
+            async def scan(
+                self, *, cursor: int, match: str, count: int
+            ) -> tuple[int | bytes, list[str]]:
+                if not isinstance(cursor, int):
+                    raise TypeError("cursor must be int")
+                self._scan_calls += 1
+                if self._scan_calls == 1:
+                    return b"1", ["axis:item:1", "axis:item:1:__meta__"]
+                return b"0", []
+
+            async def delete(self, *keys: str) -> int:
+                self.deleted_keys.extend(keys)
+                return len(keys)
+
+        client = BytesCursorClearClient()
+        memory = RedisMemory(client=client)  # type: ignore[arg-type]
+        count = await memory.clear()
+
+        assert count == 1
+        assert client.deleted_keys == ["axis:item:1", "axis:item:1:__meta__"]
