@@ -463,10 +463,7 @@ axis-core is under active development. This roadmap separates committed work fro
 ### Planned (Committed)
 
 These are scoped targets tied to the current task list and near-term releases.
-
-**Execution & Safety:**
-
-- **Checkpoint/Resume** — Persist and resume agent runs at phase boundaries (AD-005)
+Checkpoint/resume is already shipped and documented in Features/Status sections above.
 
 **Telemetry & Memory:**
 

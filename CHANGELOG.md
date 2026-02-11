@@ -45,6 +45,10 @@ All notable changes to this project will be documented in this file.
   preserving the existing user-facing model adapter surface.
 - Registered OpenAI Responses model IDs for codex/search/deep-research/computer-use under the
   existing `[openai]` optional extra and documented usage in README.
+- Aligned beta-facing docs to shipped behavior: removed checkpoint/resume from planned roadmap
+  items, refreshed PRD implementation-status notes, clarified OpenRouter as OpenAI-compatible
+  routing (no dedicated `OpenRouterModel` class), and clarified memory string resolution as
+  adapter-name based (`ephemeral`/`sqlite`/`redis`).
 
 ### Fixed
 
