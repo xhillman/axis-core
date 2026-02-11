@@ -19,6 +19,8 @@ All notable changes to this project will be documented in this file.
   normalization into existing `ModelResponse`/`ModelChunk` contracts.
 - Added unit coverage for OpenAI Responses routing/mapping and a gated live integration test
   (`OPENAI_API_KEY`) for Responses-backed model execution.
+- Added GitHub Actions quality-gate workflow for PR/release paths with dedicated `pytest`,
+  `ruff`, and `mypy` jobs.
 
 ### Changed
 

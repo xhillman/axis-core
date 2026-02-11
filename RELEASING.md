@@ -51,9 +51,14 @@ Use the script to avoid mismatches:
 - [ ] All tests passing: `pytest tests/`
 - [ ] Lint clean: `ruff check axis_core/`
 - [ ] Type check clean: `mypy axis_core/ --strict`
+- [ ] CI quality-gate checks green on GitHub (`pytest`, `ruff`, `mypy`)
 - [ ] CHANGELOG.md updated
 - [ ] Version bumped in both files
 - [ ] Git committed: `git add -u && git commit -m "Release v0.1.3"`
+
+GitHub workflow reference:
+
+- `.github/workflows/quality-gates.yml` runs these checks on PR and release paths.
 
 ### 3. Build Package
 
