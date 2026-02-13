@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "axis-core"
-version = "0.7.0"
+version = "0.8.0b"
 description = "A modular, observable AI agent framework"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["ai", "agent", "llm", "framework", "anthropic", "openai"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
@@ -63,6 +63,16 @@ Issues = "https://github.com/axis-core/axis-core/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["axis_core"]
+
+[tool.hatch.build]
+exclude = [
+    ".agent/**",
+    ".benchmarks/**",
+    ".claude/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "REPO_MAP.md",
+]
 
 [tool.ruff]
 target-version = "py310"

@@ -85,6 +85,8 @@ dmypy.json
 # Local development
 *.local
 *.log
+.claude/
+.benchmarks/
 
 # OS files
 .DS_Store

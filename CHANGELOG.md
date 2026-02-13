@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0b] - 2026-02-13
+
 ### Added
 
 - Added lifecycle policy enforcement tests covering phase timeouts, retry exhaustion, rate-limit
