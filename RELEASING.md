@@ -239,3 +239,51 @@ If you publish a broken version to PyPI, you **cannot delete it**. Instead:
 4. (Optional) Yank the broken version on PyPI web UI
 
 **Yanking** hides the version from `pip install axis-core` but allows `pip install axis-core==0.1.3` to still work.
+
+## Beta Communication Packet
+
+Use this packet for beta releases so known limitations, support boundaries, and rollback expectations
+are clear before users adopt the build.
+
+### Required Beta Notes
+
+- release status (`beta`, `rc`, or `stable`) and exact version
+- supported paths with verified evidence (core install, required extras, providers)
+- known limitations and explicit non-goals
+- issue intake route + triage SLA expectations
+- rollback decision triggers and operator owner
+
+### Operator Checklist Before Sending Beta Announcement
+
+- [ ] Known limitations and non-goals are current (match `dev/beta.md` Step 10)
+- [ ] Issue intake links are active and include required reporting fields
+- [ ] Triage owner and release owner are named for the current beta window
+- [ ] Rollback triggers are reviewed for this version
+- [ ] Changelog and install instructions match the announced version
+
+### Beta Announcement Template
+
+```text
+axis-core <VERSION> is now available as a beta release.
+
+What is validated:
+- <validated capability 1>
+- <validated capability 2>
+
+Known limitations:
+- <limitation 1>
+- <limitation 2>
+
+Not in beta scope:
+- <non-goal 1>
+- <non-goal 2>
+
+Issue reporting:
+- File issues at <ISSUE_URL>
+- Include version, Python/OS, install source, reproduction steps, and severity suggestion (P0/P1/P2)
+
+Operational policy:
+- P0 response target: <=4h
+- P1 response target: <=1 business day
+- Rollback triggers: reproducible security exploit, install-path breakage without workaround, or core run/stream crash without workaround.
+```

@@ -125,6 +125,20 @@ result = agent.run("Complex task...")
 # Automatically retries with fallback models on rate limits or connection errors
 ```
 
+## Documentation
+
+- [Getting Started](docs/getting-started.md)
+- [Tools Guide](docs/guides/tools.md)
+- [Models Guide](docs/guides/models.md)
+- [Runtime Operations](docs/guides/runtime-operations.md)
+- [Budget and Limits](docs/guides/budget-and-limits.md)
+- [Agent Reference](docs/reference/agent.md)
+- [Config Reference](docs/reference/config.md)
+- [Errors Reference](docs/reference/errors.md)
+- [Environment Variables](docs/reference/env-vars.md)
+- [Examples Index](docs/examples.md)
+- [Contributing](CONTRIBUTING.md)
+
 ## Architecture
 
 axis-core uses a three-layer architecture:
@@ -165,208 +179,25 @@ Each agent run follows this cycle:
 
 ## API Reference
 
-### Agent
+The full API is documented in:
 
-```python
-from axis_core import Agent, Budget, CacheConfig, RateLimits, RetryPolicy, Timeouts
+- [Agent Reference](docs/reference/agent.md)
+- [Config Reference](docs/reference/config.md)
+- [Errors Reference](docs/reference/errors.md)
 
-agent = Agent(
-    tools=[...],              # List of @tool-decorated functions
-    model="claude-sonnet-4-20250514",    # Model adapter or string identifier
-    fallback=["gpt-4o", "claude-haiku"], # Fallback models on error
-    planner="sequential",     # Planner adapter or string identifier
-    system="...",             # System prompt
-    budget=Budget(            # Resource constraints
-        max_cycles=10,
-        max_cost_usd=1.00,
-    ),
-    timeouts=Timeouts(        # Per-phase + total timeout policy
-        act=60.0,
-        total=300.0,
-    ),
-    retry=RetryPolicy(max_attempts=3, backoff="exponential"),
-    rate_limits=RateLimits(model_calls="60/minute", tool_calls="30/minute"),
-    cache=CacheConfig(enabled=True, model_responses=True, tool_results=True, ttl=3600),
-    confirmation_handler=lambda tool_name, args: True,  # Required for DESTRUCTIVE tools
-    checkpoint=True,         # Persist phase-boundary checkpoints
-    checkpoint_dir="./checkpoints",
-)
+For practical workflows, start with:
 
-# Synchronous
-result = agent.run("Your prompt here")
-
-# Asynchronous  
-result = await agent.run_async("Your prompt here")
-
-# Resume from checkpoint path or payload
-resumed = agent.resume("./checkpoints/<run_id>.json")
-resumed_async = await agent.resume_async("./checkpoints/<run_id>.json")
-
-# Streaming
-for event in agent.stream("Your prompt here"):
-    print(event)
-```
-
-### Tools
-
-```python
-from axis_core import tool, Capability
-
-@tool
-def simple_tool(arg: str) -> str:
-    """A simple tool."""
-    return f"Result: {arg}"
-
-@tool(
-    capabilities=[Capability.NETWORK],
-    timeout=30.0,
-    rate_limit="10/minute",
-)
-async def advanced_tool(url: str, max_retries: int = 3) -> str:
-    """An advanced tool with capabilities."""
-    # Implementation
-    pass
-
-@tool(capabilities=[Capability.DESTRUCTIVE])
-def delete_record(record_id: str) -> str:
-    """Delete a record."""
-    return f"deleted {record_id}"
-
-agent = Agent(model="claude-sonnet-4-20250514", planner="sequential")
-agent.on_confirm(lambda tool_name, args: tool_name == "delete_record")
-```
-
-### Budget
-
-```python
-from axis_core import Budget
-
-budget = Budget(
-    max_cycles=10,           # Maximum observe-plan-act-evaluate cycles
-    max_tool_calls=50,       # Maximum tool invocations
-    max_model_calls=20,      # Maximum LLM calls
-    max_tokens=100_000,      # Maximum total tokens
-    max_cost_usd=5.00,       # Maximum cost in USD
-    max_wall_time_seconds=300,  # Maximum wall-clock time
-)
-```
-
-### Sessions
-
-```python
-from axis_core import Agent
-
-agent = Agent(model="claude-sonnet-4-20250514", planner="sequential")
-
-# Create a new session
-session = agent.session(id="user-123")
-result = session.run("What's the weather in Tokyo?")
-
-# Resume later (history persists via the configured memory adapter)
-session = agent.session(id="user-123")
-result = session.run("What about Osaka?")
-
-# For durable persistence across restarts, use SQLite or Redis memory:
-# agent = Agent(model="claude-sonnet-4-20250514", memory="sqlite")
-# agent = Agent(model="claude-sonnet-4-20250514", memory="redis")
-```
-
-### Checkpoints & Resume
-
-```python
-from axis_core import Agent
-
-agent = Agent(
-    model="claude-sonnet-4-20250514",
-    planner="sequential",
-    checkpoint=True,
-    checkpoint_dir="./checkpoints",
-)
-
-result = agent.run("Draft a short release note")
-checkpoint_path = f"./checkpoints/{result.run_id}.json"
-
-# Resume in the same or a later process
-resumed = agent.resume(checkpoint_path)
-```
-
-### Attachments & Cancellation
-
-Attachments are loaded eagerly and limited to 10MB each.
-
-```python
-from axis_core import Agent, CancelToken, Image, PDF
-
-agent = Agent(model="claude-sonnet-4-20250514", planner="sequential")
-
-attachments = [
-    Image.from_file("diagram.png"),
-    PDF.from_file("spec.pdf"),
-]
-
-cancel_token = CancelToken()
-
-result = agent.run(
-    "Summarize the PDF and describe the diagram.",
-    attachments=attachments,
-    cancel_token=cancel_token,
-)
-```
-
-### Results
-
-```python
-result = agent.run("...")
-
-result.output        # Parsed output
-result.output_raw    # Raw string output
-result.success       # Whether run succeeded
-result.error         # Error if failed
-result.stats.cycles  # Number of cycles executed
-result.stats.cost_usd  # Total cost
-result.stats.tool_calls  # Number of tool calls
-```
-
-### Credential Handling
-
-`Agent(auth=...)` is deprecated and ignored.
-
-Tool credentials should be loaded by tools directly (for example, from environment variables
-or a secret manager), not passed through agent constructor/runtime context objects.
+- [Tools Guide](docs/guides/tools.md)
+- [Models Guide](docs/guides/models.md)
+- [Runtime Operations](docs/guides/runtime-operations.md)
+- [Budget and Limits](docs/guides/budget-and-limits.md)
 
 ## Environment Variables
 
-```bash
-# API Keys
-ANTHROPIC_API_KEY=sk-ant-...        # Required for Anthropic models
-OPENAI_API_KEY=sk-...               # Required for OpenAI models
-OPENAI_BASE_URL=https://openrouter.ai/api/v1  # Optional OpenAI-compatible endpoint base URL
+Use the complete environment variable reference:
 
-# Default Configuration
-AXIS_DEFAULT_MODEL=claude-sonnet-4-20250514
-AXIS_DEFAULT_MEMORY=ephemeral
-AXIS_DEFAULT_PLANNER=sequential
-
-# Budget Defaults
-AXIS_MAX_CYCLES=10
-AXIS_MAX_COST_USD=1.00
-AXIS_MAX_TOOL_CALLS=50
-AXIS_MAX_MODEL_CALLS=20
-
-# Telemetry
-AXIS_TELEMETRY_SINK=console         # console, file, callback, none
-AXIS_TELEMETRY_COMPACT=false        # Compact console output
-AXIS_TELEMETRY_REDACT=true          # Redact sensitive data
-AXIS_TELEMETRY_FILE=./axis_trace.jsonl  # JSONL output path (file sink)
-AXIS_TELEMETRY_CALLBACK=module:function # Callback import path (callback sink)
-AXIS_TELEMETRY_BUFFER_MODE=batched  # immediate, batched, phase, end (file sink)
-AXIS_TELEMETRY_BATCH_SIZE=100       # Flush threshold in batched mode (file sink)
-AXIS_PERSIST_SENSITIVE_TOOL_DATA=false  # Debug-only raw tool args/results in RunState
-
-# Advanced
-AXIS_CONTEXT_STRATEGY=smart         # Context building strategy
-AXIS_MAX_CYCLE_CONTEXT=5            # Max cycles to include in context
-```
+- [Environment Variables](docs/reference/env-vars.md)
+- [.env Example](.env.example)
 
 ## Supported Models
 
@@ -551,42 +382,12 @@ See [SPEC.md](dev/SPEC.md) for full architectural decision records (ADRs).
 
 ## Contributing
 
-We welcome contributions! Here's how to get started:
+See the full contributor workflow in [CONTRIBUTING.md](CONTRIBUTING.md), including:
 
-1. **Check the roadmap** — See if your idea aligns with planned features
-2. **Open an issue** — Discuss your proposal before writing code
-3. **Follow TDD** — Write tests first (see [process-tasks.md](dev/process-tasks.md))
-4. **Match the style** — Use ruff, mypy strict mode, Python 3.10+ typing
-5. **Update docs** — Keep README and docstrings current
-
-### Guidelines
-
-- **Tests required** — All PRs must include tests (we enforce TDD)
-- **Type hints required** — Full type coverage with mypy --strict
-- **No breaking changes** — Maintain backward compatibility within major versions
-- **Security first** — Never commit API keys, use environment variables
-- **Clean commits** — Squash before merging, write clear commit messages
-
-### Project Structure
-
-```
-axis_core/
-├── __init__.py          # Public API exports
-├── agent.py             # Agent class (main entry point)
-├── engine/              # Lifecycle engine internals
-│   ├── lifecycle.py     # Phase execution
-│   └── registry.py      # Adapter registration
-├── adapters/            # Pluggable implementations
-│   ├── models/          # LLM providers (Anthropic, OpenAI)
-│   ├── memory/          # Storage backends
-│   ├── planners/        # Planning strategies
-│   └── telemetry/       # Observability sinks
-├── protocols/           # Adapter Protocol definitions
-└── testing/             # Test utilities (coming soon)
-
-tests/                   # Test suite (mirrors axis_core structure)
-dev/                     # Design docs, specs, task lists
-```
+- development setup
+- quality gates (`pytest`, `ruff`, `mypy`)
+- public-contract testing policy
+- PR requirements and documentation update rules
 
 ## License
 
