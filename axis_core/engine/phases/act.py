@@ -75,7 +75,7 @@ def _is_retryable_tool_error(error: Exception, retry_policy: RetryPolicy) -> boo
 
 def _is_retryable_model_error(error: ModelError, retry_policy: RetryPolicy) -> bool:
     """Determine whether a model failure should be retried."""
-    if not error.recoverable:
+    if not ModelError.is_reason_recoverable(error.reason):
         return False
     return _matches_retry_filter(error.cause or error, retry_policy)
 
@@ -519,19 +519,25 @@ async def try_models_with_fallback(
                 response = await call_fn(model)
 
                 if idx > 0:
+                    previous_error = errors[-1] if errors else None
                     previous_model_id = getattr(
                         models_to_try[idx - 1], "model_id", "unknown"
                     )
+                    telemetry_data: dict[str, Any] = {
+                        "from_model": previous_model_id,
+                        "to_model": model_id,
+                        "attempt": idx + 1,
+                    }
+                    if previous_error is not None:
+                        telemetry_data["reason"] = previous_error.reason
+                        telemetry_data["status_code"] = previous_error.status_code
+                        telemetry_data["provider_code"] = previous_error.provider_code
                     await engine._emit(
                         "model_fallback",
                         run_id=ctx.run_id,
                         phase=Phase.ACT.value,
                         cycle=ctx.cycle_count,
-                        data={
-                            "from_model": previous_model_id,
-                            "to_model": model_id,
-                            "attempt": idx + 1,
-                        },
+                        data=telemetry_data,
                     )
 
                 ctx.state._retry_state.pop(effective_step.id, None)
@@ -545,10 +551,11 @@ async def try_models_with_fallback(
                 errors.append(model_error)
                 last_error = model_error
 
-                if not model_error.recoverable:
+                if not ModelError.is_reason_recoverable(model_error.reason):
                     logger.warning(
-                        "Non-recoverable error from model %s: %s",
+                        "Non-recoverable reason from model %s (%s): %s",
                         model_id,
+                        model_error.reason,
                         model_error.message,
                     )
                     raise model_error
@@ -571,18 +578,22 @@ async def try_models_with_fallback(
                     continue
                 break
 
-        if last_error is not None and not last_error.recoverable:
+        if last_error is not None and not ModelError.is_reason_recoverable(last_error.reason):
             raise last_error
 
     error_messages = [str(e) for e in errors]
+    final_error = errors[-1] if errors else None
     raise ModelError(
         message=(
             f"All models failed after {len(models_to_try)} attempts. "
             f"Errors: {'; '.join(error_messages)}"
         ),
         model_id="fallback_chain",
+        reason="fallback_exhausted",
         recoverable=False,
-        cause=errors[-1] if errors else None,
+        status_code=final_error.status_code if final_error is not None else None,
+        provider_code=final_error.provider_code if final_error is not None else None,
+        cause=final_error,
     )
 
 

@@ -253,6 +253,8 @@ class TestAnthropicModel:
 
             # Should be classified as recoverable
             assert exc_info.value.recoverable is True
+            assert exc_info.value.reason == "rate_limit"
+            assert exc_info.value.status_code == 429
 
     @pytest.mark.asyncio
     async def test_error_classification_auth_error(self) -> None:
@@ -278,6 +280,8 @@ class TestAnthropicModel:
 
             # Should be classified as non-recoverable
             assert exc_info.value.recoverable is False
+            assert exc_info.value.reason == "authentication"
+            assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_error_classification_bad_request(self) -> None:
@@ -303,6 +307,8 @@ class TestAnthropicModel:
 
             # Should be classified as non-recoverable
             assert exc_info.value.recoverable is False
+            assert exc_info.value.reason == "invalid_request"
+            assert exc_info.value.status_code == 400
 
     def test_model_pricing_table(self) -> None:
         """Test that MODEL_PRICING table has expected models."""

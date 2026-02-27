@@ -36,6 +36,7 @@ from axis_core.errors import (
     BudgetError,
     CancelledError,
     ConfigError,
+    ModelError,
     PlanError,
 )
 from axis_core.errors import (
@@ -2152,9 +2153,104 @@ class TestModelFallback:
         assert len(fallback.calls) == 0
 
     @pytest.mark.asyncio
+    async def test_fallback_uses_reason_codes_for_recoverability(self) -> None:
+        """Fallback decisions should be based on ModelError.reason semantics."""
+
+        class ReasonRecoverablePrimary(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise ModelError(
+                    message="Rate limit exceeded",
+                    model_id="primary",
+                    reason="rate_limit",
+                    recoverable=False,
+                    status_code=429,
+                    provider_code="rate_limit_exceeded",
+                )
+
+        primary = ReasonRecoverablePrimary()
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Fallback response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        engine = LifecycleEngine(
+            model=primary,
+            planner=self._model_step_planner(),
+            fallback=[fallback],
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(max_cycles=5),
+        )
+
+        assert result["success"] is True
+        assert len(fallback.calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_blocks_on_non_recoverable_reason_code(self) -> None:
+        """Non-recoverable reasons should not fall through to fallback models."""
+
+        class ReasonNonRecoverablePrimary(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise ModelError(
+                    message="Invalid request",
+                    model_id="primary",
+                    reason="invalid_request",
+                    recoverable=True,
+                    status_code=400,
+                    provider_code="invalid_request_error",
+                )
+
+        primary = ReasonNonRecoverablePrimary()
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Should not be called",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
+                    cost_usd=0.0001,
+                )
+            ]
+        )
+
+        engine = LifecycleEngine(
+            model=primary,
+            planner=self._model_step_planner(),
+            fallback=[fallback],
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(max_cycles=5),
+        )
+
+        assert result["success"] is False
+        assert len(fallback.calls) == 0
+
+    @pytest.mark.asyncio
     async def test_fallback_emits_telemetry_event(self) -> None:
         """Should emit model_fallback telemetry event on fallback."""
-        primary = MockFailingModelAdapter(fail_count=999)
+        class ReasonRecoverablePrimary(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise ModelError(
+                    message="Rate limit exceeded",
+                    model_id="primary",
+                    reason="rate_limit",
+                    recoverable=True,
+                    status_code=429,
+                    provider_code="rate_limit_exceeded",
+                )
+
+        primary = ReasonRecoverablePrimary()
         fallback = MockModelAdapter(
             responses=[
                 ModelResponse(
@@ -2189,6 +2285,9 @@ class TestModelFallback:
         assert len(fallback_events) >= 1
         assert fallback_events[0].data.get("from_model") == "mock-model"
         assert fallback_events[0].data.get("to_model") == "mock-model"
+        assert fallback_events[0].data.get("reason") == "rate_limit"
+        assert fallback_events[0].data.get("status_code") == 429
+        assert fallback_events[0].data.get("provider_code") == "rate_limit_exceeded"
 
     @pytest.mark.asyncio
     async def test_planner_fallback_emits_telemetry_event(self) -> None:

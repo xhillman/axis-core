@@ -135,6 +135,81 @@ class AnthropicModel:
         return self._model_id
 
     @staticmethod
+    def _extract_status_code(error: Exception) -> int | None:
+        """Extract status code from Anthropic SDK exception objects."""
+        status_code = getattr(error, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+
+        return None
+
+    @staticmethod
+    def _extract_provider_code(error: Exception) -> str | None:
+        """Extract provider error code from Anthropic exception payload."""
+        direct_code = getattr(error, "code", None)
+        if isinstance(direct_code, str) and direct_code:
+            return direct_code
+
+        body = getattr(error, "body", None)
+        if isinstance(body, dict):
+            top_code = body.get("code")
+            if isinstance(top_code, str) and top_code:
+                return top_code
+            nested = body.get("error")
+            if isinstance(nested, dict):
+                nested_code = nested.get("code")
+                if isinstance(nested_code, str) and nested_code:
+                    return nested_code
+                nested_type = nested.get("type")
+                if isinstance(nested_type, str) and nested_type:
+                    return nested_type
+
+        return None
+
+    @classmethod
+    def _map_anthropic_error(
+        cls,
+        error: Exception,
+    ) -> tuple[str, bool, int | None, str | None]:
+        """Normalize Anthropic SDK exceptions for fallback semantics."""
+        status_code = cls._extract_status_code(error)
+        provider_code = cls._extract_provider_code(error)
+
+        api_connection_error = getattr(anthropic, "APIConnectionError", None)
+        permission_denied_error = getattr(anthropic, "PermissionDeniedError", None)
+        auth_types = (anthropic.AuthenticationError,) + (
+            (permission_denied_error,) if isinstance(permission_denied_error, type) else ()
+        )
+        bad_request_types = (anthropic.BadRequestError,)
+
+        if isinstance(error, anthropic.RateLimitError):
+            reason = "rate_limit"
+        elif isinstance(error, anthropic.APITimeoutError):
+            reason = "timeout"
+        elif api_connection_error is not None and isinstance(error, api_connection_error):
+            reason = "connection_error"
+        elif isinstance(error, auth_types):
+            reason = "authentication"
+        elif isinstance(error, bad_request_types):
+            reason = "invalid_request"
+        elif isinstance(error, anthropic.APIError):
+            reason = ModelError.reason_from_status_code(status_code) or "provider_error"
+        else:
+            reason = ModelError.reason_from_status_code(status_code) or "unknown"
+
+        return (
+            reason,
+            ModelError.is_reason_recoverable(reason),
+            status_code,
+            provider_code,
+        )
+
+    @staticmethod
     def _convert_tool_manifest_to_anthropic(manifest: ToolManifest) -> dict[str, Any]:
         """Convert a ToolManifest to Anthropic's tool format.
 
@@ -420,53 +495,16 @@ class AnthropicModel:
                 cost_usd=cost,
             )
 
-        except anthropic.RateLimitError as e:
-            # Recoverable error - can be retried (AD-013)
+        except Exception as e:
+            reason, recoverable, status_code, provider_code = self._map_anthropic_error(e)
             raise ModelError(
-                message=f"Rate limit exceeded for {self._model_id}: {e}",
+                message=f"Anthropic error for {self._model_id}: {e}",
                 model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "rate_limit"},
-                cause=e,
-            ) from e
-
-        except anthropic.AuthenticationError as e:
-            # Non-recoverable error - bad API key
-            raise ModelError(
-                message=f"Authentication failed for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "authentication"},
-                cause=e,
-            ) from e
-
-        except anthropic.BadRequestError as e:
-            # Non-recoverable error - invalid request
-            raise ModelError(
-                message=f"Bad request to {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "bad_request"},
-                cause=e,
-            ) from e
-
-        except anthropic.APITimeoutError as e:
-            # Recoverable error - timeout
-            raise ModelError(
-                message=f"API timeout for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "timeout"},
-                cause=e,
-            ) from e
-
-        except anthropic.APIError as e:
-            # Generic API error - assume non-recoverable unless proven otherwise
-            raise ModelError(
-                message=f"API error for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "api_error"},
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
                 cause=e,
             ) from e
 
@@ -551,30 +589,16 @@ class AnthropicModel:
                             is_final=True,
                         )
 
-        except anthropic.RateLimitError as e:
+        except Exception as e:
+            reason, recoverable, status_code, provider_code = self._map_anthropic_error(e)
             raise ModelError(
-                message=f"Rate limit exceeded for {self._model_id}: {e}",
+                message=f"Anthropic error for {self._model_id}: {e}",
                 model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "rate_limit"},
-                cause=e,
-            ) from e
-
-        except anthropic.AuthenticationError as e:
-            raise ModelError(
-                message=f"Authentication failed for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "authentication"},
-                cause=e,
-            ) from e
-
-        except anthropic.APIError as e:
-            raise ModelError(
-                message=f"API error for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "api_error"},
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
                 cause=e,
             ) from e
 

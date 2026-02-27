@@ -11,6 +11,7 @@ from typing import Any, cast
 
 # Conditional import per AD-040
 try:
+    import openai
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionChunk
 except ImportError as e:
@@ -207,6 +208,82 @@ class OpenAIModel:
     def model_id(self) -> str:
         """Return the model identifier."""
         return self._model_id
+
+    @staticmethod
+    def _extract_status_code(error: Exception) -> int | None:
+        """Extract status code from OpenAI SDK exception objects."""
+        status_code = getattr(error, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+
+        return None
+
+    @staticmethod
+    def _extract_provider_code(error: Exception) -> str | None:
+        """Extract provider error code from OpenAI exception payload."""
+        direct_code = getattr(error, "code", None)
+        if isinstance(direct_code, str) and direct_code:
+            return direct_code
+
+        body = getattr(error, "body", None)
+        if isinstance(body, dict):
+            top_code = body.get("code")
+            if isinstance(top_code, str) and top_code:
+                return top_code
+            nested = body.get("error")
+            if isinstance(nested, dict):
+                nested_code = nested.get("code")
+                if isinstance(nested_code, str) and nested_code:
+                    return nested_code
+
+        return None
+
+    @classmethod
+    def _map_openai_error(
+        cls,
+        error: Exception,
+    ) -> tuple[str, bool, int | None, str | None]:
+        """Normalize OpenAI SDK exceptions into reason-coded fallback metadata."""
+        status_code = cls._extract_status_code(error)
+        provider_code = cls._extract_provider_code(error)
+
+        permission_error = getattr(openai, "PermissionDeniedError", ())
+        unprocessable_error = getattr(openai, "UnprocessableEntityError", ())
+        bad_request_types = tuple(
+            t for t in (openai.BadRequestError, unprocessable_error) if t
+        )
+        auth_types = tuple(
+            t for t in (openai.AuthenticationError, permission_error) if t
+        )
+
+        if isinstance(error, openai.RateLimitError):
+            reason = "rate_limit"
+        elif isinstance(error, openai.APITimeoutError):
+            reason = "timeout"
+        elif isinstance(error, openai.APIConnectionError):
+            reason = "connection_error"
+        elif auth_types and isinstance(error, auth_types):
+            reason = "authentication"
+        elif bad_request_types and isinstance(error, bad_request_types):
+            reason = "invalid_request"
+        elif isinstance(error, openai.APIStatusError):
+            reason = ModelError.reason_from_status_code(status_code) or "provider_error"
+        elif isinstance(error, openai.APIError):
+            reason = ModelError.reason_from_status_code(status_code) or "provider_error"
+        else:
+            reason = ModelError.reason_from_status_code(status_code) or "unknown"
+
+        return (
+            reason,
+            ModelError.is_reason_recoverable(reason),
+            status_code,
+            provider_code,
+        )
 
     @staticmethod
     def _convert_tool_manifest_to_openai(manifest: ToolManifest) -> dict[str, Any]:
@@ -456,68 +533,17 @@ class OpenAIModel:
             )
 
         except Exception as e:
-            # Import OpenAI exceptions locally to handle them
-            import openai
-
-            if isinstance(e, openai.RateLimitError):
-                # Recoverable error - can be retried
-                raise ModelError(
-                    message=f"Rate limit exceeded for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=True,
-                    details={"error_type": "rate_limit"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.AuthenticationError):
-                # Non-recoverable error - bad API key
-                raise ModelError(
-                    message=f"Authentication failed for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "authentication"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.BadRequestError):
-                # Non-recoverable error - invalid request
-                raise ModelError(
-                    message=f"Bad request to {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "bad_request"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.APITimeoutError):
-                # Recoverable error - timeout
-                raise ModelError(
-                    message=f"API timeout for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=True,
-                    details={"error_type": "timeout"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.APIError):
-                # Generic API error - assume non-recoverable unless proven otherwise
-                raise ModelError(
-                    message=f"API error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "api_error"},
-                    cause=e,
-                ) from e
-
-            else:
-                # Unknown error - wrap it
-                raise ModelError(
-                    message=f"Unexpected error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "unknown"},
-                    cause=e,
-                ) from e
+            reason, recoverable, status_code, provider_code = self._map_openai_error(e)
+            raise ModelError(
+                message=f"OpenAI error for {self._model_id}: {e}",
+                model_id=self._model_id,
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
+                cause=e,
+            ) from e
 
     async def stream(
         self,
@@ -647,43 +673,17 @@ class OpenAIModel:
                     )
 
         except Exception as e:
-            import openai
-
-            if isinstance(e, openai.RateLimitError):
-                raise ModelError(
-                    message=f"Rate limit exceeded for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=True,
-                    details={"error_type": "rate_limit"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.AuthenticationError):
-                raise ModelError(
-                    message=f"Authentication failed for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "authentication"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.APIError):
-                raise ModelError(
-                    message=f"API error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "api_error"},
-                    cause=e,
-                ) from e
-
-            else:
-                raise ModelError(
-                    message=f"Unexpected error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "unknown"},
-                    cause=e,
-                ) from e
+            reason, recoverable, status_code, provider_code = self._map_openai_error(e)
+            raise ModelError(
+                message=f"OpenAI error for {self._model_id}: {e}",
+                model_id=self._model_id,
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
+                cause=e,
+            ) from e
 
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count for text.
