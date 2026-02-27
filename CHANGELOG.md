@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added transcript integrity normalization before model calls to repair out-of-order tool-result
+  messages, drop orphaned tool results, and optionally enforce strict transcript validation.
+- Added optional tool-result payload capping support for model-step transcripts via
+  `max_tool_result_chars` step/config settings or `AXIS_MAX_TOOL_RESULT_CHARS`.
+
+### Changed
+
+- Model-step execution now runs transcript preflight normalization for both generated and explicit
+  message payloads before calling adapters, reducing provider-side tool pairing failures in resume
+  and long-session flows.
+
 ## [0.8.0b] - 2026-02-13
 
 ### Added

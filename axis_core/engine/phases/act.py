@@ -6,13 +6,19 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import random
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from axis_core.config import RetryPolicy
-from axis_core.context import ExecutionResult, ModelCallRecord, RunContext
+from axis_core.context import (
+    ExecutionResult,
+    ModelCallRecord,
+    RunContext,
+    normalize_transcript_messages,
+)
 from axis_core.errors import (
     AxisError,
     ErrorClass,
@@ -100,6 +106,58 @@ async def _sleep_for_retry(retry_policy: RetryPolicy, attempt: int) -> None:
     delay = _retry_delay_seconds(retry_policy, attempt)
     if delay > 0:
         await asyncio.sleep(delay)
+
+
+def _coerce_bool(value: Any, *, default: bool = False) -> bool:
+    """Coerce booleans from bool/string config values."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    """Coerce a value to positive int, returning None when unset/invalid."""
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _resolve_transcript_strict(ctx: RunContext, step: PlanStep) -> bool:
+    """Resolve strict transcript guard mode from step/config/env."""
+    if "transcript_strict" in step.payload:
+        return _coerce_bool(step.payload.get("transcript_strict"), default=False)
+
+    config_value = getattr(getattr(ctx, "config", None), "transcript_strict", None)
+    if config_value is not None:
+        return _coerce_bool(config_value, default=False)
+
+    env_value = os.getenv("AXIS_TRANSCRIPT_STRICT")
+    return _coerce_bool(env_value, default=False)
+
+
+def _resolve_max_tool_result_chars(ctx: RunContext, step: PlanStep) -> int | None:
+    """Resolve optional max chars guard for persisted tool-result messages."""
+    if "max_tool_result_chars" in step.payload:
+        return _coerce_positive_int(step.payload.get("max_tool_result_chars"))
+
+    config_value = getattr(getattr(ctx, "config", None), "max_tool_result_chars", None)
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    return _coerce_positive_int(os.getenv("AXIS_MAX_TOOL_RESULT_CHARS"))
 
 
 def _record_retry_attempt(ctx: RunContext, step: PlanStep) -> None:
@@ -772,7 +830,6 @@ async def _execute_model_step(
     # Build messages if not explicitly provided
     if "messages" not in step.payload:
         # Get context strategy from environment or use default
-        import os
         strategy = os.getenv("AXIS_CONTEXT_STRATEGY", "smart")
         if strategy not in {"smart", "full", "minimal"}:
             logger.warning(
@@ -799,6 +856,24 @@ async def _execute_model_step(
         messages = ctx.state.build_messages(ctx, strategy=strategy, max_cycles=max_cycles)
     else:
         messages = step.payload["messages"]
+
+    strict_transcript_guard = _resolve_transcript_strict(ctx, step)
+    max_tool_result_chars = _resolve_max_tool_result_chars(ctx, step)
+    if isinstance(messages, list):
+        try:
+            messages = normalize_transcript_messages(
+                messages,
+                strict=strict_transcript_guard,
+                max_tool_result_chars=max_tool_result_chars,
+            )
+        except ValueError as exc:
+            raise ModelError(
+                message=str(exc),
+                model_id=getattr(engine.model, "model_id", "unknown"),
+                reason="invalid_request",
+                recoverable=False,
+                cause=exc,
+            ) from exc
 
     system = step.payload.get("system", engine.system)
 

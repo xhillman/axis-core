@@ -11,6 +11,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - Lifecycle execution engine: Initialize -> Observe -> Plan -> Act -> Evaluate -> Finalize
 - Pluggable adapters for models, memory, planners, and telemetry
 - Built-in model fallback for recoverable provider errors
+- Transcript integrity normalization for tool-call/tool-result pairing before model calls
 - Tool system with `@tool`, schema generation, and destructive-action confirmation hooks
 - Runtime policy enforcement (timeouts, retries, rate limits, cache)
 - Checkpoint/resume support for phase-boundary recovery
@@ -75,6 +76,18 @@ for event in agent.stream("Solve 42 * 137"):
     elif event.is_final:
         print("\nDone")
 ```
+
+## Transcript Guards
+
+Axis normalizes transcript tool-call/tool-result pairing before model calls to reduce provider
+request failures in long-running or resumed sessions.
+
+Optional controls:
+
+- `AXIS_TRANSCRIPT_STRICT=true`: reject unresolved tool-call/tool-result pairing instead of
+  silently repairing/dropping invalid entries.
+- `AXIS_MAX_TOOL_RESULT_CHARS=<positive-int>`: cap persisted tool-result content passed to model
+  calls.
 
 ## Documentation
 

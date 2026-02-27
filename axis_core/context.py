@@ -40,6 +40,189 @@ WARN_CONTEXT_SIZE = 50 * 1024 * 1024  # 50MB
 MAX_CONTEXT_SIZE = 100 * 1024 * 1024  # 100MB
 
 
+def _is_empty_assistant_content(content: Any) -> bool:
+    """Return True when assistant message content is effectively empty."""
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return content == ""
+    if isinstance(content, (list, tuple)):
+        return len(content) == 0
+    return False
+
+
+def _normalize_tool_result_content(content: Any, max_tool_result_chars: int | None) -> str:
+    """Normalize tool-result content and optionally cap very large payloads."""
+    text = content if isinstance(content, str) else str(content)
+    if max_tool_result_chars is None or max_tool_result_chars <= 0:
+        return text
+    if len(text) <= max_tool_result_chars:
+        return text
+    truncated_count = len(text) - max_tool_result_chars
+    return f"{text[:max_tool_result_chars]}...[truncated {truncated_count} chars]"
+
+
+def normalize_transcript_messages(
+    messages: list[dict[str, Any]],
+    *,
+    strict: bool = False,
+    max_tool_result_chars: int | None = None,
+) -> list[dict[str, Any]]:
+    """Repair transcript ordering/pairing for assistant tool-calls and tool results.
+
+    Repairs out-of-order tool results by moving them after the matching assistant
+    tool-call message, drops orphaned/duplicate tool results, and optionally
+    rejects unresolved pairings when strict mode is enabled.
+    """
+    normalized: list[dict[str, Any]] = []
+    deferred_tool_results: dict[str, list[dict[str, Any]]] = {}
+    assistant_index_by_call_id: dict[str, int] = {}
+    unresolved_call_ids: set[str] = set()
+    matched_call_ids: set[str] = set()
+    orphan_tool_results = 0
+    duplicate_tool_results = 0
+
+    for raw_msg in messages:
+        if not isinstance(raw_msg, dict):
+            continue
+
+        msg = dict(raw_msg)
+        role = msg.get("role")
+
+        if role == "assistant":
+            raw_tool_calls = msg.get("tool_calls")
+            normalized_tool_calls: list[dict[str, Any]] = []
+            if isinstance(raw_tool_calls, list):
+                for raw_tool_call in raw_tool_calls:
+                    if not isinstance(raw_tool_call, dict):
+                        continue
+                    call_id_raw = raw_tool_call.get("id")
+                    if call_id_raw is None:
+                        continue
+                    call_id = str(call_id_raw).strip()
+                    if not call_id:
+                        continue
+                    tool_call = dict(raw_tool_call)
+                    tool_call["id"] = call_id
+                    normalized_tool_calls.append(tool_call)
+
+            if normalized_tool_calls:
+                msg["tool_calls"] = normalized_tool_calls
+            else:
+                msg.pop("tool_calls", None)
+
+            normalized.append(msg)
+            assistant_idx = len(normalized) - 1
+
+            for tool_call in normalized_tool_calls:
+                call_id = str(tool_call["id"])
+                unresolved_call_ids.add(call_id)
+                assistant_index_by_call_id[call_id] = assistant_idx
+
+                deferred_results = deferred_tool_results.get(call_id)
+                if not deferred_results or call_id in matched_call_ids:
+                    continue
+
+                normalized.append(deferred_results.pop(0))
+                matched_call_ids.add(call_id)
+                unresolved_call_ids.discard(call_id)
+
+                if deferred_results:
+                    duplicate_tool_results += len(deferred_results)
+                    deferred_results.clear()
+
+        elif role == "tool":
+            call_id_raw = msg.get("tool_call_id")
+            if call_id_raw is None:
+                orphan_tool_results += 1
+                continue
+
+            call_id = str(call_id_raw).strip()
+            if not call_id:
+                orphan_tool_results += 1
+                continue
+
+            tool_result_msg = dict(msg)
+            tool_result_msg["role"] = "tool"
+            tool_result_msg["tool_call_id"] = call_id
+            tool_result_msg["content"] = _normalize_tool_result_content(
+                msg.get("content", ""),
+                max_tool_result_chars=max_tool_result_chars,
+            )
+
+            if call_id in matched_call_ids:
+                duplicate_tool_results += 1
+                continue
+
+            if call_id in unresolved_call_ids:
+                normalized.append(tool_result_msg)
+                matched_call_ids.add(call_id)
+                unresolved_call_ids.discard(call_id)
+                continue
+
+            deferred_tool_results.setdefault(call_id, []).append(tool_result_msg)
+
+        else:
+            normalized.append(msg)
+
+    unresolved_orphan_ids = sorted(
+        call_id
+        for call_id, pending_results in deferred_tool_results.items()
+        if pending_results
+    )
+    orphan_tool_results += sum(
+        len(pending_results)
+        for pending_results in deferred_tool_results.values()
+    )
+
+    if strict and (unresolved_call_ids or orphan_tool_results or duplicate_tool_results):
+        issue_parts: list[str] = []
+        if unresolved_call_ids:
+            issue_parts.append(
+                f"unresolved tool_calls={sorted(unresolved_call_ids)}"
+            )
+        if unresolved_orphan_ids:
+            issue_parts.append(f"orphan tool_results={unresolved_orphan_ids}")
+        if duplicate_tool_results:
+            issue_parts.append(f"duplicate tool_results={duplicate_tool_results}")
+        raise ValueError(
+            "Transcript integrity validation failed: " + "; ".join(issue_parts)
+        )
+
+    for call_id in sorted(unresolved_call_ids):
+        assistant_idx_opt = assistant_index_by_call_id.get(call_id)
+        if assistant_idx_opt is None:
+            continue
+        if assistant_idx_opt >= len(normalized):
+            continue
+
+        assistant_msg = normalized[assistant_idx_opt]
+        tool_calls = assistant_msg.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+
+        filtered_tool_calls = [
+            tool_call
+            for tool_call in tool_calls
+            if str(tool_call.get("id", "")).strip() != call_id
+        ]
+        if filtered_tool_calls:
+            assistant_msg["tool_calls"] = filtered_tool_calls
+        else:
+            assistant_msg.pop("tool_calls", None)
+
+    cleaned_messages: list[dict[str, Any]] = []
+    for msg in normalized:
+        if msg.get("role") == "assistant":
+            tool_calls = msg.get("tool_calls")
+            has_tool_calls = isinstance(tool_calls, list) and len(tool_calls) > 0
+            if not has_tool_calls and _is_empty_assistant_content(msg.get("content")):
+                continue
+        cleaned_messages.append(msg)
+
+    return cleaned_messages
+
+
 @dataclass(frozen=True)
 class NormalizedInput:
     """Normalized representation of user input.
@@ -966,4 +1149,5 @@ __all__ = [
     "RunContext",
     "WARN_CONTEXT_SIZE",
     "MAX_CONTEXT_SIZE",
+    "normalize_transcript_messages",
 ]
