@@ -10,12 +10,18 @@ All notable changes to this project will be documented in this file.
   messages, drop orphaned tool results, and optionally enforce strict transcript validation.
 - Added optional tool-result payload capping support for model-step transcripts via
   `max_tool_result_chars` step/config settings or `AXIS_MAX_TOOL_RESULT_CHARS`.
+- Added `ContextWindowGuard` checks before model calls with configurable remaining-token warn/block
+  thresholds and explicit non-recoverable blocking when limits are exceeded.
+- Added tool-result-first transcript pruning utilities and act-phase integration to trim old tool
+  result payloads before guard block decisions.
 
 ### Changed
 
 - Model-step execution now runs transcript preflight normalization for both generated and explicit
   message payloads before calling adapters, reducing provider-side tool pairing failures in resume
   and long-session flows.
+- Added conservative opt-in context guard/pruning runtime config defaults and corresponding context
+  env-var controls in `.env.example`.
 
 ## [0.8.0b] - 2026-02-13
 

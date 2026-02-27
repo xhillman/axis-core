@@ -14,10 +14,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from axis_core.config import RetryPolicy
 from axis_core.context import (
+    ContextWindowGuard,
     ExecutionResult,
     ModelCallRecord,
     RunContext,
     normalize_transcript_messages,
+    prune_messages_for_context_window,
 )
 from axis_core.errors import (
     AxisError,
@@ -158,6 +160,88 @@ def _resolve_max_tool_result_chars(ctx: RunContext, step: PlanStep) -> int | Non
         return configured
 
     return _coerce_positive_int(os.getenv("AXIS_MAX_TOOL_RESULT_CHARS"))
+
+
+def _resolve_context_window_guard_enabled(ctx: RunContext, step: PlanStep) -> bool:
+    """Resolve context-window guard enablement from step/config/env."""
+    if "context_window_guard_enabled" in step.payload:
+        return _coerce_bool(
+            step.payload.get("context_window_guard_enabled"),
+            default=False,
+        )
+
+    config_value = getattr(
+        getattr(ctx, "config", None),
+        "context_window_guard_enabled",
+        None,
+    )
+    if config_value is not None:
+        return _coerce_bool(config_value, default=False)
+
+    env_value = os.getenv("AXIS_CONTEXT_GUARD_ENABLED")
+    return _coerce_bool(env_value, default=False)
+
+
+def _resolve_context_window_tokens(ctx: RunContext, step: PlanStep) -> int | None:
+    """Resolve configured model context-window token budget."""
+    if "context_window_tokens" in step.payload:
+        return _coerce_positive_int(step.payload.get("context_window_tokens"))
+
+    config_value = getattr(getattr(ctx, "config", None), "context_window_tokens", None)
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    return _coerce_positive_int(os.getenv("AXIS_CONTEXT_WINDOW_TOKENS"))
+
+
+def _resolve_context_warn_tokens(ctx: RunContext, step: PlanStep) -> int:
+    """Resolve remaining-token warn threshold for context-window guard."""
+    if "context_window_warn_tokens" in step.payload:
+        return _coerce_positive_int(step.payload.get("context_window_warn_tokens")) or 32_000
+
+    config_value = getattr(
+        getattr(ctx, "config", None),
+        "context_window_warn_tokens",
+        None,
+    )
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    env_value = _coerce_positive_int(os.getenv("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
+    return env_value if env_value is not None else 32_000
+
+
+def _resolve_context_block_tokens(ctx: RunContext, step: PlanStep) -> int:
+    """Resolve remaining-token block threshold for context-window guard."""
+    if "context_window_block_tokens" in step.payload:
+        return _coerce_positive_int(step.payload.get("context_window_block_tokens")) or 16_000
+
+    config_value = getattr(
+        getattr(ctx, "config", None),
+        "context_window_block_tokens",
+        None,
+    )
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    env_value = _coerce_positive_int(os.getenv("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
+    return env_value if env_value is not None else 16_000
+
+
+def _resolve_context_pruning_enabled(ctx: RunContext, step: PlanStep) -> bool:
+    """Resolve context pruning enablement from step/config/env."""
+    if "context_pruning_enabled" in step.payload:
+        return _coerce_bool(step.payload.get("context_pruning_enabled"), default=False)
+
+    config_value = getattr(getattr(ctx, "config", None), "context_pruning_enabled", None)
+    if config_value is not None:
+        return _coerce_bool(config_value, default=False)
+
+    env_value = os.getenv("AXIS_CONTEXT_PRUNE_ENABLED")
+    return _coerce_bool(env_value, default=False)
 
 
 def _record_retry_attempt(ctx: RunContext, step: PlanStep) -> None:
@@ -876,6 +960,83 @@ async def _execute_model_step(
             ) from exc
 
     system = step.payload.get("system", engine.system)
+
+    if isinstance(messages, list) and _resolve_context_window_guard_enabled(ctx, step):
+        context_window_tokens = _resolve_context_window_tokens(ctx, step)
+        if context_window_tokens is not None:
+            warn_tokens = _resolve_context_warn_tokens(ctx, step)
+            block_tokens = _resolve_context_block_tokens(ctx, step)
+            guard = ContextWindowGuard(
+                warn_threshold_tokens=warn_tokens,
+                block_threshold_tokens=block_tokens,
+            )
+
+            estimated_tokens = await _estimate_tokens_for_messages(
+                model=engine.model,
+                messages=messages,
+                system=system,
+            )
+            prune_enabled = _resolve_context_pruning_enabled(ctx, step)
+            target_tokens = max(1, context_window_tokens - max(warn_tokens, block_tokens))
+            if prune_enabled and estimated_tokens > target_tokens:
+                pruned_messages, pruned_count = prune_messages_for_context_window(
+                    messages,
+                    target_tokens=target_tokens,
+                )
+                if pruned_count > 0:
+                    pruned_estimated_tokens = await _estimate_tokens_for_messages(
+                        model=engine.model,
+                        messages=pruned_messages,
+                        system=system,
+                    )
+                    await engine._emit(
+                        "context_window_pruned",
+                        run_id=ctx.run_id,
+                        phase=Phase.ACT.value,
+                        cycle=ctx.cycle_count,
+                        step_id=step.id,
+                        data={
+                            "target_tokens": target_tokens,
+                            "dropped_messages": pruned_count,
+                            "estimated_tokens_before": estimated_tokens,
+                            "estimated_tokens_after": pruned_estimated_tokens,
+                        },
+                    )
+                    messages = pruned_messages
+                    estimated_tokens = pruned_estimated_tokens
+
+            assessment = guard.evaluate(
+                estimated_tokens=estimated_tokens,
+                context_window_tokens=context_window_tokens,
+            )
+            if assessment.should_warn:
+                await engine._emit(
+                    "context_window_warning",
+                    run_id=ctx.run_id,
+                    phase=Phase.ACT.value,
+                    cycle=ctx.cycle_count,
+                    step_id=step.id,
+                    data={
+                        "estimated_tokens": assessment.estimated_tokens,
+                        "context_window_tokens": assessment.context_window_tokens,
+                        "remaining_tokens": assessment.remaining_tokens,
+                        "warn_threshold_tokens": warn_tokens,
+                    },
+                )
+
+            if assessment.should_block:
+                raise ModelError(
+                    message=(
+                        "Context window guard blocked model call: "
+                        f"estimated_tokens={assessment.estimated_tokens}, "
+                        f"remaining_tokens={assessment.remaining_tokens}, "
+                        f"block_threshold={block_tokens}, "
+                        f"context_window_tokens={assessment.context_window_tokens}"
+                    ),
+                    model_id=getattr(engine.model, "model_id", "unknown"),
+                    reason="context_window_exceeded",
+                    recoverable=False,
+                )
 
     # Get tool manifests (protocol objects) - adapter will convert to its format
     tool_manifests = engine._get_tool_manifests()

@@ -222,6 +222,11 @@ class ResolvedConfig:
         rate_limits: Rate limiting config (optional)
         retry: Retry policy (optional)
         cache: Cache config (optional)
+        context_window_guard_enabled: Whether pre-model context guard is enabled
+        context_window_tokens: Model context window budget in tokens (optional)
+        context_window_warn_tokens: Remaining-token warning threshold
+        context_window_block_tokens: Remaining-token hard-block threshold
+        context_pruning_enabled: Whether tool-result-first pruning is enabled
         telemetry_enabled: Whether telemetry is enabled
         verbose: Whether to print events
     """
@@ -234,6 +239,11 @@ class ResolvedConfig:
     rate_limits: RateLimits | None = None
     retry: RetryPolicy | None = None
     cache: CacheConfig | None = None
+    context_window_guard_enabled: bool = False
+    context_window_tokens: int | None = None
+    context_window_warn_tokens: int = 32000
+    context_window_block_tokens: int = 16000
+    context_pruning_enabled: bool = False
     confirmation_handler: (
         Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None
     ) = None

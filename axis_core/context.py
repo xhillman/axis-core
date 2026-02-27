@@ -40,6 +40,63 @@ WARN_CONTEXT_SIZE = 50 * 1024 * 1024  # 50MB
 MAX_CONTEXT_SIZE = 100 * 1024 * 1024  # 100MB
 
 
+@dataclass(frozen=True)
+class ContextWindowAssessment:
+    """Result of evaluating an estimated prompt size against context thresholds."""
+
+    estimated_tokens: int
+    context_window_tokens: int
+    remaining_tokens: int
+    should_warn: bool
+    should_block: bool
+
+
+@dataclass(frozen=True)
+class ContextWindowGuard:
+    """Token-threshold guard evaluated before model calls."""
+
+    warn_threshold_tokens: int | None = None
+    block_threshold_tokens: int | None = None
+
+    @staticmethod
+    def _normalized_threshold(value: int | None) -> int | None:
+        if value is None:
+            return None
+        return value if value > 0 else None
+
+    def evaluate(
+        self,
+        *,
+        estimated_tokens: int,
+        context_window_tokens: int,
+    ) -> ContextWindowAssessment:
+        """Evaluate warn/block thresholds from an estimated token count."""
+        normalized_estimated = max(0, estimated_tokens)
+        normalized_window = max(0, context_window_tokens)
+        remaining_tokens = max(0, normalized_window - normalized_estimated)
+
+        block_threshold = self._normalized_threshold(self.block_threshold_tokens)
+        warn_threshold = self._normalized_threshold(self.warn_threshold_tokens)
+
+        should_block = (
+            block_threshold is not None
+            and remaining_tokens <= block_threshold
+        )
+        should_warn = (
+            not should_block
+            and warn_threshold is not None
+            and remaining_tokens <= warn_threshold
+        )
+
+        return ContextWindowAssessment(
+            estimated_tokens=normalized_estimated,
+            context_window_tokens=normalized_window,
+            remaining_tokens=remaining_tokens,
+            should_warn=should_warn,
+            should_block=should_block,
+        )
+
+
 def _is_empty_assistant_content(content: Any) -> bool:
     """Return True when assistant message content is effectively empty."""
     if content is None:
@@ -221,6 +278,111 @@ def normalize_transcript_messages(
         cleaned_messages.append(msg)
 
     return cleaned_messages
+
+
+def _message_text_for_token_estimation(message: dict[str, Any]) -> str:
+    """Build a stable text representation for heuristic token estimation."""
+    role = str(message.get("role", ""))
+
+    content = message.get("content", "")
+    if isinstance(content, list):
+        content_text = " ".join(str(part) for part in content)
+    else:
+        content_text = str(content)
+
+    parts = [role, content_text]
+
+    tool_call_id = message.get("tool_call_id")
+    if tool_call_id is not None:
+        parts.append(str(tool_call_id))
+
+    raw_tool_calls = message.get("tool_calls")
+    if isinstance(raw_tool_calls, list):
+        for call in raw_tool_calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id", ""))
+            call_name = str(call.get("name", ""))
+            arguments = call.get("arguments", {})
+            try:
+                arguments_json = json.dumps(arguments, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                arguments_json = str(arguments)
+            parts.append(f"{call_id}:{call_name}:{arguments_json}")
+
+    return " ".join(parts)
+
+
+def estimate_transcript_tokens(
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+) -> int:
+    """Heuristically estimate transcript tokens using a character-based approximation."""
+    text_parts: list[str] = []
+    if system:
+        text_parts.append(system)
+
+    for message in messages:
+        if isinstance(message, dict):
+            text_parts.append(_message_text_for_token_estimation(message))
+
+    transcript_text = "\n".join(text_parts)
+    if not transcript_text:
+        return 0
+    return max(1, len(transcript_text) // 4)
+
+
+def _first_tool_result_index(messages: list[dict[str, Any]]) -> int | None:
+    for index, message in enumerate(messages):
+        if message.get("role") == "tool":
+            return index
+    return None
+
+
+def _first_prunable_non_tool_index(messages: list[dict[str, Any]]) -> int | None:
+    latest_user_index = None
+    for index, message in enumerate(messages):
+        if message.get("role") == "user":
+            latest_user_index = index
+
+    for index, message in enumerate(messages):
+        role = message.get("role")
+        if role == "tool" or role == "system":
+            continue
+        if latest_user_index is not None and index == latest_user_index:
+            continue
+        return index
+    return None
+
+
+def prune_messages_for_context_window(
+    messages: list[dict[str, Any]],
+    *,
+    target_tokens: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Prune transcript toward token target, preferring old tool results first."""
+    normalized_target = max(1, target_tokens)
+    working = normalize_transcript_messages(list(messages), strict=False)
+    dropped = 0
+    max_iterations = len(working)
+
+    while (
+        working
+        and dropped < max_iterations
+        and estimate_transcript_tokens(working) > normalized_target
+    ):
+        prune_index = _first_tool_result_index(working)
+        if prune_index is None:
+            prune_index = _first_prunable_non_tool_index(working)
+        if prune_index is None:
+            break
+
+        del working[prune_index]
+        dropped += 1
+        working = normalize_transcript_messages(working, strict=False)
+
+    return (working, dropped)
 
 
 @dataclass(frozen=True)
@@ -1147,7 +1309,11 @@ __all__ = [
     "CycleState",
     "RunState",
     "RunContext",
+    "ContextWindowAssessment",
+    "ContextWindowGuard",
     "WARN_CONTEXT_SIZE",
     "MAX_CONTEXT_SIZE",
+    "estimate_transcript_tokens",
     "normalize_transcript_messages",
+    "prune_messages_for_context_window",
 ]

@@ -12,6 +12,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - Pluggable adapters for models, memory, planners, and telemetry
 - Built-in model fallback for recoverable provider errors
 - Transcript integrity normalization for tool-call/tool-result pairing before model calls
+- Optional context-window guard with tool-result-first pruning before model calls
 - Tool system with `@tool`, schema generation, and destructive-action confirmation hooks
 - Runtime policy enforcement (timeouts, retries, rate limits, cache)
 - Checkpoint/resume support for phase-boundary recovery
@@ -88,6 +89,15 @@ Optional controls:
   silently repairing/dropping invalid entries.
 - `AXIS_MAX_TOOL_RESULT_CHARS=<positive-int>`: cap persisted tool-result content passed to model
   calls.
+- `AXIS_CONTEXT_GUARD_ENABLED=true`: enable token-threshold checks before model calls.
+- `AXIS_CONTEXT_WINDOW_TOKENS=<positive-int>`: set the context-window token budget used by guard
+  and pruning checks.
+- `AXIS_CONTEXT_GUARD_WARN_TOKENS=<positive-int>`: emit warning telemetry when remaining tokens
+  drop below threshold.
+- `AXIS_CONTEXT_GUARD_BLOCK_TOKENS=<positive-int>`: block model calls when remaining tokens drop
+  below threshold.
+- `AXIS_CONTEXT_PRUNE_ENABLED=true`: opt in to tool-result-first transcript pruning before block
+  decisions.
 
 ## Documentation
 

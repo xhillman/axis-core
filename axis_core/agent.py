@@ -126,6 +126,29 @@ def _coerce(
     )
 
 
+def _coerce_env_bool(value: str | None, *, default: bool = False) -> bool:
+    """Coerce boolean env-var style values."""
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _coerce_env_positive_int(value: str | None) -> int | None:
+    """Coerce positive integer env-var values."""
+    if value is None:
+        return None
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _resolve_telemetry_sinks() -> list[Any]:
     """Resolve telemetry sinks from environment variables.
 
@@ -537,6 +560,26 @@ class Agent:
 
     def _resolved_config(self) -> ResolvedConfig:
         """Build the resolved runtime config passed into the lifecycle engine."""
+        context_guard_enabled = _coerce_env_bool(
+            os.getenv("AXIS_CONTEXT_GUARD_ENABLED"),
+            default=False,
+        )
+        context_window_tokens = _coerce_env_positive_int(
+            os.getenv("AXIS_CONTEXT_WINDOW_TOKENS")
+        )
+        context_warn_tokens = (
+            _coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
+            or 32_000
+        )
+        context_block_tokens = (
+            _coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
+            or 16_000
+        )
+        context_pruning_enabled = _coerce_env_bool(
+            os.getenv("AXIS_CONTEXT_PRUNE_ENABLED"),
+            default=False,
+        )
+
         return ResolvedConfig(
             model=self._model,
             planner=self._planner,
@@ -546,6 +589,11 @@ class Agent:
             rate_limits=self._rate_limits,
             retry=self._retry,
             cache=self._cache,
+            context_window_guard_enabled=context_guard_enabled,
+            context_window_tokens=context_window_tokens,
+            context_window_warn_tokens=context_warn_tokens,
+            context_window_block_tokens=context_block_tokens,
+            context_pruning_enabled=context_pruning_enabled,
             confirmation_handler=self._confirmation_handler,
             telemetry_enabled=self._telemetry_enabled,
             verbose=self._verbose,
