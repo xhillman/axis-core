@@ -22,7 +22,7 @@ except ImportError as e:
     ) from e
 
 from axis_core.errors import ModelError
-from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
@@ -652,13 +652,7 @@ class OpenAIModel:
                     )
 
             # Extract exact token counts from response
-            usage = UsageStats.from_openai(
-                {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                }
-            )
+            usage = NormalizedUsage.from_openai(getattr(response, "usage", None))
 
             # Calculate cost
             cost = self.estimate_cost(usage.input_tokens, usage.output_tokens)

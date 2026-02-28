@@ -4,6 +4,10 @@ This module provides dataclasses for tracking resource consumption and enforcing
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from axis_core.protocols.model import NormalizedUsage
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,13 @@ class BudgetState:
     output_tokens: int = 0
     cost_usd: float = 0.0
     wall_time_seconds: float = 0.0
+
+    def record_model_usage(self, usage: "NormalizedUsage", cost_usd: float) -> None:
+        """Accumulate normalized model usage and cost for one model call."""
+        self.model_calls += 1
+        self.input_tokens += usage.input_tokens
+        self.output_tokens += usage.output_tokens
+        self.cost_usd += cost_usd
 
     @property
     def total_tokens(self) -> int:

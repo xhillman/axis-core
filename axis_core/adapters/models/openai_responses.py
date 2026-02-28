@@ -17,7 +17,7 @@ except ImportError as e:
 
 from axis_core.adapters.models.openai import MODEL_PRICING
 from axis_core.errors import ModelError
-from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
 
 
@@ -223,25 +223,9 @@ class OpenAIResponsesModel:
         return tuple(calls) if calls else None
 
     @staticmethod
-    def _usage_from_response(response: Any) -> UsageStats:
-        """Map Responses usage fields into canonical UsageStats."""
-        usage = getattr(response, "usage", None)
-        if usage is None:
-            return UsageStats.from_openai(
-                {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            )
-
-        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-        total_tokens = int(getattr(usage, "total_tokens", input_tokens + output_tokens) or 0)
-
-        return UsageStats.from_openai(
-            {
-                "prompt_tokens": input_tokens,
-                "completion_tokens": output_tokens,
-                "total_tokens": total_tokens,
-            }
-        )
+    def _usage_from_response(response: Any) -> NormalizedUsage:
+        """Map Responses usage fields into canonical usage."""
+        return NormalizedUsage.from_openai(getattr(response, "usage", None))
 
     async def complete(
         self,

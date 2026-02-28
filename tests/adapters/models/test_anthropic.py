@@ -363,6 +363,40 @@ class TestAnthropicModel:
         assert response.usage.total_tokens == 579
 
     @pytest.mark.asyncio
+    async def test_complete_defaults_usage_when_provider_omits_usage(self) -> None:
+        """Missing provider usage should degrade to zero tokens."""
+        model = AnthropicModel(model_id="claude-sonnet-4-20250514", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Response")]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = None
+
+        with patch.object(model._client.messages, "create", new=AsyncMock(return_value=mock_response)):  # noqa: E501
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 0
+        assert response.usage.total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_complete_normalizes_non_numeric_usage_values(self) -> None:
+        """Malformed provider usage values should not crash normalization."""
+        model = AnthropicModel(model_id="claude-sonnet-4-20250514", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Response")]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = Mock(input_tokens="invalid", output_tokens="8")
+
+        with patch.object(model._client.messages, "create", new=AsyncMock(return_value=mock_response)):  # noqa: E501
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 8
+        assert response.usage.total_tokens == 8
+
+    @pytest.mark.asyncio
     async def test_complete_with_metadata(self) -> None:
         """Test that metadata is passed through to the API."""
         model = AnthropicModel(model_id="claude-sonnet-4-20250514", api_key="test_key")

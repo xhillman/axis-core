@@ -1197,10 +1197,7 @@ async def _execute_model_step(
     duration_ms = (time.monotonic() - start) * 1000
 
     # Track budget
-    ctx.state.budget_state.model_calls += 1
-    ctx.state.budget_state.input_tokens += response.usage.input_tokens
-    ctx.state.budget_state.output_tokens += response.usage.output_tokens
-    ctx.state.budget_state.cost_usd += response.cost_usd
+    ctx.state.budget_state.record_model_usage(usage=response.usage, cost_usd=response.cost_usd)
 
     # Record detailed model call for observability/checkpointing
     ctx.state.append_model_call(ModelCallRecord(

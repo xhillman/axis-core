@@ -20,7 +20,7 @@ except ImportError as e:
     ) from e
 
 from axis_core.errors import ModelError
-from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
@@ -605,12 +605,7 @@ class AnthropicModel:
                     )
 
             # Extract exact token counts from response (AD-029)
-            usage = UsageStats.from_anthropic(
-                {
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                }
-            )
+            usage = NormalizedUsage.from_anthropic(getattr(response, "usage", None))
 
             # Calculate cost
             cost = self.estimate_cost(usage.input_tokens, usage.output_tokens)

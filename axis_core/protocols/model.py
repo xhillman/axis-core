@@ -4,13 +4,13 @@ This module defines the ModelAdapter protocol interface for LLM providers, along
 dataclasses for representing model responses, tool calls, and usage statistics.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
-class UsageStats:
+class NormalizedUsage:
     """Token usage statistics from a model call.
 
     Attributes:
@@ -24,53 +24,113 @@ class UsageStats:
     total_tokens: int
 
     @staticmethod
-    def from_anthropic(usage: dict[str, Any]) -> "UsageStats":
-        """Create UsageStats from Anthropic API usage object.
+    def _read_field(payload: Any, key: str) -> Any:
+        """Read a usage field from either mapping or object payloads."""
+        if payload is None:
+            return None
+        if isinstance(payload, Mapping):
+            return payload.get(key)
+        return getattr(payload, key, None)
+
+    @staticmethod
+    def _coerce_non_negative_int(value: Any) -> int:
+        """Best-effort conversion to a non-negative int token count."""
+        coerced, is_valid = NormalizedUsage._try_coerce_non_negative_int(value)
+        if not is_valid:
+            return 0
+        return coerced
+
+    @staticmethod
+    def _try_coerce_non_negative_int(value: Any) -> tuple[int, bool]:
+        """Attempt conversion to non-negative int with validity signal."""
+        if value is None:
+            return 0, False
+
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return 0, False
+
+        return max(0, coerced), True
+
+    @staticmethod
+    def from_anthropic(usage: Any) -> "NormalizedUsage":
+        """Create NormalizedUsage from Anthropic API usage object.
 
         Args:
-            usage: Usage dict from Anthropic response
-                   (e.g., {"input_tokens": 10, "output_tokens": 20})
+            usage: Usage payload from Anthropic response
+                (for example {"input_tokens": 10, "output_tokens": 20})
 
         Returns:
-            UsageStats instance
+            NormalizedUsage instance
 
         Examples:
             >>> usage = {"input_tokens": 100, "output_tokens": 50}
-            >>> stats = UsageStats.from_anthropic(usage)
+            >>> stats = NormalizedUsage.from_anthropic(usage)
             >>> stats.total_tokens
             150
         """
-        input_tokens = usage.get("input_tokens", 0)
-        output_tokens = usage.get("output_tokens", 0)
-        return UsageStats(
+        input_tokens = NormalizedUsage._coerce_non_negative_int(
+            NormalizedUsage._read_field(usage, "input_tokens")
+        )
+        output_tokens = NormalizedUsage._coerce_non_negative_int(
+            NormalizedUsage._read_field(usage, "output_tokens")
+        )
+        return NormalizedUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
         )
 
     @staticmethod
-    def from_openai(usage: dict[str, Any]) -> "UsageStats":
-        """Create UsageStats from OpenAI API usage object.
+    def from_openai(usage: Any) -> "NormalizedUsage":
+        """Create NormalizedUsage from OpenAI API usage object.
 
         Args:
-            usage: Usage dict from OpenAI response
-                   (e.g., {"prompt_tokens": 10, "completion_tokens": 20,
-                   "total_tokens": 30})
+            usage: Usage payload from OpenAI response
+                (for example {"prompt_tokens": 10, "completion_tokens": 20,
+                "total_tokens": 30})
 
         Returns:
-            UsageStats instance
+            NormalizedUsage instance
 
         Examples:
             >>> usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
-            >>> stats = UsageStats.from_openai(usage)
+            >>> stats = NormalizedUsage.from_openai(usage)
             >>> stats.input_tokens
             100
         """
-        return UsageStats(
-            input_tokens=usage.get("prompt_tokens", 0),
-            output_tokens=usage.get("completion_tokens", 0),
-            total_tokens=usage.get("total_tokens", 0),
+        input_tokens, input_valid = NormalizedUsage._try_coerce_non_negative_int(
+            NormalizedUsage._read_field(usage, "prompt_tokens")
         )
+        if not input_valid:
+            input_tokens = NormalizedUsage._coerce_non_negative_int(
+                NormalizedUsage._read_field(usage, "input_tokens")
+            )
+
+        output_tokens, output_valid = NormalizedUsage._try_coerce_non_negative_int(
+            NormalizedUsage._read_field(usage, "completion_tokens")
+        )
+        if not output_valid:
+            output_tokens = NormalizedUsage._coerce_non_negative_int(
+                NormalizedUsage._read_field(usage, "output_tokens")
+            )
+
+        raw_total = NormalizedUsage._read_field(usage, "total_tokens")
+        total_tokens = NormalizedUsage._coerce_non_negative_int(raw_total)
+        summed_tokens = input_tokens + output_tokens
+        if raw_total is None or total_tokens < summed_tokens:
+            total_tokens = summed_tokens
+
+        return NormalizedUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+
+
+# Backward-compatible alias kept for existing imports and public API stability.
+UsageStats = NormalizedUsage
 
 
 @dataclass(frozen=True)
@@ -101,7 +161,7 @@ class ModelResponse:
 
     content: str
     tool_calls: tuple[ToolCall, ...] | None
-    usage: UsageStats
+    usage: NormalizedUsage
     cost_usd: float
 
 

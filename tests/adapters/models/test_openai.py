@@ -500,6 +500,46 @@ class TestOpenAIModel:
         assert response.usage.total_tokens == 579
 
     @pytest.mark.asyncio
+    async def test_complete_defaults_usage_when_provider_omits_usage(self) -> None:
+        """Missing provider usage should degrade to zero tokens."""
+        model = OpenAIModel(model_id="gpt-4", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Response", tool_calls=None))]
+        mock_response.usage = None
+
+        with patch.object(
+            model._client.chat.completions, "create", new=AsyncMock(return_value=mock_response)
+        ):
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 0
+        assert response.usage.total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_complete_normalizes_non_numeric_usage_values(self) -> None:
+        """Malformed provider usage values should not crash normalization."""
+        model = OpenAIModel(model_id="gpt-4", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Response", tool_calls=None))]
+        mock_response.usage = Mock(
+            prompt_tokens="invalid",
+            completion_tokens="9",
+            total_tokens=None,
+        )
+
+        with patch.object(
+            model._client.chat.completions, "create", new=AsyncMock(return_value=mock_response)
+        ):
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 9
+        assert response.usage.total_tokens == 9
+
+    @pytest.mark.asyncio
     async def test_complete_with_system_message(self) -> None:
         """Test that system parameter is converted to system message."""
         model = OpenAIModel(model_id="gpt-4", api_key="test_key")
