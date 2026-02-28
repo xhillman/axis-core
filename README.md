@@ -15,6 +15,7 @@ A modular, observable AI agent framework for building production-ready agents in
 - Optional context-window guard with tool-result-first pruning before model calls
 - Tool system with `@tool`, schema generation, destructive-action confirmation hooks, and
   idempotency helpers for retry-safe side effects
+- Optional per-agent tool allow/deny policy with glob patterns and deny-overrides-allow semantics
 - Runtime policy enforcement (timeouts, retries, rate limits, cache)
 - Checkpoint/resume support for phase-boundary recovery
 - Budget controls for cost, token, and cycle limits
@@ -121,6 +122,23 @@ async def send_invoice(ctx: ToolContext, customer_id: str) -> str:
         return f"invoice:{customer_id}"
 
     return await run_idempotent(ctx, send_once)
+```
+
+## Tool Policy
+
+Use `ToolPolicy` to allow and deny tool names per agent. Deny patterns always override allow
+patterns.
+
+```python
+from axis_core import Agent, ToolPolicy
+
+agent = Agent(
+    tools=[...],
+    tool_policy=ToolPolicy(
+        allow=("safe_*",),
+        deny=("safe_delete_*",),
+    ),
+)
 ```
 
 ## Documentation

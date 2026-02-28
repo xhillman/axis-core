@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from axis_core.config import RetryPolicy
+from axis_core.config import RetryPolicy, ToolPolicy
 from axis_core.context import (
     ContextWindowGuard,
     ExecutionResult,
@@ -345,6 +345,33 @@ async def _confirm_destructive_tool(
         )
 
 
+def _enforce_tool_policy(ctx: RunContext, *, tool_name: str) -> None:
+    """Block tool execution when configured allow/deny policy rejects the tool."""
+    runtime_config = getattr(ctx, "config", None)
+    tool_policy = getattr(runtime_config, "tool_policy", None)
+    if tool_policy is None:
+        return
+    if not isinstance(tool_policy, ToolPolicy):
+        raise ToolError(
+            message=(
+                "Invalid runtime config: tool_policy must be ToolPolicy or None"
+            ),
+            tool_name=tool_name,
+            recoverable=False,
+        )
+
+    allowed, reason = tool_policy.evaluate(tool_name)
+    if allowed:
+        return
+
+    detail = f" ({reason})" if reason else ""
+    raise ToolError(
+        message=f"Tool '{tool_name}' blocked by tool policy{detail}",
+        tool_name=tool_name,
+        recoverable=False,
+    )
+
+
 async def act(engine: LifecycleEngine, ctx: RunContext, plan_obj: Plan) -> ExecutionResult:
     """Act phase: execute plan steps with dependency handling.
 
@@ -491,6 +518,8 @@ async def _execute_tool_step(
         tuple[Capability, ...] | None,
         getattr(manifest, "capabilities", None),
     )
+
+    _enforce_tool_policy(ctx, tool_name=tool_name)
 
     await _confirm_destructive_tool(
         ctx,

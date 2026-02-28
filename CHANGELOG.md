@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file.
   idempotency keys through `ToolContext` (and optional `idempotency_key` tool args), plus new
   helper utilities (`build_idempotency_key`, `run_idempotent`, idempotent result get/set helpers)
   for dedupe-safe side-effecting tools.
+- Added `ToolPolicy` with precompiled allow/deny glob patterns for per-agent tool gating, with
+  deny-overrides-allow enforcement in act phase before destructive confirmation callbacks.
 
 ### Changed
 

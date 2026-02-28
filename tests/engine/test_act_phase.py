@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 
 from axis_core.budget import Budget
-from axis_core.config import RetryPolicy
+from axis_core.config import RetryPolicy, ToolPolicy
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.protocols.model import ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
-from axis_core.tool import ToolContext, run_idempotent, tool
+from axis_core.tool import Capability, ToolContext, run_idempotent, tool
 
 
 class MockModelAdapter:
@@ -128,6 +128,7 @@ def _runtime_config(**overrides: Any) -> Any:
         "retry": None,
         "rate_limits": None,
         "cache": None,
+        "tool_policy": None,
         "confirmation_handler": None,
         "context_window_guard_enabled": True,
         "context_window_tokens": 100,
@@ -346,3 +347,99 @@ class TestActPhaseToolIdempotency:
         assert calls["attempts"] == 2
         assert calls["side_effects"] == 2
         assert calls["keys"] == [None, None]
+
+
+class TestActPhaseToolPolicy:
+    """Task 6 integration checks for per-agent allow/deny tool policy behavior."""
+
+    @pytest.mark.asyncio
+    async def test_deny_overrides_allow_and_blocks_before_confirmation(self) -> None:
+        calls = {"confirmations": 0, "tool_calls": 0}
+
+        @tool(capabilities=[Capability.DESTRUCTIVE])
+        async def dangerous_delete() -> str:
+            calls["tool_calls"] += 1
+            return "deleted"
+
+        def confirmation_handler(tool_name: str, args: dict[str, Any]) -> bool:
+            del tool_name, args
+            calls["confirmations"] += 1
+            return True
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_tool("dangerous_delete", idempotency_key="task6"),
+            tools={"dangerous_delete": dangerous_delete},
+        )
+
+        result = await engine.execute(
+            input_text="run",
+            agent_id="act-tool-policy-deny",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(
+                confirmation_handler=confirmation_handler,
+                tool_policy=ToolPolicy(
+                    allow=("dangerous_*",),
+                    deny=("dangerous_delete",),
+                ),
+            ),
+        )
+
+        assert result["success"] is False
+        assert calls["tool_calls"] == 0
+        assert calls["confirmations"] == 0
+        assert any(
+            "blocked by tool policy" in error_record.error.message
+            and "deny pattern 'dangerous_delete'" in error_record.error.message
+            for error_record in result["errors"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_wildcard_allow_and_unmatched_tool_blocking(self) -> None:
+        calls = {"safe": 0, "unsafe": 0}
+
+        @tool
+        async def safe_ping() -> str:
+            calls["safe"] += 1
+            return "pong"
+
+        @tool
+        async def unsafe_shell() -> str:
+            calls["unsafe"] += 1
+            return "ran"
+
+        allow_only_policy = ToolPolicy(allow=("safe_*",))
+
+        safe_engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_tool("safe_ping", idempotency_key="task6-safe"),
+            tools={"safe_ping": safe_ping},
+        )
+        safe_result = await safe_engine.execute(
+            input_text="run safe",
+            agent_id="act-tool-policy-safe",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(tool_policy=allow_only_policy),
+        )
+
+        assert safe_result["success"] is True
+        assert calls["safe"] == 1
+
+        unsafe_engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_tool("unsafe_shell", idempotency_key="task6-unsafe"),
+            tools={"unsafe_shell": unsafe_shell},
+        )
+        unsafe_result = await unsafe_engine.execute(
+            input_text="run unsafe",
+            agent_id="act-tool-policy-unsafe",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(tool_policy=allow_only_policy),
+        )
+
+        assert unsafe_result["success"] is False
+        assert calls["unsafe"] == 0
+        assert any(
+            "not matched by allow patterns" in error_record.error.message
+            for error_record in unsafe_result["errors"]
+        )

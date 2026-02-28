@@ -36,6 +36,7 @@ from axis_core.config import (
     ResolvedConfig,
     RetryPolicy,
     Timeouts,
+    ToolPolicy,
     config,
 )
 from axis_core.context import RunState
@@ -294,6 +295,7 @@ class Agent:
         verbose: Print events to console
         auth: Deprecated. Credentials must be managed inside tools.
         confirmation_handler: Optional approval callback for destructive tools.
+        tool_policy: Optional per-agent allow/deny policy for tool names.
         checkpoint: Enable automatic phase-boundary checkpoint persistence.
         checkpoint_dir: Directory where checkpoints are stored when enabled.
     """
@@ -313,6 +315,7 @@ class Agent:
         rate_limits: dict[str, Any] | RateLimits | None = None,
         retry: dict[str, Any] | RetryPolicy | None = None,
         cache: dict[str, Any] | CacheConfig | None = None,
+        tool_policy: dict[str, Any] | ToolPolicy | None = None,
         telemetry: bool | list[Any] = True,
         verbose: bool = False,
         auth: dict[str, dict[str, Any]] | None = None,
@@ -363,6 +366,7 @@ class Agent:
         self._rate_limits = _coerce(rate_limits, RateLimits, "rate_limits")
         self._retry = _coerce(retry, RetryPolicy, "retry")
         self._cache = _coerce(cache, CacheConfig, "cache")
+        self._tool_policy = _coerce(tool_policy, ToolPolicy, "tool_policy")
         self._verbose = verbose
         self._confirmation_handler = confirmation_handler
         self._checkpoint_enabled = checkpoint
@@ -594,6 +598,7 @@ class Agent:
             context_window_warn_tokens=context_warn_tokens,
             context_window_block_tokens=context_block_tokens,
             context_pruning_enabled=context_pruning_enabled,
+            tool_policy=self._tool_policy,
             confirmation_handler=self._confirmation_handler,
             telemetry_enabled=self._telemetry_enabled,
             verbose=self._verbose,

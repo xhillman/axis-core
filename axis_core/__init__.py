@@ -40,6 +40,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "RetryPolicy": ("axis_core.config", "RetryPolicy"),
     "RateLimits": ("axis_core.config", "RateLimits"),
     "CacheConfig": ("axis_core.config", "CacheConfig"),
+    "ToolPolicy": ("axis_core.config", "ToolPolicy"),
     # Errors
     "AxisError": ("axis_core.errors", "AxisError"),
     "InputError": ("axis_core.errors", "InputError"),
