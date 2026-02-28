@@ -267,3 +267,126 @@ class TestCliRuntime:
 
         assert exit_code == 0
         assert installs == ["synaptic-core>=0.1.1"]
+
+    def test_make_agent_and_metadata_uses_project_factory_with_selective_overrides(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class _FakeAgent:
+            def __init__(self, model: str | None) -> None:
+                self._model = model
+                self._planner = "project-planner"
+                self._memory = "project-memory"
+                self._system = "project-system"
+
+            def run(self, _prompt: str, timeout: float | None = None) -> _FakeResult:
+                return _FakeResult(success=True, output_raw="ok")
+
+            def session(self, id: str | None = None, *, max_history: int = 100) -> object:
+                return object()
+
+        calls: list[tuple[str | None]] = []
+
+        def _factory(*, model: str | None = None) -> _FakeAgent:
+            calls.append((model,))
+            return _FakeAgent(model=model)
+
+        monkeypatch.setattr(
+            cli,
+            "_resolve_project_agent_reference",
+            lambda _args: ("main:create_agent", "/tmp/project/pyproject.toml"),
+        )
+        monkeypatch.setattr(cli, "_load_object_from_ref", lambda _ref: _factory)
+
+        args = cli.build_parser().parse_args(
+            ["ask", "hello", "--model", "gpt-4o-mini", "--planner", "auto"]
+        )
+        agent, metadata = cli._make_agent_and_metadata(args)
+
+        assert isinstance(agent, _FakeAgent)
+        assert calls == [("gpt-4o-mini",)]
+        assert metadata["mode"] == "project"
+        assert metadata["reference"] == "main:create_agent"
+        assert metadata["source"] == "/tmp/project/pyproject.toml"
+        assert metadata["runtime_overrides"] == ["model", "planner"]
+        assert metadata["dropped_overrides"] == ["planner"]
+
+    def test_resolve_project_agent_reference_prefers_from_flag(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text(
+            "[tool.axis_core]\nagent = \"main:create_agent\"\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        args = cli.build_parser().parse_args(["chat", "--from", "alt:factory"])
+        ref, source = cli._resolve_project_agent_reference(args)
+
+        assert ref == "alt:factory"
+        assert source == "--from"
+
+    def test_resolve_project_agent_reference_ignores_project_when_standalone(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text(
+            "[tool.axis_core]\nagent = \"main:create_agent\"\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        args = cli.build_parser().parse_args(["chat", "--standalone"])
+        ref, source = cli._resolve_project_agent_reference(args)
+
+        assert ref is None
+        assert source is None
+
+    def test_doctor_reports_resolved_agent_configuration(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        class _FakeAgent:
+            _model = "gpt-4o-mini"
+            _planner = "auto"
+            _memory = "sqlite"
+            _system = "Be concise."
+
+            def run(self, _prompt: str, timeout: float | None = None) -> _FakeResult:
+                return _FakeResult(success=True, output_raw="ok")
+
+            def session(self, id: str | None = None, *, max_history: int = 100) -> object:
+                return object()
+
+        monkeypatch.setattr(
+            cli,
+            "_make_agent_and_metadata",
+            lambda _args: (
+                _FakeAgent(),
+                {
+                    "mode": "project",
+                    "source": "/tmp/project/pyproject.toml",
+                    "reference": "main:create_agent",
+                    "runtime_overrides": ["model"],
+                    "dropped_overrides": ["model"],
+                },
+            ),
+        )
+
+        exit_code = cli.main(["doctor", "--model", "override"])
+
+        output = capsys.readouterr().out
+        assert exit_code == 0
+        assert "Axis Core CLI Doctor" in output
+        assert "agent mode: project" in output
+        assert "agent source: /tmp/project/pyproject.toml" in output
+        assert "agent reference: main:create_agent" in output
+        assert "runtime overrides: model" in output
+        assert "dropped overrides: model" in output
+        assert "model: 'gpt-4o-mini'" in output
