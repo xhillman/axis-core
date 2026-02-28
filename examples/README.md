@@ -126,4 +126,5 @@ When creating new examples:
 
 - Check the main [README.md](../README.md) for full documentation
 - See [SPEC.md](../dev/SPEC.md) for architecture decisions
-- Review the [task list](../dev/tasks-axis-core-prd.md) for implementation status
+- Review the [pre-launch hardening task list](../dev/tasks-openclaw-pre-launch.md) for current
+  runtime reliability updates

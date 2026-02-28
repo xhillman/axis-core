@@ -10,15 +10,17 @@ A modular, observable AI agent framework for building production-ready agents in
 
 - Lifecycle execution engine: Initialize -> Observe -> Plan -> Act -> Evaluate -> Finalize
 - Pluggable adapters for models, memory, planners, and telemetry
-- Built-in model fallback for recoverable provider errors
+- Built-in model fallback that branches on normalized provider failure reasons
 - Transcript integrity normalization for tool-call/tool-result pairing before model calls
 - Optional context-window guard with tool-result-first pruning before model calls
+- Adapter compatibility transforms for provider-specific tool schema and tool-call ID constraints
 - Tool system with `@tool`, schema generation, destructive-action confirmation hooks, and
   idempotency helpers for retry-safe side effects
 - Optional per-agent tool allow/deny policy with glob patterns and deny-overrides-allow semantics
 - Runtime policy enforcement (timeouts, retries, rate limits, cache)
 - Checkpoint/resume support for phase-boundary recovery
 - Budget controls for cost, token, and cycle limits
+- Provider-agnostic usage normalization for budget and telemetry accounting
 - Type hints with strict mypy coverage
 
 ## Installation
@@ -141,6 +143,16 @@ agent = Agent(
 )
 ```
 
+## Runtime Hardening Guarantees
+
+- Model fallback decisions branch on normalized failure reasons (`rate_limit`, `timeout`,
+  `connection_error`, `service_unavailable`, `transient_provider_error`) so non-recoverable causes
+  fail fast instead of attempting fallback.
+- OpenAI and Anthropic adapters sanitize provider-problematic tool schema fields and normalize
+  tool-call identifiers before provider submission.
+- Usage accounting is normalized across providers (`prompt/completion` and `input/output` variants)
+  before budget tracking.
+
 ## Documentation
 
 - [Getting Started](docs/getting-started.md)
@@ -184,7 +196,6 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 - Semantic memory search capabilities
 - Memory adapter URL-style resolution
 - Preconfigured loadouts (`research_agent`, `support_agent`, `code_agent`)
-- Planner fallback and plan confidence scoring
 
 ### Exploring (Not Committed)
 

@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Added reason-coded model fallback semantics: model errors now carry normalized reason/status/code
+  metadata and fallback decisions branch on reason recoverability.
 - Added transcript integrity normalization before model calls to repair out-of-order tool-result
   messages, drop orphaned tool results, and optionally enforce strict transcript validation.
 - Added optional tool-result payload capping support for model-step transcripts via
@@ -20,6 +22,10 @@ All notable changes to this project will be documented in this file.
   for dedupe-safe side-effecting tools.
 - Added `ToolPolicy` with precompiled allow/deny glob patterns for per-agent tool gating, with
   deny-overrides-allow enforcement in act phase before destructive confirmation callbacks.
+- Added adapter compatibility transforms for OpenAI/Anthropic tool schemas and tool-call IDs to
+  satisfy provider-specific constraints consistently.
+- Added normalized provider usage handling (`NormalizedUsage`) across model adapters, with graceful
+  handling for missing or malformed usage payloads.
 
 ### Changed
 
@@ -28,6 +34,8 @@ All notable changes to this project will be documented in this file.
   and long-session flows.
 - Added conservative opt-in context guard/pruning runtime config defaults and corresponding context
   env-var controls in `.env.example`.
+- Budget tracking now consumes normalized usage fields instead of provider-specific usage payload
+  shapes.
 
 ## [0.8.0b] - 2026-02-13
 
