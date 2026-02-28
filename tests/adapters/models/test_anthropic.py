@@ -407,6 +407,40 @@ class TestAnthropicModel:
         assert "city" in result["input_schema"]["properties"]
         assert "city" in result["input_schema"]["required"]
 
+    def test_convert_tool_manifest_to_anthropic_sanitizes_provider_quirks(self) -> None:
+        """Anthropic conversion should remove provider-problematic schema fields."""
+        from axis_core.tool import ToolManifest
+
+        manifest = ToolManifest(
+            name="search",
+            description="Search",
+            input_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "SearchInput",
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "default": "latest",
+                        "examples": ["latest news"],
+                    }
+                },
+                "required": ["query", "nonexistent"],
+            },
+            output_schema={"type": "string"},
+            capabilities=(),
+        )
+
+        result = AnthropicModel._convert_tool_manifest_to_anthropic(manifest)
+        input_schema = result["input_schema"]
+        query_schema = input_schema["properties"]["query"]
+
+        assert "$schema" not in input_schema
+        assert "title" not in input_schema
+        assert "default" not in query_schema
+        assert "examples" not in query_schema
+        assert input_schema["required"] == ["query"]
+
     def test_convert_tools_with_manifests(self) -> None:
         """Test _convert_tools_to_anthropic with ToolManifest objects."""
         from axis_core.tool import ToolManifest
@@ -656,3 +690,27 @@ class TestAnthropicModel:
         assert isinstance(assistant_msg["content"], list)
         assert len(assistant_msg["content"]) == 1  # Only tool_use, no text
         assert assistant_msg["content"][0]["type"] == "tool_use"
+
+    def test_convert_messages_normalizes_tool_call_ids(self) -> None:
+        """Tool call IDs should be normalized consistently across tool use/result blocks."""
+        messages = [
+            {"role": "user", "content": "Run tool"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "bad id with spaces/:", "name": "search", "arguments": {}}],
+            },
+            {"role": "tool", "tool_call_id": "bad id with spaces/:", "content": "done"},
+        ]
+
+        converted = AnthropicModel._convert_messages_to_anthropic(messages)
+        assistant_tool_use = converted[1]["content"][0]
+        tool_result_block = converted[2]["content"][0]
+
+        normalized_id = assistant_tool_use["id"]
+        assert normalized_id.startswith("toolu_")
+        assert " " not in normalized_id
+        assert "/" not in normalized_id
+        assert ":" not in normalized_id
+        assert len(normalized_id) <= 64
+        assert tool_result_block["tool_use_id"] == normalized_id

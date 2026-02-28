@@ -6,6 +6,7 @@ Requires the 'openai' package: pip install axis-core[openai]
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
@@ -148,6 +149,18 @@ class OpenAIModel:
         # Computer use
         "computer-use-preview",
     }
+    _TOOL_CALL_ID_MAX_LEN = 64
+    _TOOL_CALL_ID_PREFIX = "call"
+    _TOOL_CALL_ID_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+    _SCHEMA_FIELDS_TO_STRIP = frozenset(
+        {
+            "$schema",
+            "$id",
+            "title",
+            "default",
+            "examples",
+        }
+    )
 
     def __init__(
         self,
@@ -306,17 +319,110 @@ class OpenAIModel:
             >>> schema["type"]
             "function"
         """
+        parameters = OpenAIModel._sanitize_tool_schema_for_provider(manifest.input_schema)
         return {
             "type": "function",
             "function": {
                 "name": manifest.name,
                 "description": manifest.description,
-                "parameters": manifest.input_schema,
+                "parameters": parameters,
             },
         }
 
-    @staticmethod
-    def _convert_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    @classmethod
+    def _sanitize_schema_node(cls, value: Any) -> Any:
+        """Recursively strip schema fields that frequently trigger provider rejections."""
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for key, raw in value.items():
+                if key in cls._SCHEMA_FIELDS_TO_STRIP or raw is None:
+                    continue
+                sanitized[key] = cls._sanitize_schema_node(raw)
+
+            properties = sanitized.get("properties")
+            required = sanitized.get("required")
+            if isinstance(properties, dict) and isinstance(required, list):
+                allowed = set(properties.keys())
+                sanitized["required"] = [
+                    item for item in required if isinstance(item, str) and item in allowed
+                ]
+
+            return sanitized
+
+        if isinstance(value, list):
+            return [cls._sanitize_schema_node(item) for item in value]
+
+        return value
+
+    @classmethod
+    def _sanitize_tool_schema_for_provider(cls, schema: Any) -> dict[str, Any]:
+        """Sanitize schema for OpenAI function/tool compatibility."""
+        if not isinstance(schema, dict):
+            return {"type": "object", "properties": {}}
+
+        sanitized = cls._sanitize_schema_node(schema)
+        if not isinstance(sanitized, dict):
+            return {"type": "object", "properties": {}}
+
+        if "type" not in sanitized:
+            sanitized["type"] = "object"
+
+        properties = sanitized.get("properties")
+        if not isinstance(properties, dict):
+            sanitized["properties"] = {}
+
+        required = sanitized.get("required")
+        if not isinstance(required, list):
+            sanitized.pop("required", None)
+
+        return sanitized
+
+    @classmethod
+    def _normalize_tool_call_id(
+        cls,
+        raw_id: Any,
+        *,
+        next_index: int,
+        id_map: dict[str, str],
+        used_ids: set[str],
+    ) -> str:
+        """Normalize tool call IDs to provider-safe format and maintain stable mapping."""
+        raw_text = str(raw_id).strip() if raw_id is not None else ""
+        if raw_text and raw_text in id_map:
+            return id_map[raw_text]
+
+        if (
+            raw_text
+            and not cls._TOOL_CALL_ID_INVALID_CHARS.search(raw_text)
+            and len(raw_text) <= cls._TOOL_CALL_ID_MAX_LEN
+        ):
+            candidate = raw_text
+        else:
+            base = cls._TOOL_CALL_ID_INVALID_CHARS.sub("_", raw_text).strip("_")
+            if not base:
+                base = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
+            elif not base.startswith(f"{cls._TOOL_CALL_ID_PREFIX}_"):
+                base = f"{cls._TOOL_CALL_ID_PREFIX}_{base}"
+
+            candidate = base[: cls._TOOL_CALL_ID_MAX_LEN].rstrip("_")
+            if not candidate:
+                candidate = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
+
+        suffix = 1
+        unique_candidate = candidate
+        while unique_candidate in used_ids:
+            suffix_text = f"_{suffix}"
+            max_base_len = cls._TOOL_CALL_ID_MAX_LEN - len(suffix_text)
+            unique_candidate = f"{candidate[:max_base_len]}{suffix_text}"
+            suffix += 1
+
+        used_ids.add(unique_candidate)
+        if raw_text:
+            id_map[raw_text] = unique_candidate
+        return unique_candidate
+
+    @classmethod
+    def _convert_messages_to_openai(cls, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert messages from internal format to OpenAI's API format.
 
         Ensures that tool_calls in assistant messages have the required 'type' field.
@@ -328,6 +434,9 @@ class OpenAIModel:
             List of messages in OpenAI's API format
         """
         converted: list[dict[str, Any]] = []
+        tool_call_id_map: dict[str, str] = {}
+        used_tool_call_ids: set[str] = set()
+        generated_id_index = 1
 
         for msg in messages:
             role = msg.get("role", "")
@@ -337,25 +446,44 @@ class OpenAIModel:
                 tool_calls = msg.get("tool_calls", [])
                 if tool_calls:
                     # Ensure each tool_call has the required 'type' field
-                    formatted_calls = []
+                    formatted_calls: list[dict[str, Any]] = []
                     for tc in tool_calls:
-                        # If already properly formatted, pass through
-                        if isinstance(tc, dict) and "type" in tc:
-                            formatted_calls.append(tc)
-                        # Otherwise, add the type field
-                        elif isinstance(tc, dict):
-                            formatted_calls.append({
-                                "id": tc.get("id", ""),
+                        if not isinstance(tc, dict):
+                            continue
+
+                        normalized_id = cls._normalize_tool_call_id(
+                            tc.get("id"),
+                            next_index=generated_id_index,
+                            id_map=tool_call_id_map,
+                            used_ids=used_tool_call_ids,
+                        )
+                        generated_id_index += 1
+
+                        raw_function = tc.get("function")
+                        raw_name = tc.get("name", "")
+                        raw_arguments: Any = tc.get("arguments", {})
+                        if isinstance(raw_function, dict):
+                            raw_name = raw_function.get("name", raw_name)
+                            raw_arguments = raw_function.get("arguments", raw_arguments)
+
+                        function_name = raw_name if isinstance(raw_name, str) else str(raw_name)
+                        if isinstance(raw_arguments, (dict, list)):
+                            arguments_payload = json.dumps(raw_arguments)
+                        elif isinstance(raw_arguments, str):
+                            arguments_payload = raw_arguments
+                        else:
+                            arguments_payload = "{}"
+
+                        formatted_calls.append(
+                            {
+                                "id": normalized_id,
                                 "type": "function",
                                 "function": {
-                                    "name": tc.get("name", ""),
-                                    "arguments": (
-                                        json.dumps(tc.get("arguments", {}))
-                                        if isinstance(tc.get("arguments"), dict)
-                                        else tc.get("arguments", "{}")
-                                    ),
+                                    "name": function_name,
+                                    "arguments": arguments_payload,
                                 },
-                            })
+                            }
+                        )
 
                     # Create converted message with formatted tool_calls
                     converted_msg = {
@@ -367,6 +495,16 @@ class OpenAIModel:
                 else:
                     # No tool_calls, pass through
                     converted.append(msg)
+            elif role == "tool":
+                converted_tool = dict(msg)
+                converted_tool["tool_call_id"] = cls._normalize_tool_call_id(
+                    msg.get("tool_call_id"),
+                    next_index=generated_id_index,
+                    id_map=tool_call_id_map,
+                    used_ids=used_tool_call_ids,
+                )
+                generated_id_index += 1
+                converted.append(converted_tool)
             else:
                 # Pass through non-assistant messages or assistant without tool_calls
                 converted.append(msg)

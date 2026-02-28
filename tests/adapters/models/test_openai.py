@@ -550,6 +550,43 @@ class TestOpenAIModel:
         assert result["function"]["parameters"]["type"] == "object"
         assert "city" in result["function"]["parameters"]["properties"]
 
+    def test_convert_tool_manifest_to_openai_sanitizes_provider_quirks(self) -> None:
+        """OpenAI conversion should remove schema fields that trigger provider quirks."""
+        from axis_core.tool import ToolManifest
+
+        manifest = ToolManifest(
+            name="get_weather",
+            description="Get weather",
+            input_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "weather-input",
+                "title": "WeatherInput",
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "City name",
+                        "default": "SF",
+                        "examples": ["SF"],
+                    }
+                },
+                "required": ["city", "unknown_field"],
+            },
+            output_schema={"type": "string"},
+            capabilities=(),
+        )
+
+        result = OpenAIModel._convert_tool_manifest_to_openai(manifest)
+        parameters = result["function"]["parameters"]
+        city_schema = parameters["properties"]["city"]
+
+        assert "$schema" not in parameters
+        assert "$id" not in parameters
+        assert "title" not in parameters
+        assert "default" not in city_schema
+        assert "examples" not in city_schema
+        assert parameters["required"] == ["city"]
+
     def test_convert_tools_with_manifests(self) -> None:
         """Test _convert_tools_to_openai with ToolManifest objects."""
         from axis_core.tool import ToolManifest
@@ -607,6 +644,33 @@ class TestOpenAIModel:
         """Test _convert_tools_to_openai with empty list."""
         result = OpenAIModel._convert_tools_to_openai([])
         assert result is None
+
+    def test_convert_messages_to_openai_normalizes_tool_call_ids(self) -> None:
+        """Tool call IDs should be normalized to provider-safe values consistently."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Calling tool",
+                "tool_calls": [
+                    {"id": "call id with spaces/and:symbols", "name": "search", "arguments": {}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call id with spaces/and:symbols",
+                "content": "result",
+            },
+        ]
+
+        converted = OpenAIModel._convert_messages_to_openai(messages)
+        normalized_tool_call_id = converted[0]["tool_calls"][0]["id"]
+
+        assert normalized_tool_call_id.startswith("call_")
+        assert " " not in normalized_tool_call_id
+        assert "/" not in normalized_tool_call_id
+        assert ":" not in normalized_tool_call_id
+        assert len(normalized_tool_call_id) <= 64
+        assert converted[1]["tool_call_id"] == normalized_tool_call_id
 
     @pytest.mark.asyncio
     async def test_complete_with_tool_manifests(self) -> None:
