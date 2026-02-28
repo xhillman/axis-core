@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.util
+import inspect
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from axis_core.config import config
 from axis_core.engine.registry import memory_registry, planner_registry
@@ -313,10 +316,179 @@ def _agent_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return kwargs
 
 
-def _make_agent(args: argparse.Namespace) -> Any:
+def _find_pyproject(start: Path | None = None) -> Path | None:
+    """Find the nearest pyproject.toml walking upward from start (or cwd)."""
+    current = (start or Path.cwd()).resolve()
+    for directory in (current, *current.parents):
+        candidate = directory / "pyproject.toml"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_toml_file(path: Path) -> dict[str, Any]:
+    """Load a TOML file using stdlib tomllib or tomli fallback on Python 3.10."""
+    toml_module: Any
+    try:
+        toml_module = importlib.import_module("tomllib")
+    except ModuleNotFoundError:
+        try:
+            toml_module = importlib.import_module("tomli")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Reading pyproject.toml requires tomllib (Python 3.11+) or tomli on Python 3.10."
+            ) from exc
+
+    with path.open("rb") as f:
+        data = toml_module.load(f)
+    return cast(dict[str, Any], data)
+
+
+def _pyproject_agent_ref(pyproject_path: Path) -> str | None:
+    """Read [tool.axis_core].agent from pyproject.toml if present."""
+    data = _load_toml_file(pyproject_path)
+    tool_section = data.get("tool")
+    if not isinstance(tool_section, dict):
+        return None
+    axis_section = tool_section.get("axis_core")
+    if not isinstance(axis_section, dict):
+        return None
+    agent_ref = axis_section.get("agent")
+    if not isinstance(agent_ref, str):
+        return None
+    resolved = agent_ref.strip()
+    return resolved or None
+
+
+def _resolve_project_agent_reference(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """Resolve project-bound agent reference from args and pyproject config."""
+    if getattr(args, "standalone", False):
+        return None, None
+
+    explicit_ref = getattr(args, "agent_ref", None)
+    if isinstance(explicit_ref, str) and explicit_ref.strip():
+        return explicit_ref.strip(), "--from"
+
+    pyproject_path = _find_pyproject()
+    if pyproject_path is None:
+        return None, None
+
+    configured_ref = _pyproject_agent_ref(pyproject_path)
+    if configured_ref is None:
+        return None, None
+    return configured_ref, str(pyproject_path)
+
+
+def _load_object_from_ref(ref: str) -> Any:
+    """Load an object by import reference (module:object_path)."""
+    module_name, sep, object_path = ref.partition(":")
+    module_name = module_name.strip()
+    object_path = object_path.strip()
+    if not sep or not module_name or not object_path:
+        raise ValueError(
+            f"Invalid agent reference '{ref}'. Expected format: <module>:<callable_or_object>."
+        )
+
+    module = importlib.import_module(module_name)
+    obj: Any = module
+    for attr in object_path.split("."):
+        if not hasattr(obj, attr):
+            raise AttributeError(
+                f"Object '{object_path}' was not found in module '{module_name}'."
+            )
+        obj = getattr(obj, attr)
+    return obj
+
+
+def _invoke_agent_factory(
+    factory: Callable[..., Any],
+    runtime_overrides: dict[str, Any],
+) -> tuple[Any, list[str]]:
+    """Invoke an agent factory with runtime overrides when accepted by signature."""
+    if not runtime_overrides:
+        return factory(), []
+
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return factory(), sorted(runtime_overrides.keys())
+
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    accepted: dict[str, Any]
+    dropped: list[str]
+    if accepts_kwargs:
+        accepted = dict(runtime_overrides)
+        dropped = []
+    else:
+        accepted = {
+            key: value for key, value in runtime_overrides.items() if key in signature.parameters
+        }
+        dropped = sorted(key for key in runtime_overrides if key not in accepted)
+
+    return factory(**accepted), dropped
+
+
+def _validate_agent_like(agent: Any) -> None:
+    """Ensure loaded object behaves like Agent for CLI runtime needs."""
+    required_methods = ("run", "session")
+    missing = [method_name for method_name in required_methods if not hasattr(agent, method_name)]
+    if missing:
+        joined = ", ".join(missing)
+        raise TypeError(
+            f"Resolved agent object must define methods: {joined}. "
+            "Return an axis_core.Agent instance from your factory."
+        )
+
+
+def _make_standalone_agent(runtime_overrides: dict[str, Any]) -> Any:
     from axis_core import Agent
 
-    return Agent(**_agent_kwargs_from_args(args))
+    return Agent(**runtime_overrides)
+
+
+def _make_agent_and_metadata(args: argparse.Namespace) -> tuple[Any, dict[str, Any]]:
+    runtime_overrides = _agent_kwargs_from_args(args)
+    ref, source = _resolve_project_agent_reference(args)
+    metadata: dict[str, Any] = {
+        "mode": "standalone",
+        "reference": None,
+        "source": "cli defaults/env",
+        "runtime_overrides": sorted(runtime_overrides.keys()),
+        "dropped_overrides": [],
+    }
+
+    if ref is None:
+        return _make_standalone_agent(runtime_overrides), metadata
+
+    loaded_object = _load_object_from_ref(ref)
+    if callable(loaded_object):
+        agent, dropped = _invoke_agent_factory(
+            cast(Callable[..., Any], loaded_object),
+            runtime_overrides,
+        )
+    else:
+        if runtime_overrides:
+            raise TypeError(
+                "Runtime overrides (--model/--planner/--memory/--system) "
+                "require a callable project agent factory."
+            )
+        agent = loaded_object
+        dropped = []
+
+    _validate_agent_like(agent)
+    metadata["mode"] = "project"
+    metadata["reference"] = ref
+    metadata["source"] = source
+    metadata["dropped_overrides"] = dropped
+    return agent, metadata
+
+
+def _make_agent(args: argparse.Namespace) -> Any:
+    agent, _metadata = _make_agent_and_metadata(args)
+    return agent
 
 
 def _render_result_output(result: Any) -> str:
@@ -407,6 +579,43 @@ def _run_chat(args: argparse.Namespace) -> int:
         print(f"assistant> {_render_result_output(result)}")
 
 
+def _run_doctor(args: argparse.Namespace) -> int:
+    try:
+        agent, metadata = _make_agent_and_metadata(args)
+    except Exception as exc:
+        print(f"doctor failed: {exc}", file=sys.stderr)
+        return 1
+
+    print("Axis Core CLI Doctor")
+    print(f"cwd: {Path.cwd()}")
+    print(f"agent mode: {metadata.get('mode')}")
+    print(f"agent source: {metadata.get('source')}")
+    reference = metadata.get("reference")
+    if reference is not None:
+        print(f"agent reference: {reference}")
+
+    runtime_overrides = metadata.get("runtime_overrides", [])
+    if runtime_overrides:
+        print(f"runtime overrides: {', '.join(runtime_overrides)}")
+    else:
+        print("runtime overrides: none")
+
+    dropped_overrides = metadata.get("dropped_overrides", [])
+    if dropped_overrides:
+        print(
+            "dropped overrides: "
+            + ", ".join(dropped_overrides)
+            + " (factory does not accept these arguments)"
+        )
+
+    for field_name in ("_model", "_planner", "_memory", "_system"):
+        label = field_name.removeprefix("_")
+        value = getattr(agent, field_name, None)
+        print(f"{label}: {value!r}")
+
+    return 0
+
+
 def _run_session(_args: argparse.Namespace) -> int:
     print(
         "Session management commands are not implemented yet. "
@@ -420,6 +629,16 @@ def _add_agent_runtime_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--planner", help="Planner adapter name.")
     parser.add_argument("--memory", help="Memory adapter name.")
     parser.add_argument("--system", help="System prompt.")
+    parser.add_argument(
+        "--from",
+        dest="agent_ref",
+        help="Import reference to an agent object/factory (<module>:<callable_or_object>).",
+    )
+    parser.add_argument(
+        "--standalone",
+        action="store_true",
+        help="Ignore project-bound agent config and build Agent from CLI defaults/env.",
+    )
     parser.add_argument("--timeout", type=float, help="Per-run timeout in seconds.")
 
 
@@ -494,6 +713,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum messages retained in session history.",
     )
 
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Show which agent source the CLI will run and effective runtime settings.",
+    )
+    _add_agent_runtime_args(doctor_parser)
+
     subparsers.add_parser(
         "session",
         help="Session management command namespace (placeholder).",
@@ -512,6 +737,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_ask(args)
     if args.command == "chat":
         return _run_chat(args)
+    if args.command == "doctor":
+        return _run_doctor(args)
     if args.command == "session":
         return _run_session(args)
 
