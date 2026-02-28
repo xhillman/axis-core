@@ -35,12 +35,30 @@ pip install axis-core[openai]
 pip install axis-core[openrouter]
 pip install axis-core[redis]
 pip install axis-core[sqlite]
+pip install synaptic-core
 
 # Everything
 pip install axis-core[full]
 ```
 
 Requires Python 3.10+.
+
+## Project Init Wizard
+
+Use the setup wizard to install optional adapter packages and write defaults to `.env`.
+
+```bash
+axis-core init
+```
+
+Useful non-interactive flags:
+
+- `--yes`: run without prompts
+- `--install <bundle>`: install optional adapter bundle (`anthropic`, `openai`, `openrouter`,
+  `redis`, `sqlite`, `synaptic`)
+- `--memory <name>` / `--planner <name>`: set default adapters
+- `--synaptic-db-path <path>`: set `AXIS_SYNAPTIC_PATH` when using `synaptic` memory
+- `--bootstrap-synaptic-db`: initialize Synaptic SQLite schema during setup
 
 ## Quick Start
 

@@ -269,6 +269,11 @@ class TestMemoryRegistry:
         registry.register("custom-memory", MockAdapter)  # type: ignore[arg-type]
         assert registry.get("custom-memory") is MockAdapter
 
+    def test_synaptic_memory_registered(self) -> None:
+        from axis_core.engine.registry import memory_registry
+
+        assert "synaptic" in memory_registry.list()
+
 
 # ---------------------------------------------------------------------------
 # PlannerRegistry tests

@@ -26,6 +26,10 @@ All notable changes to this project will be documented in this file.
   satisfy provider-specific constraints consistently.
 - Added normalized provider usage handling (`NormalizedUsage`) across model adapters, with graceful
   handling for missing or malformed usage payloads.
+- Added `axis-core init` CLI wizard for optional adapter package installs and `.env` default setup,
+  including Synaptic memory path/bootstrap options.
+- Added built-in `synaptic` memory adapter registration via lazy factory, with optional dependency
+  guidance and `AXIS_SYNAPTIC_PATH` support.
 
 ### Changed
 
