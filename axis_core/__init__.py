@@ -20,7 +20,7 @@ Example:
 import importlib
 from typing import Any
 
-__version__ = "0.8.0b"
+__version__ = "0.9.0b"
 
 # Lazy-loading registry: maps public name → (module_path, attribute_name)
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
