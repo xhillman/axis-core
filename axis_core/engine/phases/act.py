@@ -6,13 +6,21 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import random
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from axis_core.config import RetryPolicy
-from axis_core.context import ExecutionResult, ModelCallRecord, RunContext
+from axis_core.config import RetryPolicy, ToolPolicy
+from axis_core.context import (
+    ContextWindowGuard,
+    ExecutionResult,
+    ModelCallRecord,
+    RunContext,
+    normalize_transcript_messages,
+    prune_messages_for_context_window,
+)
 from axis_core.errors import (
     AxisError,
     ErrorClass,
@@ -23,7 +31,12 @@ from axis_core.errors import (
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.redaction import redact_sensitive_data
-from axis_core.tool import Capability, ToolCallRecord, ToolContext
+from axis_core.tool import (
+    Capability,
+    ToolCallRecord,
+    ToolContext,
+    build_idempotency_key,
+)
 
 if TYPE_CHECKING:
     from axis_core.engine.lifecycle import LifecycleEngine
@@ -75,7 +88,7 @@ def _is_retryable_tool_error(error: Exception, retry_policy: RetryPolicy) -> boo
 
 def _is_retryable_model_error(error: ModelError, retry_policy: RetryPolicy) -> bool:
     """Determine whether a model failure should be retried."""
-    if not error.recoverable:
+    if not ModelError.is_reason_recoverable(error.reason):
         return False
     return _matches_retry_filter(error.cause or error, retry_policy)
 
@@ -100,6 +113,164 @@ async def _sleep_for_retry(retry_policy: RetryPolicy, attempt: int) -> None:
     delay = _retry_delay_seconds(retry_policy, attempt)
     if delay > 0:
         await asyncio.sleep(delay)
+
+
+def _coerce_bool(value: Any, *, default: bool = False) -> bool:
+    """Coerce booleans from bool/string config values."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    """Coerce a value to positive int, returning None when unset/invalid."""
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _resolve_transcript_strict(ctx: RunContext, step: PlanStep) -> bool:
+    """Resolve strict transcript guard mode from step/config/env."""
+    if "transcript_strict" in step.payload:
+        return _coerce_bool(step.payload.get("transcript_strict"), default=False)
+
+    config_value = getattr(getattr(ctx, "config", None), "transcript_strict", None)
+    if config_value is not None:
+        return _coerce_bool(config_value, default=False)
+
+    env_value = os.getenv("AXIS_TRANSCRIPT_STRICT")
+    return _coerce_bool(env_value, default=False)
+
+
+def _resolve_max_tool_result_chars(ctx: RunContext, step: PlanStep) -> int | None:
+    """Resolve optional max chars guard for persisted tool-result messages."""
+    if "max_tool_result_chars" in step.payload:
+        return _coerce_positive_int(step.payload.get("max_tool_result_chars"))
+
+    config_value = getattr(getattr(ctx, "config", None), "max_tool_result_chars", None)
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    return _coerce_positive_int(os.getenv("AXIS_MAX_TOOL_RESULT_CHARS"))
+
+
+def _resolve_tool_idempotency_key(
+    ctx: RunContext,
+    step: PlanStep,
+    *,
+    tool_name: str,
+) -> str | None:
+    """Resolve explicit or generated idempotency key for a tool step."""
+    if "idempotency_key" in step.payload:
+        raw_key = step.payload.get("idempotency_key")
+        if raw_key is None:
+            return None
+        if isinstance(raw_key, str):
+            key = raw_key.strip()
+            return key if key else None
+        return str(raw_key)
+
+    return build_idempotency_key(
+        run_id=ctx.run_id,
+        cycle=ctx.cycle_count,
+        step_id=step.id,
+        tool_name=tool_name,
+    )
+
+
+def _resolve_context_window_guard_enabled(ctx: RunContext, step: PlanStep) -> bool:
+    """Resolve context-window guard enablement from step/config/env."""
+    if "context_window_guard_enabled" in step.payload:
+        return _coerce_bool(
+            step.payload.get("context_window_guard_enabled"),
+            default=False,
+        )
+
+    config_value = getattr(
+        getattr(ctx, "config", None),
+        "context_window_guard_enabled",
+        None,
+    )
+    if config_value is not None:
+        return _coerce_bool(config_value, default=False)
+
+    env_value = os.getenv("AXIS_CONTEXT_GUARD_ENABLED")
+    return _coerce_bool(env_value, default=False)
+
+
+def _resolve_context_window_tokens(ctx: RunContext, step: PlanStep) -> int | None:
+    """Resolve configured model context-window token budget."""
+    if "context_window_tokens" in step.payload:
+        return _coerce_positive_int(step.payload.get("context_window_tokens"))
+
+    config_value = getattr(getattr(ctx, "config", None), "context_window_tokens", None)
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    return _coerce_positive_int(os.getenv("AXIS_CONTEXT_WINDOW_TOKENS"))
+
+
+def _resolve_context_warn_tokens(ctx: RunContext, step: PlanStep) -> int:
+    """Resolve remaining-token warn threshold for context-window guard."""
+    if "context_window_warn_tokens" in step.payload:
+        return _coerce_positive_int(step.payload.get("context_window_warn_tokens")) or 32_000
+
+    config_value = getattr(
+        getattr(ctx, "config", None),
+        "context_window_warn_tokens",
+        None,
+    )
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    env_value = _coerce_positive_int(os.getenv("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
+    return env_value if env_value is not None else 32_000
+
+
+def _resolve_context_block_tokens(ctx: RunContext, step: PlanStep) -> int:
+    """Resolve remaining-token block threshold for context-window guard."""
+    if "context_window_block_tokens" in step.payload:
+        return _coerce_positive_int(step.payload.get("context_window_block_tokens")) or 16_000
+
+    config_value = getattr(
+        getattr(ctx, "config", None),
+        "context_window_block_tokens",
+        None,
+    )
+    configured = _coerce_positive_int(config_value)
+    if configured is not None:
+        return configured
+
+    env_value = _coerce_positive_int(os.getenv("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
+    return env_value if env_value is not None else 16_000
+
+
+def _resolve_context_pruning_enabled(ctx: RunContext, step: PlanStep) -> bool:
+    """Resolve context pruning enablement from step/config/env."""
+    if "context_pruning_enabled" in step.payload:
+        return _coerce_bool(step.payload.get("context_pruning_enabled"), default=False)
+
+    config_value = getattr(getattr(ctx, "config", None), "context_pruning_enabled", None)
+    if config_value is not None:
+        return _coerce_bool(config_value, default=False)
+
+    env_value = os.getenv("AXIS_CONTEXT_PRUNE_ENABLED")
+    return _coerce_bool(env_value, default=False)
 
 
 def _record_retry_attempt(ctx: RunContext, step: PlanStep) -> None:
@@ -172,6 +343,33 @@ async def _confirm_destructive_tool(
             tool_name=tool_name,
             recoverable=False,
         )
+
+
+def _enforce_tool_policy(ctx: RunContext, *, tool_name: str) -> None:
+    """Block tool execution when configured allow/deny policy rejects the tool."""
+    runtime_config = getattr(ctx, "config", None)
+    tool_policy = getattr(runtime_config, "tool_policy", None)
+    if tool_policy is None:
+        return
+    if not isinstance(tool_policy, ToolPolicy):
+        raise ToolError(
+            message=(
+                "Invalid runtime config: tool_policy must be ToolPolicy or None"
+            ),
+            tool_name=tool_name,
+            recoverable=False,
+        )
+
+    allowed, reason = tool_policy.evaluate(tool_name)
+    if allowed:
+        return
+
+    detail = f" ({reason})" if reason else ""
+    raise ToolError(
+        message=f"Tool '{tool_name}' blocked by tool policy{detail}",
+        tool_name=tool_name,
+        recoverable=False,
+    )
 
 
 async def act(engine: LifecycleEngine, ctx: RunContext, plan_obj: Plan) -> ExecutionResult:
@@ -321,6 +519,8 @@ async def _execute_tool_step(
         getattr(manifest, "capabilities", None),
     )
 
+    _enforce_tool_policy(ctx, tool_name=tool_name)
+
     await _confirm_destructive_tool(
         ctx,
         tool_name=tool_name,
@@ -334,6 +534,15 @@ async def _execute_tool_step(
         tool_retry=getattr(manifest, "retry", None),
     )
     max_attempts = max(1, retry_policy.max_attempts)
+    idempotency_key = _resolve_tool_idempotency_key(ctx, step, tool_name=tool_name)
+
+    try:
+        tool_signature = inspect.signature(tool_fn)
+        supports_ctx = "ctx" in tool_signature.parameters
+        supports_idempotency_key = "idempotency_key" in tool_signature.parameters
+    except (TypeError, ValueError):
+        supports_ctx = False
+        supports_idempotency_key = False
 
     await engine._emit(
         "tool_called",
@@ -341,7 +550,11 @@ async def _execute_tool_step(
         phase=Phase.ACT.value,
         cycle=ctx.cycle_count,
         step_id=step.id,
-        data={"tool": tool_name, "args": args},
+        data={
+            "tool": tool_name,
+            "args": args,
+            "idempotency_key": idempotency_key,
+        },
     )
 
     start = time.monotonic()
@@ -383,14 +596,16 @@ async def _execute_tool_step(
             )
             return cached_result
 
-    async def _invoke_tool_once() -> Any:
+    async def _invoke_tool_once(attempt: int) -> Any:
         tool_kwargs = dict(args)
         if "ctx" in tool_kwargs:
             tool_kwargs.pop("ctx")
-        try:
-            supports_ctx = "ctx" in inspect.signature(tool_fn).parameters
-        except (TypeError, ValueError):
-            supports_ctx = False
+        if (
+            supports_idempotency_key
+            and "idempotency_key" not in tool_kwargs
+            and idempotency_key is not None
+        ):
+            tool_kwargs["idempotency_key"] = idempotency_key
 
         if supports_ctx:
             tool_ctx = ToolContext(
@@ -400,6 +615,8 @@ async def _execute_tool_step(
                 context=ctx.context,
                 budget=ctx.budget,
                 budget_state=ctx.state.budget_state,
+                idempotency_key=idempotency_key,
+                retry_attempt=attempt,
             )
             return await tool_fn(ctx=tool_ctx, **tool_kwargs)
         return await tool_fn(**tool_kwargs)
@@ -413,11 +630,11 @@ async def _execute_tool_step(
             await engine.acquire_tool_slot(ctx, tool_name=tool_name, step_id=step.id)
             if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
                 result = await asyncio.wait_for(
-                    _invoke_tool_once(),
+                    _invoke_tool_once(attempt),
                     timeout=float(timeout_seconds),
                 )
             else:
-                result = await _invoke_tool_once()
+                result = await _invoke_tool_once(attempt)
             last_error = None
             break
         except Exception as e:
@@ -519,19 +736,25 @@ async def try_models_with_fallback(
                 response = await call_fn(model)
 
                 if idx > 0:
+                    previous_error = errors[-1] if errors else None
                     previous_model_id = getattr(
                         models_to_try[idx - 1], "model_id", "unknown"
                     )
+                    telemetry_data: dict[str, Any] = {
+                        "from_model": previous_model_id,
+                        "to_model": model_id,
+                        "attempt": idx + 1,
+                    }
+                    if previous_error is not None:
+                        telemetry_data["reason"] = previous_error.reason
+                        telemetry_data["status_code"] = previous_error.status_code
+                        telemetry_data["provider_code"] = previous_error.provider_code
                     await engine._emit(
                         "model_fallback",
                         run_id=ctx.run_id,
                         phase=Phase.ACT.value,
                         cycle=ctx.cycle_count,
-                        data={
-                            "from_model": previous_model_id,
-                            "to_model": model_id,
-                            "attempt": idx + 1,
-                        },
+                        data=telemetry_data,
                     )
 
                 ctx.state._retry_state.pop(effective_step.id, None)
@@ -545,10 +768,11 @@ async def try_models_with_fallback(
                 errors.append(model_error)
                 last_error = model_error
 
-                if not model_error.recoverable:
+                if not ModelError.is_reason_recoverable(model_error.reason):
                     logger.warning(
-                        "Non-recoverable error from model %s: %s",
+                        "Non-recoverable reason from model %s (%s): %s",
                         model_id,
+                        model_error.reason,
                         model_error.message,
                     )
                     raise model_error
@@ -571,18 +795,22 @@ async def try_models_with_fallback(
                     continue
                 break
 
-        if last_error is not None and not last_error.recoverable:
+        if last_error is not None and not ModelError.is_reason_recoverable(last_error.reason):
             raise last_error
 
     error_messages = [str(e) for e in errors]
+    final_error = errors[-1] if errors else None
     raise ModelError(
         message=(
             f"All models failed after {len(models_to_try)} attempts. "
             f"Errors: {'; '.join(error_messages)}"
         ),
         model_id="fallback_chain",
+        reason="fallback_exhausted",
         recoverable=False,
-        cause=errors[-1] if errors else None,
+        status_code=final_error.status_code if final_error is not None else None,
+        provider_code=final_error.provider_code if final_error is not None else None,
+        cause=final_error,
     )
 
 
@@ -761,7 +989,6 @@ async def _execute_model_step(
     # Build messages if not explicitly provided
     if "messages" not in step.payload:
         # Get context strategy from environment or use default
-        import os
         strategy = os.getenv("AXIS_CONTEXT_STRATEGY", "smart")
         if strategy not in {"smart", "full", "minimal"}:
             logger.warning(
@@ -789,7 +1016,102 @@ async def _execute_model_step(
     else:
         messages = step.payload["messages"]
 
+    strict_transcript_guard = _resolve_transcript_strict(ctx, step)
+    max_tool_result_chars = _resolve_max_tool_result_chars(ctx, step)
+    if isinstance(messages, list):
+        try:
+            messages = normalize_transcript_messages(
+                messages,
+                strict=strict_transcript_guard,
+                max_tool_result_chars=max_tool_result_chars,
+            )
+        except ValueError as exc:
+            raise ModelError(
+                message=str(exc),
+                model_id=getattr(engine.model, "model_id", "unknown"),
+                reason="invalid_request",
+                recoverable=False,
+                cause=exc,
+            ) from exc
+
     system = step.payload.get("system", engine.system)
+
+    if isinstance(messages, list) and _resolve_context_window_guard_enabled(ctx, step):
+        context_window_tokens = _resolve_context_window_tokens(ctx, step)
+        if context_window_tokens is not None:
+            warn_tokens = _resolve_context_warn_tokens(ctx, step)
+            block_tokens = _resolve_context_block_tokens(ctx, step)
+            guard = ContextWindowGuard(
+                warn_threshold_tokens=warn_tokens,
+                block_threshold_tokens=block_tokens,
+            )
+
+            estimated_tokens = await _estimate_tokens_for_messages(
+                model=engine.model,
+                messages=messages,
+                system=system,
+            )
+            prune_enabled = _resolve_context_pruning_enabled(ctx, step)
+            target_tokens = max(1, context_window_tokens - max(warn_tokens, block_tokens))
+            if prune_enabled and estimated_tokens > target_tokens:
+                pruned_messages, pruned_count = prune_messages_for_context_window(
+                    messages,
+                    target_tokens=target_tokens,
+                )
+                if pruned_count > 0:
+                    pruned_estimated_tokens = await _estimate_tokens_for_messages(
+                        model=engine.model,
+                        messages=pruned_messages,
+                        system=system,
+                    )
+                    await engine._emit(
+                        "context_window_pruned",
+                        run_id=ctx.run_id,
+                        phase=Phase.ACT.value,
+                        cycle=ctx.cycle_count,
+                        step_id=step.id,
+                        data={
+                            "target_tokens": target_tokens,
+                            "dropped_messages": pruned_count,
+                            "estimated_tokens_before": estimated_tokens,
+                            "estimated_tokens_after": pruned_estimated_tokens,
+                        },
+                    )
+                    messages = pruned_messages
+                    estimated_tokens = pruned_estimated_tokens
+
+            assessment = guard.evaluate(
+                estimated_tokens=estimated_tokens,
+                context_window_tokens=context_window_tokens,
+            )
+            if assessment.should_warn:
+                await engine._emit(
+                    "context_window_warning",
+                    run_id=ctx.run_id,
+                    phase=Phase.ACT.value,
+                    cycle=ctx.cycle_count,
+                    step_id=step.id,
+                    data={
+                        "estimated_tokens": assessment.estimated_tokens,
+                        "context_window_tokens": assessment.context_window_tokens,
+                        "remaining_tokens": assessment.remaining_tokens,
+                        "warn_threshold_tokens": warn_tokens,
+                    },
+                )
+
+            if assessment.should_block:
+                raise ModelError(
+                    message=(
+                        "Context window guard blocked model call: "
+                        f"estimated_tokens={assessment.estimated_tokens}, "
+                        f"remaining_tokens={assessment.remaining_tokens}, "
+                        f"block_threshold={block_tokens}, "
+                        f"context_window_tokens={assessment.context_window_tokens}"
+                    ),
+                    model_id=getattr(engine.model, "model_id", "unknown"),
+                    reason="context_window_exceeded",
+                    recoverable=False,
+                )
 
     # Get tool manifests (protocol objects) - adapter will convert to its format
     tool_manifests = engine._get_tool_manifests()
@@ -875,10 +1197,7 @@ async def _execute_model_step(
     duration_ms = (time.monotonic() - start) * 1000
 
     # Track budget
-    ctx.state.budget_state.model_calls += 1
-    ctx.state.budget_state.input_tokens += response.usage.input_tokens
-    ctx.state.budget_state.output_tokens += response.usage.output_tokens
-    ctx.state.budget_state.cost_usd += response.cost_usd
+    ctx.state.budget_state.record_model_usage(usage=response.usage, cost_usd=response.cost_usd)
 
     # Record detailed model call for observability/checkpointing
     ctx.state.append_model_call(ModelCallRecord(

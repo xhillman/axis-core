@@ -61,6 +61,9 @@ Documentation = "https://axis-core.readthedocs.io"
 Repository = "https://github.com/axis-core/axis-core"
 Issues = "https://github.com/axis-core/axis-core/issues"
 
+[project.scripts]
+axis-core = "axis_core.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["axis_core"]
 

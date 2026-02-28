@@ -7,6 +7,7 @@ and ErrorRecord for tracking errors throughout agent execution.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import ClassVar
 
 
 class ErrorClass(Enum):
@@ -107,7 +108,79 @@ class ModelError(AxisError):
     """
 
     model_id: str | None = None
+    reason: str = "unknown"
+    status_code: int | None = None
+    provider_code: str | None = None
     error_class: ErrorClass = field(default=ErrorClass.MODEL, init=False)
+
+    _RECOVERABLE_REASONS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "rate_limit",
+            "timeout",
+            "connection_error",
+            "service_unavailable",
+            "transient_provider_error",
+        }
+    )
+
+    @classmethod
+    def is_reason_recoverable(cls, reason: str | None) -> bool:
+        """Return True when a normalized reason is retry/fallback eligible."""
+        return (reason or "unknown") in cls._RECOVERABLE_REASONS
+
+    @staticmethod
+    def _extract_status_code(e: Exception) -> int | None:
+        """Best-effort extraction of HTTP status code from provider errors."""
+        raw_status = getattr(e, "status_code", None)
+        if isinstance(raw_status, int):
+            return raw_status
+
+        response = getattr(e, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+
+        return None
+
+    @staticmethod
+    def _extract_provider_code(e: Exception) -> str | None:
+        """Best-effort extraction of provider-specific error code."""
+        direct_code = getattr(e, "code", None)
+        if isinstance(direct_code, str) and direct_code:
+            return direct_code
+
+        body = getattr(e, "body", None)
+        if isinstance(body, dict):
+            body_code = body.get("code")
+            if isinstance(body_code, str) and body_code:
+                return body_code
+            error_obj = body.get("error")
+            if isinstance(error_obj, dict):
+                nested_code = error_obj.get("code")
+                if isinstance(nested_code, str) and nested_code:
+                    return nested_code
+                nested_type = error_obj.get("type")
+                if isinstance(nested_type, str) and nested_type:
+                    return nested_type
+
+        return None
+
+    @staticmethod
+    def reason_from_status_code(status_code: int | None) -> str | None:
+        """Map common HTTP status codes to normalized failure reasons."""
+        if status_code is None:
+            return None
+        if status_code == 429:
+            return "rate_limit"
+        if status_code in {408, 504}:
+            return "timeout"
+        if status_code in {500, 502, 503}:
+            return "service_unavailable"
+        if status_code in {401, 403}:
+            return "authentication"
+        if status_code in {400, 404, 409, 410, 413, 415, 422}:
+            return "invalid_request"
+        return None
 
     @classmethod
     def from_exception(cls, e: Exception, model_id: str) -> "ModelError":
@@ -129,38 +202,43 @@ class ModelError(AxisError):
             ModelError with appropriate recoverability flag
         """
         exc_class_name = type(e).__name__
+        status_code = cls._extract_status_code(e)
+        provider_code = cls._extract_provider_code(e)
 
-        # Check if exception is recoverable based on class name
-        recoverable_errors = {
-            "RateLimitError",
-            "TimeoutError",
-            "ConnectionError",
-            "ConnectError",
-            "ReadTimeout",
-            "ReadTimeoutError",
-            "APIConnectionError",
+        recoverable_reason_by_name = {
+            "RateLimitError": "rate_limit",
+            "TimeoutError": "timeout",
+            "ConnectError": "connection_error",
+            "ConnectionError": "connection_error",
+            "ReadTimeout": "timeout",
+            "ReadTimeoutError": "timeout",
+            "APIConnectionError": "connection_error",
+            "APITimeoutError": "timeout",
         }
 
-        non_recoverable_errors = {
-            "ValidationError",
-            "AuthenticationError",
-            "AuthError",
-            "TypeError",
-            "ValueError",
-            "KeyError",
+        non_recoverable_reason_by_name = {
+            "ValidationError": "invalid_request",
+            "BadRequestError": "invalid_request",
+            "AuthenticationError": "authentication",
+            "AuthError": "authentication",
+            "TypeError": "invalid_request",
+            "ValueError": "invalid_request",
+            "KeyError": "invalid_request",
         }
 
-        is_recoverable = False
-        if exc_class_name in recoverable_errors:
-            is_recoverable = True
-        elif exc_class_name in non_recoverable_errors:
-            is_recoverable = False
-        # Unknown errors default to not recoverable
+        reason = cls.reason_from_status_code(status_code)
+        if reason is None:
+            reason = recoverable_reason_by_name.get(exc_class_name)
+        if reason is None:
+            reason = non_recoverable_reason_by_name.get(exc_class_name, "unknown")
 
         return cls(
             message=f"Model error: {str(e)}",
             model_id=model_id,
-            recoverable=is_recoverable,
+            reason=reason,
+            recoverable=cls.is_reason_recoverable(reason),
+            status_code=status_code,
+            provider_code=provider_code,
             cause=e,
         )
 

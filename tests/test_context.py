@@ -1414,3 +1414,91 @@ class TestMessageBuilding:
         assert "response 0" in messages[1]["content"]
         assert "response 1" in messages[2]["content"]
         assert "response 2" in messages[3]["content"]
+
+    def test_normalize_transcript_messages_repairs_ordering_and_drops_orphans(self) -> None:
+        """Normalization should repair out-of-order tool results and drop orphaned ones."""
+        from axis_core.context import normalize_transcript_messages
+
+        messages = [
+            {"role": "user", "content": "Find weather"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "orphan_call", "content": "should drop"},
+            {"role": "user", "content": "Thanks"},
+        ]
+
+        normalized = normalize_transcript_messages(messages)
+
+        assert normalized == [
+            {"role": "user", "content": "Find weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "user", "content": "Thanks"},
+        ]
+
+    def test_normalize_transcript_messages_strict_mode_rejects_unresolved_pairs(self) -> None:
+        """Strict mode should reject transcripts with unresolved tool-call pairs."""
+        from axis_core.context import normalize_transcript_messages
+
+        messages = [
+            {"role": "user", "content": "Find weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "No tool result exists"},
+        ]
+
+        with pytest.raises(ValueError, match="Transcript integrity validation failed"):
+            normalize_transcript_messages(messages, strict=True)
+
+    def test_normalize_transcript_messages_caps_tool_result_content(self) -> None:
+        """Normalization should cap oversized tool-result payloads when configured."""
+        from axis_core.context import normalize_transcript_messages
+
+        messages = [
+            {"role": "user", "content": "Find weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "0123456789ABCDEF"},
+        ]
+
+        normalized = normalize_transcript_messages(messages, max_tool_result_chars=8)
+
+        assert normalized[2]["content"] == "01234567...[truncated 8 chars]"

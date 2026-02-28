@@ -36,6 +36,7 @@ from axis_core.config import (
     ResolvedConfig,
     RetryPolicy,
     Timeouts,
+    ToolPolicy,
     config,
 )
 from axis_core.context import RunState
@@ -124,6 +125,29 @@ def _coerce(
         f"Argument '{arg_name}' must be {cls.__name__} or dict, "
         f"got {type(value).__name__}"
     )
+
+
+def _coerce_env_bool(value: str | None, *, default: bool = False) -> bool:
+    """Coerce boolean env-var style values."""
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _coerce_env_positive_int(value: str | None) -> int | None:
+    """Coerce positive integer env-var values."""
+    if value is None:
+        return None
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _resolve_telemetry_sinks() -> list[Any]:
@@ -271,6 +295,7 @@ class Agent:
         verbose: Print events to console
         auth: Deprecated. Credentials must be managed inside tools.
         confirmation_handler: Optional approval callback for destructive tools.
+        tool_policy: Optional per-agent allow/deny policy for tool names.
         checkpoint: Enable automatic phase-boundary checkpoint persistence.
         checkpoint_dir: Directory where checkpoints are stored when enabled.
     """
@@ -290,6 +315,7 @@ class Agent:
         rate_limits: dict[str, Any] | RateLimits | None = None,
         retry: dict[str, Any] | RetryPolicy | None = None,
         cache: dict[str, Any] | CacheConfig | None = None,
+        tool_policy: dict[str, Any] | ToolPolicy | None = None,
         telemetry: bool | list[Any] = True,
         verbose: bool = False,
         auth: dict[str, dict[str, Any]] | None = None,
@@ -340,6 +366,7 @@ class Agent:
         self._rate_limits = _coerce(rate_limits, RateLimits, "rate_limits")
         self._retry = _coerce(retry, RetryPolicy, "retry")
         self._cache = _coerce(cache, CacheConfig, "cache")
+        self._tool_policy = _coerce(tool_policy, ToolPolicy, "tool_policy")
         self._verbose = verbose
         self._confirmation_handler = confirmation_handler
         self._checkpoint_enabled = checkpoint
@@ -537,6 +564,26 @@ class Agent:
 
     def _resolved_config(self) -> ResolvedConfig:
         """Build the resolved runtime config passed into the lifecycle engine."""
+        context_guard_enabled = _coerce_env_bool(
+            os.getenv("AXIS_CONTEXT_GUARD_ENABLED"),
+            default=False,
+        )
+        context_window_tokens = _coerce_env_positive_int(
+            os.getenv("AXIS_CONTEXT_WINDOW_TOKENS")
+        )
+        context_warn_tokens = (
+            _coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
+            or 32_000
+        )
+        context_block_tokens = (
+            _coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
+            or 16_000
+        )
+        context_pruning_enabled = _coerce_env_bool(
+            os.getenv("AXIS_CONTEXT_PRUNE_ENABLED"),
+            default=False,
+        )
+
         return ResolvedConfig(
             model=self._model,
             planner=self._planner,
@@ -546,6 +593,12 @@ class Agent:
             rate_limits=self._rate_limits,
             retry=self._retry,
             cache=self._cache,
+            context_window_guard_enabled=context_guard_enabled,
+            context_window_tokens=context_window_tokens,
+            context_window_warn_tokens=context_warn_tokens,
+            context_window_block_tokens=context_block_tokens,
+            context_pruning_enabled=context_pruning_enabled,
+            tool_policy=self._tool_policy,
             confirmation_handler=self._confirmation_handler,
             telemetry_enabled=self._telemetry_enabled,
             verbose=self._verbose,

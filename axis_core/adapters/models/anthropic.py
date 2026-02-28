@@ -5,6 +5,7 @@ Requires the 'anthropic' package: pip install axis-core[anthropic]
 """
 
 import os
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -19,7 +20,7 @@ except ImportError as e:
     ) from e
 
 from axis_core.errors import ModelError
-from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
@@ -96,6 +97,19 @@ class AnthropicModel:
         Hello! How can I help you today?
     """
 
+    _TOOL_CALL_ID_MAX_LEN = 64
+    _TOOL_CALL_ID_PREFIX = "toolu"
+    _TOOL_CALL_ID_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+    _SCHEMA_FIELDS_TO_STRIP = frozenset(
+        {
+            "$schema",
+            "$id",
+            "title",
+            "default",
+            "examples",
+        }
+    )
+
     def __init__(
         self,
         model_id: str,
@@ -135,6 +149,81 @@ class AnthropicModel:
         return self._model_id
 
     @staticmethod
+    def _extract_status_code(error: Exception) -> int | None:
+        """Extract status code from Anthropic SDK exception objects."""
+        status_code = getattr(error, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+
+        return None
+
+    @staticmethod
+    def _extract_provider_code(error: Exception) -> str | None:
+        """Extract provider error code from Anthropic exception payload."""
+        direct_code = getattr(error, "code", None)
+        if isinstance(direct_code, str) and direct_code:
+            return direct_code
+
+        body = getattr(error, "body", None)
+        if isinstance(body, dict):
+            top_code = body.get("code")
+            if isinstance(top_code, str) and top_code:
+                return top_code
+            nested = body.get("error")
+            if isinstance(nested, dict):
+                nested_code = nested.get("code")
+                if isinstance(nested_code, str) and nested_code:
+                    return nested_code
+                nested_type = nested.get("type")
+                if isinstance(nested_type, str) and nested_type:
+                    return nested_type
+
+        return None
+
+    @classmethod
+    def _map_anthropic_error(
+        cls,
+        error: Exception,
+    ) -> tuple[str, bool, int | None, str | None]:
+        """Normalize Anthropic SDK exceptions for fallback semantics."""
+        status_code = cls._extract_status_code(error)
+        provider_code = cls._extract_provider_code(error)
+
+        api_connection_error = getattr(anthropic, "APIConnectionError", None)
+        permission_denied_error = getattr(anthropic, "PermissionDeniedError", None)
+        auth_types = (anthropic.AuthenticationError,) + (
+            (permission_denied_error,) if isinstance(permission_denied_error, type) else ()
+        )
+        bad_request_types = (anthropic.BadRequestError,)
+
+        if isinstance(error, anthropic.RateLimitError):
+            reason = "rate_limit"
+        elif isinstance(error, anthropic.APITimeoutError):
+            reason = "timeout"
+        elif api_connection_error is not None and isinstance(error, api_connection_error):
+            reason = "connection_error"
+        elif isinstance(error, auth_types):
+            reason = "authentication"
+        elif isinstance(error, bad_request_types):
+            reason = "invalid_request"
+        elif isinstance(error, anthropic.APIError):
+            reason = ModelError.reason_from_status_code(status_code) or "provider_error"
+        else:
+            reason = ModelError.reason_from_status_code(status_code) or "unknown"
+
+        return (
+            reason,
+            ModelError.is_reason_recoverable(reason),
+            status_code,
+            provider_code,
+        )
+
+    @staticmethod
     def _convert_tool_manifest_to_anthropic(manifest: ToolManifest) -> dict[str, Any]:
         """Convert a ToolManifest to Anthropic's tool format.
 
@@ -158,11 +247,104 @@ class AnthropicModel:
             >>> schema["name"]
             "get_weather"
         """
+        input_schema = AnthropicModel._sanitize_tool_schema_for_provider(manifest.input_schema)
         return {
             "name": manifest.name,
             "description": manifest.description,
-            "input_schema": manifest.input_schema,
+            "input_schema": input_schema,
         }
+
+    @classmethod
+    def _sanitize_schema_node(cls, value: Any) -> Any:
+        """Recursively strip schema fields that commonly fail provider validation."""
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for key, raw in value.items():
+                if key in cls._SCHEMA_FIELDS_TO_STRIP or raw is None:
+                    continue
+                sanitized[key] = cls._sanitize_schema_node(raw)
+
+            properties = sanitized.get("properties")
+            required = sanitized.get("required")
+            if isinstance(properties, dict) and isinstance(required, list):
+                allowed = set(properties.keys())
+                sanitized["required"] = [
+                    item for item in required if isinstance(item, str) and item in allowed
+                ]
+
+            return sanitized
+
+        if isinstance(value, list):
+            return [cls._sanitize_schema_node(item) for item in value]
+
+        return value
+
+    @classmethod
+    def _sanitize_tool_schema_for_provider(cls, schema: Any) -> dict[str, Any]:
+        """Sanitize schema for Anthropic tool compatibility."""
+        if not isinstance(schema, dict):
+            return {"type": "object", "properties": {}}
+
+        sanitized = cls._sanitize_schema_node(schema)
+        if not isinstance(sanitized, dict):
+            return {"type": "object", "properties": {}}
+
+        if "type" not in sanitized:
+            sanitized["type"] = "object"
+
+        properties = sanitized.get("properties")
+        if not isinstance(properties, dict):
+            sanitized["properties"] = {}
+
+        required = sanitized.get("required")
+        if not isinstance(required, list):
+            sanitized.pop("required", None)
+
+        return sanitized
+
+    @classmethod
+    def _normalize_tool_call_id(
+        cls,
+        raw_id: Any,
+        *,
+        next_index: int,
+        id_map: dict[str, str],
+        used_ids: set[str],
+    ) -> str:
+        """Normalize tool call IDs to provider-safe format and maintain stable mapping."""
+        raw_text = str(raw_id).strip() if raw_id is not None else ""
+        if raw_text and raw_text in id_map:
+            return id_map[raw_text]
+
+        if (
+            raw_text
+            and not cls._TOOL_CALL_ID_INVALID_CHARS.search(raw_text)
+            and len(raw_text) <= cls._TOOL_CALL_ID_MAX_LEN
+        ):
+            candidate = raw_text
+        else:
+            base = cls._TOOL_CALL_ID_INVALID_CHARS.sub("_", raw_text).strip("_")
+            if not base:
+                base = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
+            elif not base.startswith(f"{cls._TOOL_CALL_ID_PREFIX}_"):
+                base = f"{cls._TOOL_CALL_ID_PREFIX}_{base}"
+
+            candidate = base[: cls._TOOL_CALL_ID_MAX_LEN].rstrip("_")
+            if not candidate:
+                candidate = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
+
+        suffix = 1
+        unique_candidate = candidate
+        while unique_candidate in used_ids:
+            suffix_text = f"_{suffix}"
+            max_base_len = cls._TOOL_CALL_ID_MAX_LEN - len(suffix_text)
+            unique_candidate = f"{candidate[:max_base_len]}{suffix_text}"
+            suffix += 1
+
+        used_ids.add(unique_candidate)
+        if raw_text:
+            id_map[raw_text] = unique_candidate
+        return unique_candidate
 
     @staticmethod
     def _convert_tools_to_anthropic(tools: Any) -> list[dict[str, Any]] | None:
@@ -209,8 +391,8 @@ class AnthropicModel:
         # Shouldn't reach here with proper input types
         return None
 
-    @staticmethod
-    def _convert_messages_to_anthropic(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    @classmethod
+    def _convert_messages_to_anthropic(cls, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert messages from internal format to Anthropic's API format.
 
         The internal format uses OpenAI-style conventions:
@@ -250,15 +432,26 @@ class AnthropicModel:
         """
         converted: list[dict[str, Any]] = []
         pending_tool_results: list[dict[str, Any]] = []
+        tool_call_id_map: dict[str, str] = {}
+        used_tool_call_ids: set[str] = set()
+        generated_id_index = 1
 
         for msg in messages:
             role = msg.get("role", "")
 
             if role == "tool":
+                normalized_id = cls._normalize_tool_call_id(
+                    msg.get("tool_call_id"),
+                    next_index=generated_id_index,
+                    id_map=tool_call_id_map,
+                    used_ids=used_tool_call_ids,
+                )
+                generated_id_index += 1
+
                 # Collect tool results - they'll be batched into a single user message
                 tool_result_block: dict[str, Any] = {
                     "type": "tool_result",
-                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "tool_use_id": normalized_id,
                     "content": msg.get("content", ""),
                 }
                 pending_tool_results.append(tool_result_block)
@@ -286,9 +479,18 @@ class AnthropicModel:
 
                     # Add tool_use blocks
                     for tc in tool_calls:
+                        if not isinstance(tc, dict):
+                            continue
+                        normalized_id = cls._normalize_tool_call_id(
+                            tc.get("id"),
+                            next_index=generated_id_index,
+                            id_map=tool_call_id_map,
+                            used_ids=used_tool_call_ids,
+                        )
+                        generated_id_index += 1
                         content_blocks.append({
                             "type": "tool_use",
-                            "id": tc.get("id", ""),
+                            "id": normalized_id,
                             "name": tc.get("name", ""),
                             "input": tc.get("arguments", {}),
                         })
@@ -403,12 +605,7 @@ class AnthropicModel:
                     )
 
             # Extract exact token counts from response (AD-029)
-            usage = UsageStats.from_anthropic(
-                {
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                }
-            )
+            usage = NormalizedUsage.from_anthropic(getattr(response, "usage", None))
 
             # Calculate cost
             cost = self.estimate_cost(usage.input_tokens, usage.output_tokens)
@@ -420,53 +617,16 @@ class AnthropicModel:
                 cost_usd=cost,
             )
 
-        except anthropic.RateLimitError as e:
-            # Recoverable error - can be retried (AD-013)
+        except Exception as e:
+            reason, recoverable, status_code, provider_code = self._map_anthropic_error(e)
             raise ModelError(
-                message=f"Rate limit exceeded for {self._model_id}: {e}",
+                message=f"Anthropic error for {self._model_id}: {e}",
                 model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "rate_limit"},
-                cause=e,
-            ) from e
-
-        except anthropic.AuthenticationError as e:
-            # Non-recoverable error - bad API key
-            raise ModelError(
-                message=f"Authentication failed for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "authentication"},
-                cause=e,
-            ) from e
-
-        except anthropic.BadRequestError as e:
-            # Non-recoverable error - invalid request
-            raise ModelError(
-                message=f"Bad request to {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "bad_request"},
-                cause=e,
-            ) from e
-
-        except anthropic.APITimeoutError as e:
-            # Recoverable error - timeout
-            raise ModelError(
-                message=f"API timeout for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "timeout"},
-                cause=e,
-            ) from e
-
-        except anthropic.APIError as e:
-            # Generic API error - assume non-recoverable unless proven otherwise
-            raise ModelError(
-                message=f"API error for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "api_error"},
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
                 cause=e,
             ) from e
 
@@ -551,30 +711,16 @@ class AnthropicModel:
                             is_final=True,
                         )
 
-        except anthropic.RateLimitError as e:
+        except Exception as e:
+            reason, recoverable, status_code, provider_code = self._map_anthropic_error(e)
             raise ModelError(
-                message=f"Rate limit exceeded for {self._model_id}: {e}",
+                message=f"Anthropic error for {self._model_id}: {e}",
                 model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "rate_limit"},
-                cause=e,
-            ) from e
-
-        except anthropic.AuthenticationError as e:
-            raise ModelError(
-                message=f"Authentication failed for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "authentication"},
-                cause=e,
-            ) from e
-
-        except anthropic.APIError as e:
-            raise ModelError(
-                message=f"API error for {self._model_id}: {e}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "api_error"},
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
                 cause=e,
             ) from e
 

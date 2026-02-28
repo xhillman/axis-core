@@ -189,6 +189,13 @@ class TestModelError:
         error = ModelError(message="model failed")
         assert error.model_id is None
 
+    def test_model_error_reason_metadata_defaults(self) -> None:
+        """ModelError should expose normalized reason metadata defaults."""
+        error = ModelError(message="model failed", model_id="gpt-4")
+        assert error.reason == "unknown"
+        assert error.status_code is None
+        assert error.provider_code is None
+
     def test_from_exception_rate_limit_error(self) -> None:
         """Test that RateLimitError is classified as recoverable."""
 
@@ -202,6 +209,23 @@ class TestModelError:
         assert error.model_id == "gpt-4"
         assert error.cause is original
         assert "Rate limit exceeded" in error.message
+        assert error.reason == "rate_limit"
+
+    def test_from_exception_extracts_status_and_provider_code(self) -> None:
+        """ModelError.from_exception should capture status/provider metadata."""
+
+        class RateLimitError(Exception):
+            def __init__(self) -> None:
+                super().__init__("Rate limit exceeded")
+                self.code = "rate_limit_exceeded"
+                self.response = type("Response", (), {"status_code": 429})()
+
+        original = RateLimitError()
+        error = ModelError.from_exception(original, model_id="gpt-4")
+
+        assert error.reason == "rate_limit"
+        assert error.status_code == 429
+        assert error.provider_code == "rate_limit_exceeded"
 
     def test_from_exception_timeout_error(self) -> None:
         """Test that TimeoutError is classified as recoverable."""
@@ -255,6 +279,7 @@ class TestModelError:
         error = ModelError.from_exception(original, model_id="gpt-4")
 
         assert error.recoverable is False
+        assert error.reason == "authentication"
 
     def test_from_exception_python_errors(self) -> None:
         """Test that Python built-in errors are not recoverable."""
@@ -273,6 +298,7 @@ class TestModelError:
         error = ModelError.from_exception(original, model_id="gpt-4")
 
         assert error.recoverable is False
+        assert error.reason == "unknown"
 
 
 class TestBudgetError:

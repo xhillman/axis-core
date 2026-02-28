@@ -10,9 +10,11 @@ Architecture Decisions:
 
 from __future__ import annotations
 
+import fnmatch
 import os
+import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -161,6 +163,84 @@ class CacheConfig:
     max_size_mb: int = 100
 
 
+@dataclass(frozen=True)
+class ToolPolicy:
+    """Allow/deny tool execution policy using glob patterns.
+
+    Patterns use shell-style wildcards (for example ``db_*`` or ``*_delete``).
+    Deny patterns always take precedence over allow patterns.
+    """
+
+    allow: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
+    _allow_compiled: tuple[tuple[str, re.Pattern[str]], ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _deny_compiled: tuple[tuple[str, re.Pattern[str]], ...] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    @staticmethod
+    def _normalize_patterns(
+        patterns: tuple[str, ...] | list[str] | None,
+        *,
+        field_name: str,
+    ) -> tuple[str, ...]:
+        if patterns is None:
+            return ()
+
+        if isinstance(patterns, str):
+            raw_items: list[Any] = [patterns]
+        else:
+            raw_items = list(patterns)
+
+        normalized: list[str] = []
+        for item in raw_items:
+            if not isinstance(item, str):
+                raise TypeError(
+                    f"ToolPolicy.{field_name} entries must be strings, "
+                    f"got {type(item).__name__}"
+                )
+            candidate = item.strip()
+            if candidate:
+                normalized.append(candidate)
+        return tuple(normalized)
+
+    @staticmethod
+    def _compile_patterns(patterns: tuple[str, ...]) -> tuple[tuple[str, re.Pattern[str]], ...]:
+        return tuple((pattern, re.compile(fnmatch.translate(pattern))) for pattern in patterns)
+
+    def __post_init__(self) -> None:
+        allow = self._normalize_patterns(self.allow, field_name="allow")
+        deny = self._normalize_patterns(self.deny, field_name="deny")
+        object.__setattr__(self, "allow", allow)
+        object.__setattr__(self, "deny", deny)
+        object.__setattr__(self, "_allow_compiled", self._compile_patterns(allow))
+        object.__setattr__(self, "_deny_compiled", self._compile_patterns(deny))
+
+    def evaluate(self, tool_name: str) -> tuple[bool, str | None]:
+        """Evaluate whether a tool is allowed and return optional denial reason."""
+        normalized_name = tool_name.strip()
+
+        for pattern, regex in self._deny_compiled:
+            if regex.fullmatch(normalized_name):
+                return False, f"matched deny pattern '{pattern}'"
+
+        if not self._allow_compiled:
+            return True, None
+
+        for pattern, regex in self._allow_compiled:
+            if regex.fullmatch(normalized_name):
+                return True, f"matched allow pattern '{pattern}'"
+
+        allow_repr = ", ".join(repr(pattern) for pattern in self.allow)
+        return False, f"not matched by allow patterns [{allow_repr}]"
+
+
 # ===========================================================================
 # deep_merge utility (AD-015)
 # ===========================================================================
@@ -222,6 +302,12 @@ class ResolvedConfig:
         rate_limits: Rate limiting config (optional)
         retry: Retry policy (optional)
         cache: Cache config (optional)
+        context_window_guard_enabled: Whether pre-model context guard is enabled
+        context_window_tokens: Model context window budget in tokens (optional)
+        context_window_warn_tokens: Remaining-token warning threshold
+        context_window_block_tokens: Remaining-token hard-block threshold
+        context_pruning_enabled: Whether tool-result-first pruning is enabled
+        tool_policy: Optional allow/deny tool policy
         telemetry_enabled: Whether telemetry is enabled
         verbose: Whether to print events
     """
@@ -234,6 +320,12 @@ class ResolvedConfig:
     rate_limits: RateLimits | None = None
     retry: RetryPolicy | None = None
     cache: CacheConfig | None = None
+    context_window_guard_enabled: bool = False
+    context_window_tokens: int | None = None
+    context_window_warn_tokens: int = 32000
+    context_window_block_tokens: int = 16000
+    context_pruning_enabled: bool = False
+    tool_policy: ToolPolicy | None = None
     confirmation_handler: (
         Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None
     ) = None
@@ -316,6 +408,7 @@ __all__ = [
     "RetryPolicy",
     "RateLimits",
     "CacheConfig",
+    "ToolPolicy",
     "deep_merge",
     "ResolvedConfig",
     "Config",

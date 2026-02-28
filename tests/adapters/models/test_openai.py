@@ -380,6 +380,8 @@ class TestOpenAIModel:
 
             # Should be classified as recoverable
             assert exc_info.value.recoverable is True
+            assert exc_info.value.reason == "rate_limit"
+            assert exc_info.value.status_code == 429
 
     @pytest.mark.asyncio
     async def test_error_classification_auth_error(self) -> None:
@@ -406,6 +408,8 @@ class TestOpenAIModel:
 
             # Should be classified as non-recoverable
             assert exc_info.value.recoverable is False
+            assert exc_info.value.reason == "authentication"
+            assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_error_classification_bad_request(self) -> None:
@@ -417,7 +421,7 @@ class TestOpenAIModel:
         error = BadRequestError(
             "Invalid request",
             response=Mock(status_code=400),
-            body=None,
+            body={"error": {"code": "context_length_exceeded"}},
         )
 
         with patch.object(
@@ -432,6 +436,9 @@ class TestOpenAIModel:
 
             # Should be classified as non-recoverable
             assert exc_info.value.recoverable is False
+            assert exc_info.value.reason == "invalid_request"
+            assert exc_info.value.status_code == 400
+            assert exc_info.value.provider_code == "context_length_exceeded"
 
     def test_model_pricing_table(self) -> None:
         """Test that MODEL_PRICING table has expected models."""
@@ -493,6 +500,46 @@ class TestOpenAIModel:
         assert response.usage.total_tokens == 579
 
     @pytest.mark.asyncio
+    async def test_complete_defaults_usage_when_provider_omits_usage(self) -> None:
+        """Missing provider usage should degrade to zero tokens."""
+        model = OpenAIModel(model_id="gpt-4", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Response", tool_calls=None))]
+        mock_response.usage = None
+
+        with patch.object(
+            model._client.chat.completions, "create", new=AsyncMock(return_value=mock_response)
+        ):
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 0
+        assert response.usage.total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_complete_normalizes_non_numeric_usage_values(self) -> None:
+        """Malformed provider usage values should not crash normalization."""
+        model = OpenAIModel(model_id="gpt-4", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="Response", tool_calls=None))]
+        mock_response.usage = Mock(
+            prompt_tokens="invalid",
+            completion_tokens="9",
+            total_tokens=None,
+        )
+
+        with patch.object(
+            model._client.chat.completions, "create", new=AsyncMock(return_value=mock_response)
+        ):
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 9
+        assert response.usage.total_tokens == 9
+
+    @pytest.mark.asyncio
     async def test_complete_with_system_message(self) -> None:
         """Test that system parameter is converted to system message."""
         model = OpenAIModel(model_id="gpt-4", api_key="test_key")
@@ -542,6 +589,43 @@ class TestOpenAIModel:
         assert result["function"]["description"] == "Get the weather for a city"
         assert result["function"]["parameters"]["type"] == "object"
         assert "city" in result["function"]["parameters"]["properties"]
+
+    def test_convert_tool_manifest_to_openai_sanitizes_provider_quirks(self) -> None:
+        """OpenAI conversion should remove schema fields that trigger provider quirks."""
+        from axis_core.tool import ToolManifest
+
+        manifest = ToolManifest(
+            name="get_weather",
+            description="Get weather",
+            input_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "weather-input",
+                "title": "WeatherInput",
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "City name",
+                        "default": "SF",
+                        "examples": ["SF"],
+                    }
+                },
+                "required": ["city", "unknown_field"],
+            },
+            output_schema={"type": "string"},
+            capabilities=(),
+        )
+
+        result = OpenAIModel._convert_tool_manifest_to_openai(manifest)
+        parameters = result["function"]["parameters"]
+        city_schema = parameters["properties"]["city"]
+
+        assert "$schema" not in parameters
+        assert "$id" not in parameters
+        assert "title" not in parameters
+        assert "default" not in city_schema
+        assert "examples" not in city_schema
+        assert parameters["required"] == ["city"]
 
     def test_convert_tools_with_manifests(self) -> None:
         """Test _convert_tools_to_openai with ToolManifest objects."""
@@ -600,6 +684,33 @@ class TestOpenAIModel:
         """Test _convert_tools_to_openai with empty list."""
         result = OpenAIModel._convert_tools_to_openai([])
         assert result is None
+
+    def test_convert_messages_to_openai_normalizes_tool_call_ids(self) -> None:
+        """Tool call IDs should be normalized to provider-safe values consistently."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "Calling tool",
+                "tool_calls": [
+                    {"id": "call id with spaces/and:symbols", "name": "search", "arguments": {}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call id with spaces/and:symbols",
+                "content": "result",
+            },
+        ]
+
+        converted = OpenAIModel._convert_messages_to_openai(messages)
+        normalized_tool_call_id = converted[0]["tool_calls"][0]["id"]
+
+        assert normalized_tool_call_id.startswith("call_")
+        assert " " not in normalized_tool_call_id
+        assert "/" not in normalized_tool_call_id
+        assert ":" not in normalized_tool_call_id
+        assert len(normalized_tool_call_id) <= 64
+        assert converted[1]["tool_call_id"] == normalized_tool_call_id
 
     @pytest.mark.asyncio
     async def test_complete_with_tool_manifests(self) -> None:

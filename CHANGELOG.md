@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added reason-coded model fallback semantics: model errors now carry normalized reason/status/code
+  metadata and fallback decisions branch on reason recoverability.
+- Added transcript integrity normalization before model calls to repair out-of-order tool-result
+  messages, drop orphaned tool results, and optionally enforce strict transcript validation.
+- Added optional tool-result payload capping support for model-step transcripts via
+  `max_tool_result_chars` step/config settings or `AXIS_MAX_TOOL_RESULT_CHARS`.
+- Added `ContextWindowGuard` checks before model calls with configurable remaining-token warn/block
+  thresholds and explicit non-recoverable blocking when limits are exceeded.
+- Added tool-result-first transcript pruning utilities and act-phase integration to trim old tool
+  result payloads before guard block decisions.
+- Added tool idempotency support for retry paths: act-phase now propagates stable per-step
+  idempotency keys through `ToolContext` (and optional `idempotency_key` tool args), plus new
+  helper utilities (`build_idempotency_key`, `run_idempotent`, idempotent result get/set helpers)
+  for dedupe-safe side-effecting tools.
+- Added `ToolPolicy` with precompiled allow/deny glob patterns for per-agent tool gating, with
+  deny-overrides-allow enforcement in act phase before destructive confirmation callbacks.
+- Added adapter compatibility transforms for OpenAI/Anthropic tool schemas and tool-call IDs to
+  satisfy provider-specific constraints consistently.
+- Added normalized provider usage handling (`NormalizedUsage`) across model adapters, with graceful
+  handling for missing or malformed usage payloads.
+- Added `axis-core init` CLI wizard for optional adapter package installs and `.env` default setup,
+  including Synaptic memory path/bootstrap options.
+- Added built-in `synaptic` memory adapter registration via lazy factory, with optional dependency
+  guidance and `AXIS_SYNAPTIC_PATH` support.
+- Added CLI runtime commands: `axis-core ask` (single prompt) and `axis-core chat`
+  (interactive session loop), plus a `session` namespace placeholder for future admin commands.
+
+### Changed
+
+- Model-step execution now runs transcript preflight normalization for both generated and explicit
+  message payloads before calling adapters, reducing provider-side tool pairing failures in resume
+  and long-session flows.
+- Added conservative opt-in context guard/pruning runtime config defaults and corresponding context
+  env-var controls in `.env.example`.
+- Budget tracking now consumes normalized usage fields instead of provider-specific usage payload
+  shapes.
+
 ## [0.8.0b] - 2026-02-13
 
 ### Added

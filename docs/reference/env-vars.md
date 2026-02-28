@@ -16,7 +16,7 @@ This table documents variables currently read by axis-core runtime code.
 |---|---|---|
 | `AXIS_DEFAULT_MODEL` | `claude-sonnet-4-20250514` | Default model when `Agent(model=...)` is not provided. |
 | `AXIS_DEFAULT_PLANNER` | `auto` | Default planner when `Agent(planner=...)` is not provided. |
-| `AXIS_DEFAULT_MEMORY` | `ephemeral` | Default memory backend when `Agent(memory=...)` is not provided. |
+| `AXIS_DEFAULT_MEMORY` | `ephemeral` | Default memory backend when `Agent(memory=...)` is not provided (`ephemeral`, `sqlite`, `redis`, `synaptic`). |
 | `AXIS_TELEMETRY` | `true` | Default telemetry-enabled flag in global config. |
 | `AXIS_VERBOSE` | `false` | Default verbose flag in global config. |
 | `AXIS_DEBUG` | `false` | Default debug flag in global config. |
@@ -45,6 +45,12 @@ This table documents variables currently read by axis-core runtime code.
 |---|---|---|
 | `AXIS_CONTEXT_STRATEGY` | `smart` | Context history strategy in act phase (`smart`, `full`, `minimal`). |
 | `AXIS_MAX_CYCLE_CONTEXT` | `5` | Max prior cycles included when strategy is `smart`. |
+
+## Memory Adapter Paths
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AXIS_SYNAPTIC_PATH` | `synaptic.db` | SQLite file path used by the `synaptic` memory adapter. |
 
 ## Notes
 

@@ -6,11 +6,13 @@ Requires the 'openai' package: pip install axis-core[openai]
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
 # Conditional import per AD-040
 try:
+    import openai
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionChunk
 except ImportError as e:
@@ -20,7 +22,7 @@ except ImportError as e:
     ) from e
 
 from axis_core.errors import ModelError
-from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
@@ -147,6 +149,18 @@ class OpenAIModel:
         # Computer use
         "computer-use-preview",
     }
+    _TOOL_CALL_ID_MAX_LEN = 64
+    _TOOL_CALL_ID_PREFIX = "call"
+    _TOOL_CALL_ID_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+    _SCHEMA_FIELDS_TO_STRIP = frozenset(
+        {
+            "$schema",
+            "$id",
+            "title",
+            "default",
+            "examples",
+        }
+    )
 
     def __init__(
         self,
@@ -209,6 +223,82 @@ class OpenAIModel:
         return self._model_id
 
     @staticmethod
+    def _extract_status_code(error: Exception) -> int | None:
+        """Extract status code from OpenAI SDK exception objects."""
+        status_code = getattr(error, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+
+        return None
+
+    @staticmethod
+    def _extract_provider_code(error: Exception) -> str | None:
+        """Extract provider error code from OpenAI exception payload."""
+        direct_code = getattr(error, "code", None)
+        if isinstance(direct_code, str) and direct_code:
+            return direct_code
+
+        body = getattr(error, "body", None)
+        if isinstance(body, dict):
+            top_code = body.get("code")
+            if isinstance(top_code, str) and top_code:
+                return top_code
+            nested = body.get("error")
+            if isinstance(nested, dict):
+                nested_code = nested.get("code")
+                if isinstance(nested_code, str) and nested_code:
+                    return nested_code
+
+        return None
+
+    @classmethod
+    def _map_openai_error(
+        cls,
+        error: Exception,
+    ) -> tuple[str, bool, int | None, str | None]:
+        """Normalize OpenAI SDK exceptions into reason-coded fallback metadata."""
+        status_code = cls._extract_status_code(error)
+        provider_code = cls._extract_provider_code(error)
+
+        permission_error = getattr(openai, "PermissionDeniedError", ())
+        unprocessable_error = getattr(openai, "UnprocessableEntityError", ())
+        bad_request_types = tuple(
+            t for t in (openai.BadRequestError, unprocessable_error) if t
+        )
+        auth_types = tuple(
+            t for t in (openai.AuthenticationError, permission_error) if t
+        )
+
+        if isinstance(error, openai.RateLimitError):
+            reason = "rate_limit"
+        elif isinstance(error, openai.APITimeoutError):
+            reason = "timeout"
+        elif isinstance(error, openai.APIConnectionError):
+            reason = "connection_error"
+        elif auth_types and isinstance(error, auth_types):
+            reason = "authentication"
+        elif bad_request_types and isinstance(error, bad_request_types):
+            reason = "invalid_request"
+        elif isinstance(error, openai.APIStatusError):
+            reason = ModelError.reason_from_status_code(status_code) or "provider_error"
+        elif isinstance(error, openai.APIError):
+            reason = ModelError.reason_from_status_code(status_code) or "provider_error"
+        else:
+            reason = ModelError.reason_from_status_code(status_code) or "unknown"
+
+        return (
+            reason,
+            ModelError.is_reason_recoverable(reason),
+            status_code,
+            provider_code,
+        )
+
+    @staticmethod
     def _convert_tool_manifest_to_openai(manifest: ToolManifest) -> dict[str, Any]:
         """Convert a ToolManifest to OpenAI's function calling format.
 
@@ -229,17 +319,110 @@ class OpenAIModel:
             >>> schema["type"]
             "function"
         """
+        parameters = OpenAIModel._sanitize_tool_schema_for_provider(manifest.input_schema)
         return {
             "type": "function",
             "function": {
                 "name": manifest.name,
                 "description": manifest.description,
-                "parameters": manifest.input_schema,
+                "parameters": parameters,
             },
         }
 
-    @staticmethod
-    def _convert_messages_to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    @classmethod
+    def _sanitize_schema_node(cls, value: Any) -> Any:
+        """Recursively strip schema fields that frequently trigger provider rejections."""
+        if isinstance(value, dict):
+            sanitized: dict[str, Any] = {}
+            for key, raw in value.items():
+                if key in cls._SCHEMA_FIELDS_TO_STRIP or raw is None:
+                    continue
+                sanitized[key] = cls._sanitize_schema_node(raw)
+
+            properties = sanitized.get("properties")
+            required = sanitized.get("required")
+            if isinstance(properties, dict) and isinstance(required, list):
+                allowed = set(properties.keys())
+                sanitized["required"] = [
+                    item for item in required if isinstance(item, str) and item in allowed
+                ]
+
+            return sanitized
+
+        if isinstance(value, list):
+            return [cls._sanitize_schema_node(item) for item in value]
+
+        return value
+
+    @classmethod
+    def _sanitize_tool_schema_for_provider(cls, schema: Any) -> dict[str, Any]:
+        """Sanitize schema for OpenAI function/tool compatibility."""
+        if not isinstance(schema, dict):
+            return {"type": "object", "properties": {}}
+
+        sanitized = cls._sanitize_schema_node(schema)
+        if not isinstance(sanitized, dict):
+            return {"type": "object", "properties": {}}
+
+        if "type" not in sanitized:
+            sanitized["type"] = "object"
+
+        properties = sanitized.get("properties")
+        if not isinstance(properties, dict):
+            sanitized["properties"] = {}
+
+        required = sanitized.get("required")
+        if not isinstance(required, list):
+            sanitized.pop("required", None)
+
+        return sanitized
+
+    @classmethod
+    def _normalize_tool_call_id(
+        cls,
+        raw_id: Any,
+        *,
+        next_index: int,
+        id_map: dict[str, str],
+        used_ids: set[str],
+    ) -> str:
+        """Normalize tool call IDs to provider-safe format and maintain stable mapping."""
+        raw_text = str(raw_id).strip() if raw_id is not None else ""
+        if raw_text and raw_text in id_map:
+            return id_map[raw_text]
+
+        if (
+            raw_text
+            and not cls._TOOL_CALL_ID_INVALID_CHARS.search(raw_text)
+            and len(raw_text) <= cls._TOOL_CALL_ID_MAX_LEN
+        ):
+            candidate = raw_text
+        else:
+            base = cls._TOOL_CALL_ID_INVALID_CHARS.sub("_", raw_text).strip("_")
+            if not base:
+                base = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
+            elif not base.startswith(f"{cls._TOOL_CALL_ID_PREFIX}_"):
+                base = f"{cls._TOOL_CALL_ID_PREFIX}_{base}"
+
+            candidate = base[: cls._TOOL_CALL_ID_MAX_LEN].rstrip("_")
+            if not candidate:
+                candidate = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
+
+        suffix = 1
+        unique_candidate = candidate
+        while unique_candidate in used_ids:
+            suffix_text = f"_{suffix}"
+            max_base_len = cls._TOOL_CALL_ID_MAX_LEN - len(suffix_text)
+            unique_candidate = f"{candidate[:max_base_len]}{suffix_text}"
+            suffix += 1
+
+        used_ids.add(unique_candidate)
+        if raw_text:
+            id_map[raw_text] = unique_candidate
+        return unique_candidate
+
+    @classmethod
+    def _convert_messages_to_openai(cls, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert messages from internal format to OpenAI's API format.
 
         Ensures that tool_calls in assistant messages have the required 'type' field.
@@ -251,6 +434,9 @@ class OpenAIModel:
             List of messages in OpenAI's API format
         """
         converted: list[dict[str, Any]] = []
+        tool_call_id_map: dict[str, str] = {}
+        used_tool_call_ids: set[str] = set()
+        generated_id_index = 1
 
         for msg in messages:
             role = msg.get("role", "")
@@ -260,25 +446,44 @@ class OpenAIModel:
                 tool_calls = msg.get("tool_calls", [])
                 if tool_calls:
                     # Ensure each tool_call has the required 'type' field
-                    formatted_calls = []
+                    formatted_calls: list[dict[str, Any]] = []
                     for tc in tool_calls:
-                        # If already properly formatted, pass through
-                        if isinstance(tc, dict) and "type" in tc:
-                            formatted_calls.append(tc)
-                        # Otherwise, add the type field
-                        elif isinstance(tc, dict):
-                            formatted_calls.append({
-                                "id": tc.get("id", ""),
+                        if not isinstance(tc, dict):
+                            continue
+
+                        normalized_id = cls._normalize_tool_call_id(
+                            tc.get("id"),
+                            next_index=generated_id_index,
+                            id_map=tool_call_id_map,
+                            used_ids=used_tool_call_ids,
+                        )
+                        generated_id_index += 1
+
+                        raw_function = tc.get("function")
+                        raw_name = tc.get("name", "")
+                        raw_arguments: Any = tc.get("arguments", {})
+                        if isinstance(raw_function, dict):
+                            raw_name = raw_function.get("name", raw_name)
+                            raw_arguments = raw_function.get("arguments", raw_arguments)
+
+                        function_name = raw_name if isinstance(raw_name, str) else str(raw_name)
+                        if isinstance(raw_arguments, (dict, list)):
+                            arguments_payload = json.dumps(raw_arguments)
+                        elif isinstance(raw_arguments, str):
+                            arguments_payload = raw_arguments
+                        else:
+                            arguments_payload = "{}"
+
+                        formatted_calls.append(
+                            {
+                                "id": normalized_id,
                                 "type": "function",
                                 "function": {
-                                    "name": tc.get("name", ""),
-                                    "arguments": (
-                                        json.dumps(tc.get("arguments", {}))
-                                        if isinstance(tc.get("arguments"), dict)
-                                        else tc.get("arguments", "{}")
-                                    ),
+                                    "name": function_name,
+                                    "arguments": arguments_payload,
                                 },
-                            })
+                            }
+                        )
 
                     # Create converted message with formatted tool_calls
                     converted_msg = {
@@ -290,6 +495,16 @@ class OpenAIModel:
                 else:
                     # No tool_calls, pass through
                     converted.append(msg)
+            elif role == "tool":
+                converted_tool = dict(msg)
+                converted_tool["tool_call_id"] = cls._normalize_tool_call_id(
+                    msg.get("tool_call_id"),
+                    next_index=generated_id_index,
+                    id_map=tool_call_id_map,
+                    used_ids=used_tool_call_ids,
+                )
+                generated_id_index += 1
+                converted.append(converted_tool)
             else:
                 # Pass through non-assistant messages or assistant without tool_calls
                 converted.append(msg)
@@ -437,13 +652,7 @@ class OpenAIModel:
                     )
 
             # Extract exact token counts from response
-            usage = UsageStats.from_openai(
-                {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                }
-            )
+            usage = NormalizedUsage.from_openai(getattr(response, "usage", None))
 
             # Calculate cost
             cost = self.estimate_cost(usage.input_tokens, usage.output_tokens)
@@ -456,68 +665,17 @@ class OpenAIModel:
             )
 
         except Exception as e:
-            # Import OpenAI exceptions locally to handle them
-            import openai
-
-            if isinstance(e, openai.RateLimitError):
-                # Recoverable error - can be retried
-                raise ModelError(
-                    message=f"Rate limit exceeded for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=True,
-                    details={"error_type": "rate_limit"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.AuthenticationError):
-                # Non-recoverable error - bad API key
-                raise ModelError(
-                    message=f"Authentication failed for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "authentication"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.BadRequestError):
-                # Non-recoverable error - invalid request
-                raise ModelError(
-                    message=f"Bad request to {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "bad_request"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.APITimeoutError):
-                # Recoverable error - timeout
-                raise ModelError(
-                    message=f"API timeout for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=True,
-                    details={"error_type": "timeout"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.APIError):
-                # Generic API error - assume non-recoverable unless proven otherwise
-                raise ModelError(
-                    message=f"API error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "api_error"},
-                    cause=e,
-                ) from e
-
-            else:
-                # Unknown error - wrap it
-                raise ModelError(
-                    message=f"Unexpected error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "unknown"},
-                    cause=e,
-                ) from e
+            reason, recoverable, status_code, provider_code = self._map_openai_error(e)
+            raise ModelError(
+                message=f"OpenAI error for {self._model_id}: {e}",
+                model_id=self._model_id,
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
+                cause=e,
+            ) from e
 
     async def stream(
         self,
@@ -647,43 +805,17 @@ class OpenAIModel:
                     )
 
         except Exception as e:
-            import openai
-
-            if isinstance(e, openai.RateLimitError):
-                raise ModelError(
-                    message=f"Rate limit exceeded for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=True,
-                    details={"error_type": "rate_limit"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.AuthenticationError):
-                raise ModelError(
-                    message=f"Authentication failed for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "authentication"},
-                    cause=e,
-                ) from e
-
-            elif isinstance(e, openai.APIError):
-                raise ModelError(
-                    message=f"API error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "api_error"},
-                    cause=e,
-                ) from e
-
-            else:
-                raise ModelError(
-                    message=f"Unexpected error for {self._model_id}: {e}",
-                    model_id=self._model_id,
-                    recoverable=False,
-                    details={"error_type": "unknown"},
-                    cause=e,
-                ) from e
+            reason, recoverable, status_code, provider_code = self._map_openai_error(e)
+            raise ModelError(
+                message=f"OpenAI error for {self._model_id}: {e}",
+                model_id=self._model_id,
+                reason=reason,
+                recoverable=recoverable,
+                status_code=status_code,
+                provider_code=provider_code,
+                details={"error_type": reason},
+                cause=e,
+            ) from e
 
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count for text.

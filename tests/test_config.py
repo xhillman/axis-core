@@ -403,6 +403,23 @@ class TestResolvedConfig:
         with pytest.raises(AttributeError):
             resolved.model = "changed"  # type: ignore[misc]
 
+    def test_context_window_guard_defaults_are_conservative(self) -> None:
+        from axis_core.budget import Budget
+
+        resolved = ResolvedConfig(
+            model="test",
+            planner="auto",
+            memory=None,
+            budget=Budget(),
+            timeouts=Timeouts(),
+        )
+
+        assert resolved.context_window_guard_enabled is False
+        assert resolved.context_pruning_enabled is False
+        assert resolved.context_window_tokens is None
+        assert resolved.context_window_warn_tokens == 32000
+        assert resolved.context_window_block_tokens == 16000
+
 
 # ---------------------------------------------------------------------------
 # Config singleton package-level export tests (Task 4.0)

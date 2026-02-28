@@ -253,6 +253,8 @@ class TestAnthropicModel:
 
             # Should be classified as recoverable
             assert exc_info.value.recoverable is True
+            assert exc_info.value.reason == "rate_limit"
+            assert exc_info.value.status_code == 429
 
     @pytest.mark.asyncio
     async def test_error_classification_auth_error(self) -> None:
@@ -278,6 +280,8 @@ class TestAnthropicModel:
 
             # Should be classified as non-recoverable
             assert exc_info.value.recoverable is False
+            assert exc_info.value.reason == "authentication"
+            assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_error_classification_bad_request(self) -> None:
@@ -303,6 +307,8 @@ class TestAnthropicModel:
 
             # Should be classified as non-recoverable
             assert exc_info.value.recoverable is False
+            assert exc_info.value.reason == "invalid_request"
+            assert exc_info.value.status_code == 400
 
     def test_model_pricing_table(self) -> None:
         """Test that MODEL_PRICING table has expected models."""
@@ -357,6 +363,40 @@ class TestAnthropicModel:
         assert response.usage.total_tokens == 579
 
     @pytest.mark.asyncio
+    async def test_complete_defaults_usage_when_provider_omits_usage(self) -> None:
+        """Missing provider usage should degrade to zero tokens."""
+        model = AnthropicModel(model_id="claude-sonnet-4-20250514", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Response")]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = None
+
+        with patch.object(model._client.messages, "create", new=AsyncMock(return_value=mock_response)):  # noqa: E501
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 0
+        assert response.usage.total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_complete_normalizes_non_numeric_usage_values(self) -> None:
+        """Malformed provider usage values should not crash normalization."""
+        model = AnthropicModel(model_id="claude-sonnet-4-20250514", api_key="test_key")
+
+        mock_response = Mock()
+        mock_response.content = [Mock(type="text", text="Response")]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = Mock(input_tokens="invalid", output_tokens="8")
+
+        with patch.object(model._client.messages, "create", new=AsyncMock(return_value=mock_response)):  # noqa: E501
+            response = await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        assert response.usage.input_tokens == 0
+        assert response.usage.output_tokens == 8
+        assert response.usage.total_tokens == 8
+
+    @pytest.mark.asyncio
     async def test_complete_with_metadata(self) -> None:
         """Test that metadata is passed through to the API."""
         model = AnthropicModel(model_id="claude-sonnet-4-20250514", api_key="test_key")
@@ -400,6 +440,40 @@ class TestAnthropicModel:
         assert result["input_schema"]["type"] == "object"
         assert "city" in result["input_schema"]["properties"]
         assert "city" in result["input_schema"]["required"]
+
+    def test_convert_tool_manifest_to_anthropic_sanitizes_provider_quirks(self) -> None:
+        """Anthropic conversion should remove provider-problematic schema fields."""
+        from axis_core.tool import ToolManifest
+
+        manifest = ToolManifest(
+            name="search",
+            description="Search",
+            input_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "SearchInput",
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "default": "latest",
+                        "examples": ["latest news"],
+                    }
+                },
+                "required": ["query", "nonexistent"],
+            },
+            output_schema={"type": "string"},
+            capabilities=(),
+        )
+
+        result = AnthropicModel._convert_tool_manifest_to_anthropic(manifest)
+        input_schema = result["input_schema"]
+        query_schema = input_schema["properties"]["query"]
+
+        assert "$schema" not in input_schema
+        assert "title" not in input_schema
+        assert "default" not in query_schema
+        assert "examples" not in query_schema
+        assert input_schema["required"] == ["query"]
 
     def test_convert_tools_with_manifests(self) -> None:
         """Test _convert_tools_to_anthropic with ToolManifest objects."""
@@ -650,3 +724,27 @@ class TestAnthropicModel:
         assert isinstance(assistant_msg["content"], list)
         assert len(assistant_msg["content"]) == 1  # Only tool_use, no text
         assert assistant_msg["content"][0]["type"] == "tool_use"
+
+    def test_convert_messages_normalizes_tool_call_ids(self) -> None:
+        """Tool call IDs should be normalized consistently across tool use/result blocks."""
+        messages = [
+            {"role": "user", "content": "Run tool"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "bad id with spaces/:", "name": "search", "arguments": {}}],
+            },
+            {"role": "tool", "tool_call_id": "bad id with spaces/:", "content": "done"},
+        ]
+
+        converted = AnthropicModel._convert_messages_to_anthropic(messages)
+        assistant_tool_use = converted[1]["content"][0]
+        tool_result_block = converted[2]["content"][0]
+
+        normalized_id = assistant_tool_use["id"]
+        assert normalized_id.startswith("toolu_")
+        assert " " not in normalized_id
+        assert "/" not in normalized_id
+        assert ":" not in normalized_id
+        assert len(normalized_id) <= 64
+        assert tool_result_block["tool_use_id"] == normalized_id

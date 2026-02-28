@@ -36,6 +36,7 @@ from axis_core.errors import (
     BudgetError,
     CancelledError,
     ConfigError,
+    ModelError,
     PlanError,
 )
 from axis_core.errors import (
@@ -2152,9 +2153,104 @@ class TestModelFallback:
         assert len(fallback.calls) == 0
 
     @pytest.mark.asyncio
+    async def test_fallback_uses_reason_codes_for_recoverability(self) -> None:
+        """Fallback decisions should be based on ModelError.reason semantics."""
+
+        class ReasonRecoverablePrimary(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise ModelError(
+                    message="Rate limit exceeded",
+                    model_id="primary",
+                    reason="rate_limit",
+                    recoverable=False,
+                    status_code=429,
+                    provider_code="rate_limit_exceeded",
+                )
+
+        primary = ReasonRecoverablePrimary()
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Fallback response",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        engine = LifecycleEngine(
+            model=primary,
+            planner=self._model_step_planner(),
+            fallback=[fallback],
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(max_cycles=5),
+        )
+
+        assert result["success"] is True
+        assert len(fallback.calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_blocks_on_non_recoverable_reason_code(self) -> None:
+        """Non-recoverable reasons should not fall through to fallback models."""
+
+        class ReasonNonRecoverablePrimary(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise ModelError(
+                    message="Invalid request",
+                    model_id="primary",
+                    reason="invalid_request",
+                    recoverable=True,
+                    status_code=400,
+                    provider_code="invalid_request_error",
+                )
+
+        primary = ReasonNonRecoverablePrimary()
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Should not be called",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
+                    cost_usd=0.0001,
+                )
+            ]
+        )
+
+        engine = LifecycleEngine(
+            model=primary,
+            planner=self._model_step_planner(),
+            fallback=[fallback],
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(max_cycles=5),
+        )
+
+        assert result["success"] is False
+        assert len(fallback.calls) == 0
+
+    @pytest.mark.asyncio
     async def test_fallback_emits_telemetry_event(self) -> None:
         """Should emit model_fallback telemetry event on fallback."""
-        primary = MockFailingModelAdapter(fail_count=999)
+        class ReasonRecoverablePrimary(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise ModelError(
+                    message="Rate limit exceeded",
+                    model_id="primary",
+                    reason="rate_limit",
+                    recoverable=True,
+                    status_code=429,
+                    provider_code="rate_limit_exceeded",
+                )
+
+        primary = ReasonRecoverablePrimary()
         fallback = MockModelAdapter(
             responses=[
                 ModelResponse(
@@ -2189,6 +2285,9 @@ class TestModelFallback:
         assert len(fallback_events) >= 1
         assert fallback_events[0].data.get("from_model") == "mock-model"
         assert fallback_events[0].data.get("to_model") == "mock-model"
+        assert fallback_events[0].data.get("reason") == "rate_limit"
+        assert fallback_events[0].data.get("status_code") == 429
+        assert fallback_events[0].data.get("provider_code") == "rate_limit_exceeded"
 
     @pytest.mark.asyncio
     async def test_planner_fallback_emits_telemetry_event(self) -> None:
@@ -2267,6 +2366,304 @@ class TestModelFallback:
         assert len(fallback_events) == 1
         assert fallback_events[0].data.get("original_planner") == "sequential"
         assert "API error" in fallback_events[0].data.get("reason", "")
+
+
+class TestTranscriptIntegrityTask2:
+    """Task 2 tests for transcript normalization before model calls."""
+
+    @staticmethod
+    def _planner_with_messages(messages: list[dict[str, Any]], **payload: Any) -> MockPlanner:
+        model_payload = {"messages": messages}
+        model_payload.update(payload)
+        return MockPlanner(
+            plans=[
+                Plan(
+                    id="plan-model",
+                    goal="normalize transcript",
+                    steps=(PlanStep(id="model-1", type=StepType.MODEL, payload=model_payload),),
+                ),
+                Plan(
+                    id="plan-terminal",
+                    goal="done",
+                    steps=(
+                        PlanStep(
+                            id="terminal-1",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                        ),
+                    ),
+                ),
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_step_repairs_out_of_order_transcript_messages(self) -> None:
+        """Out-of-order and orphan tool results should be repaired before model.complete()."""
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="ok",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        messages = [
+            {"role": "user", "content": "find weather"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "orphan_call", "content": "drop me"},
+        ]
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_with_messages(messages),
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="agent-task2",
+            budget=Budget(max_cycles=3),
+        )
+
+        assert result["success"] is True
+        assert len(mock_model.calls) == 1
+        sent_messages = mock_model.calls[0]["messages"]
+        assert sent_messages == [
+            {"role": "user", "content": "find weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_long_session_transcript_repair_preserves_tool_pairing(self) -> None:
+        """Long transcripts should remain valid after tool-call/result normalization."""
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="ok",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
+                    cost_usd=0.0007,
+                )
+            ]
+        )
+
+        long_messages: list[dict[str, Any]] = [{"role": "user", "content": "start"}]
+        for index in range(12):
+            call_id = f"call_{index}"
+            long_messages.append(
+                {"role": "tool", "tool_call_id": call_id, "content": f"result-{index}"}
+            )
+            long_messages.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": call_id, "name": "lookup", "arguments": {"index": index}}
+                    ],
+                }
+            )
+        long_messages.append({"role": "tool", "tool_call_id": "orphan_call", "content": "drop me"})
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_with_messages(long_messages),
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="agent-task2",
+            budget=Budget(max_cycles=3),
+        )
+
+        assert result["success"] is True
+        sent_messages = mock_model.calls[0]["messages"]
+        assert all(msg.get("tool_call_id") != "orphan_call" for msg in sent_messages)
+
+        for index in range(12):
+            call_id = f"call_{index}"
+            assistant_idx = next(
+                idx
+                for idx, msg in enumerate(sent_messages)
+                if msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+                and msg["tool_calls"][0]["id"] == call_id
+            )
+            assert sent_messages[assistant_idx + 1]["role"] == "tool"
+            assert sent_messages[assistant_idx + 1]["tool_call_id"] == call_id
+
+    @pytest.mark.asyncio
+    async def test_resume_path_session_history_is_repaired_before_model_call(self) -> None:
+        """Session-history transcripts on resume paths should be normalized before calling model."""
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="ok",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        planner = MockPlanner(
+            plans=[
+                Plan(
+                    id="plan-model",
+                    goal="normalize resume transcript",
+                    steps=(PlanStep(id="model-1", type=StepType.MODEL, payload={}),),
+                ),
+                Plan(
+                    id="plan-terminal",
+                    goal="done",
+                    steps=(
+                        PlanStep(
+                            id="terminal-1",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                        ),
+                    ),
+                ),
+            ]
+        )
+
+        session_history = [
+            {"role": "tool", "tool_call_id": "call_1", "content": "from persisted session"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "lookup", "arguments": {"q": "resume"}}],
+            },
+            {"role": "tool", "tool_call_id": "orphan_call", "content": "drop me"},
+        ]
+
+        engine = LifecycleEngine(model=mock_model, planner=planner)
+        result = await engine.execute(
+            input_text="resume request",
+            agent_id="agent-task2",
+            budget=Budget(max_cycles=3),
+            context={"__session_history__": session_history},
+        )
+
+        assert result["success"] is True
+        sent_messages = mock_model.calls[0]["messages"]
+        assert sent_messages == [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "lookup", "arguments": {"q": "resume"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "from persisted session"},
+            {"role": "user", "content": "resume request"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_model_step_rejects_unrepairable_transcript_in_strict_mode(self) -> None:
+        """Strict transcript guard should block model call when pairs cannot be repaired."""
+        mock_model = MockModelAdapter()
+
+        messages = [
+            {"role": "user", "content": "find weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "missing tool result"},
+        ]
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_with_messages(messages, transcript_strict=True),
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="agent-task2",
+            budget=Budget(max_cycles=2),
+        )
+
+        assert result["success"] is False
+        assert len(mock_model.calls) == 0
+        assert any(
+            "Transcript integrity validation failed" in e.error.message
+            for e in result["errors"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_step_caps_oversized_tool_result_payloads(self) -> None:
+        """Configured tool-result guard should cap oversized persisted payloads."""
+        mock_model = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="ok",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
+                    cost_usd=0.0005,
+                )
+            ]
+        )
+
+        messages = [
+            {"role": "user", "content": "find weather"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "NYC"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "0123456789ABCDEF"},
+        ]
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=self._planner_with_messages(messages, max_tool_result_chars=8),
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="agent-task2",
+            budget=Budget(max_cycles=3),
+        )
+
+        assert result["success"] is True
+        assert len(mock_model.calls) == 1
+        sent_messages = mock_model.calls[0]["messages"]
+        assert sent_messages[2]["content"] == "01234567...[truncated 8 chars]"
 
 
 def _runtime_config(
