@@ -70,6 +70,9 @@ axis-core ask "Summarize the latest deployment status"
 
 # Interactive chat (resume by id)
 axis-core chat --session-id ops-room
+
+# Show which agent source/config the CLI resolves
+axis-core doctor
 ```
 
 Runtime flags are shared across `ask` and `chat`:
@@ -78,9 +81,23 @@ Runtime flags are shared across `ask` and `chat`:
 - `--planner <name>`
 - `--memory <name>`
 - `--system "<prompt>"`
+- `--from <module>:<callable_or_object>`: load a project agent/factory explicitly
+- `--standalone`: ignore project-bound agent config and use CLI defaults/env
 - `--timeout <seconds>`
 
 The `session` command namespace is reserved for future session-admin operations.
+
+### Project-Bound CLI (Optional)
+
+To make `axis-core ask/chat/doctor` use your project's canonical agent, configure:
+
+```toml
+[tool.axis_core]
+agent = "main:create_agent"
+```
+
+When present, the CLI loads that object/factory first. If not present, it falls back to the
+standalone CLI behavior (defaults from env/flags).
 
 ## Quick Start
 
@@ -94,8 +111,8 @@ def get_weather(city: str) -> str:
     return f"Weather in {city}: Sunny, 72F"
 
 
-async def main() -> None:
-    agent = Agent(
+def create_agent() -> Agent:
+    return Agent(
         tools=[get_weather],
         model="claude-sonnet-4-20250514",
         fallback=["gpt-4o"],
@@ -103,6 +120,10 @@ async def main() -> None:
         budget=Budget(max_cost_usd=0.50),
         system="You are a concise assistant.",
     )
+
+
+async def main() -> None:
+    agent = create_agent()
 
     result = await agent.run_async("What is the weather in Tokyo?")
     print(result.output)

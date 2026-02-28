@@ -32,6 +32,9 @@ All notable changes to this project will be documented in this file.
   guidance and `AXIS_SYNAPTIC_PATH` support.
 - Added CLI runtime commands: `axis-core ask` (single prompt) and `axis-core chat`
   (interactive session loop), plus a `session` namespace placeholder for future admin commands.
+- Added project-bound CLI agent resolution via `[tool.axis_core].agent` and explicit
+  `--from <module>:<callable_or_object>` overrides, plus `axis-core doctor` for resolved runtime
+  diagnostics.
 
 ### Changed
 
@@ -42,6 +45,8 @@ All notable changes to this project will be documented in this file.
   env-var controls in `.env.example`.
 - Budget tracking now consumes normalized usage fields instead of provider-specific usage payload
   shapes.
+- CLI runtime now prefers a configured project agent factory/object when available, while
+  preserving `--standalone` fallback to env/default-based agent construction.
 
 ## [0.8.0b] - 2026-02-13
 
