@@ -31,7 +31,12 @@ from axis_core.errors import (
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.redaction import redact_sensitive_data
-from axis_core.tool import Capability, ToolCallRecord, ToolContext
+from axis_core.tool import (
+    Capability,
+    ToolCallRecord,
+    ToolContext,
+    build_idempotency_key,
+)
 
 if TYPE_CHECKING:
     from axis_core.engine.lifecycle import LifecycleEngine
@@ -160,6 +165,30 @@ def _resolve_max_tool_result_chars(ctx: RunContext, step: PlanStep) -> int | Non
         return configured
 
     return _coerce_positive_int(os.getenv("AXIS_MAX_TOOL_RESULT_CHARS"))
+
+
+def _resolve_tool_idempotency_key(
+    ctx: RunContext,
+    step: PlanStep,
+    *,
+    tool_name: str,
+) -> str | None:
+    """Resolve explicit or generated idempotency key for a tool step."""
+    if "idempotency_key" in step.payload:
+        raw_key = step.payload.get("idempotency_key")
+        if raw_key is None:
+            return None
+        if isinstance(raw_key, str):
+            key = raw_key.strip()
+            return key if key else None
+        return str(raw_key)
+
+    return build_idempotency_key(
+        run_id=ctx.run_id,
+        cycle=ctx.cycle_count,
+        step_id=step.id,
+        tool_name=tool_name,
+    )
 
 
 def _resolve_context_window_guard_enabled(ctx: RunContext, step: PlanStep) -> bool:
@@ -476,6 +505,15 @@ async def _execute_tool_step(
         tool_retry=getattr(manifest, "retry", None),
     )
     max_attempts = max(1, retry_policy.max_attempts)
+    idempotency_key = _resolve_tool_idempotency_key(ctx, step, tool_name=tool_name)
+
+    try:
+        tool_signature = inspect.signature(tool_fn)
+        supports_ctx = "ctx" in tool_signature.parameters
+        supports_idempotency_key = "idempotency_key" in tool_signature.parameters
+    except (TypeError, ValueError):
+        supports_ctx = False
+        supports_idempotency_key = False
 
     await engine._emit(
         "tool_called",
@@ -483,7 +521,11 @@ async def _execute_tool_step(
         phase=Phase.ACT.value,
         cycle=ctx.cycle_count,
         step_id=step.id,
-        data={"tool": tool_name, "args": args},
+        data={
+            "tool": tool_name,
+            "args": args,
+            "idempotency_key": idempotency_key,
+        },
     )
 
     start = time.monotonic()
@@ -525,14 +567,16 @@ async def _execute_tool_step(
             )
             return cached_result
 
-    async def _invoke_tool_once() -> Any:
+    async def _invoke_tool_once(attempt: int) -> Any:
         tool_kwargs = dict(args)
         if "ctx" in tool_kwargs:
             tool_kwargs.pop("ctx")
-        try:
-            supports_ctx = "ctx" in inspect.signature(tool_fn).parameters
-        except (TypeError, ValueError):
-            supports_ctx = False
+        if (
+            supports_idempotency_key
+            and "idempotency_key" not in tool_kwargs
+            and idempotency_key is not None
+        ):
+            tool_kwargs["idempotency_key"] = idempotency_key
 
         if supports_ctx:
             tool_ctx = ToolContext(
@@ -542,6 +586,8 @@ async def _execute_tool_step(
                 context=ctx.context,
                 budget=ctx.budget,
                 budget_state=ctx.state.budget_state,
+                idempotency_key=idempotency_key,
+                retry_attempt=attempt,
             )
             return await tool_fn(ctx=tool_ctx, **tool_kwargs)
         return await tool_fn(**tool_kwargs)
@@ -555,11 +601,11 @@ async def _execute_tool_step(
             await engine.acquire_tool_slot(ctx, tool_name=tool_name, step_id=step.id)
             if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
                 result = await asyncio.wait_for(
-                    _invoke_tool_once(),
+                    _invoke_tool_once(attempt),
                     timeout=float(timeout_seconds),
                 )
             else:
-                result = await _invoke_tool_once()
+                result = await _invoke_tool_once(attempt)
             last_error = None
             break
         except Exception as e:

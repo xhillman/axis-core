@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
   thresholds and explicit non-recoverable blocking when limits are exceeded.
 - Added tool-result-first transcript pruning utilities and act-phase integration to trim old tool
   result payloads before guard block decisions.
+- Added tool idempotency support for retry paths: act-phase now propagates stable per-step
+  idempotency keys through `ToolContext` (and optional `idempotency_key` tool args), plus new
+  helper utilities (`build_idempotency_key`, `run_idempotent`, idempotent result get/set helpers)
+  for dedupe-safe side-effecting tools.
 
 ### Changed
 

@@ -8,10 +8,12 @@ from typing import Any
 import pytest
 
 from axis_core.budget import Budget
+from axis_core.config import RetryPolicy
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.protocols.model import ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
+from axis_core.tool import ToolContext, run_idempotent, tool
 
 
 class MockModelAdapter:
@@ -223,3 +225,124 @@ class TestActPhaseContextWindowGuard:
         sent_messages = model.calls[0]["messages"]
         assert all(msg.get("role") != "tool" for msg in sent_messages)
         assert any(event.type == "context_window_pruned" for event in telemetry.events)
+
+
+def _planner_with_tool(tool_name: str, *, idempotency_key: str | None) -> MockPlanner:
+    tool_payload: dict[str, Any] = {"tool": tool_name, "args": {}}
+    if idempotency_key is None:
+        tool_payload["idempotency_key"] = None
+    else:
+        tool_payload["idempotency_key"] = idempotency_key
+    return MockPlanner(
+        plans=[
+            Plan(
+                id="plan-tool",
+                goal="run tool",
+                steps=(
+                    PlanStep(
+                        id="tool-step",
+                        type=StepType.TOOL,
+                        payload=tool_payload,
+                    ),
+                    PlanStep(
+                        id="terminal-step",
+                        type=StepType.TERMINAL,
+                        payload={"output": "done"},
+                        dependencies=("tool-step",),
+                    ),
+                ),
+            )
+        ]
+    )
+
+
+class TestActPhaseToolIdempotency:
+    """Task 5 integration checks for idempotency key retry behavior."""
+
+    @pytest.mark.asyncio
+    async def test_retry_dedupes_side_effect_with_idempotency_key(self) -> None:
+        calls = {"attempts": 0, "side_effects": 0, "keys": []}
+
+        @tool(
+            retry=RetryPolicy(
+                max_attempts=2,
+                backoff="fixed",
+                initial_delay=0.0,
+                max_delay=0.0,
+                jitter=False,
+            )
+        )
+        async def side_effect_tool(ctx: ToolContext) -> str:
+            calls["attempts"] += 1
+            calls["keys"].append(ctx.idempotency_key)
+
+            async def side_effect() -> str:
+                calls["side_effects"] += 1
+                return f"effect-{calls['side_effects']}"
+
+            result = await run_idempotent(ctx, side_effect)
+            if calls["attempts"] == 1:
+                raise RuntimeError("transient failure after side effect")
+            return result
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_tool("side_effect_tool", idempotency_key="idem-fixed"),
+            tools={"side_effect_tool": side_effect_tool},
+        )
+
+        result = await engine.execute(
+            input_text="run tool",
+            agent_id="act-idempotency-hit",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        assert result["success"] is True
+        assert calls["attempts"] == 2
+        assert calls["side_effects"] == 1
+        assert calls["keys"] == ["idem-fixed", "idem-fixed"]
+
+    @pytest.mark.asyncio
+    async def test_retry_duplicates_side_effect_when_idempotency_disabled(self) -> None:
+        calls = {"attempts": 0, "side_effects": 0, "keys": []}
+
+        @tool(
+            retry=RetryPolicy(
+                max_attempts=2,
+                backoff="fixed",
+                initial_delay=0.0,
+                max_delay=0.0,
+                jitter=False,
+            )
+        )
+        async def side_effect_tool(ctx: ToolContext) -> str:
+            calls["attempts"] += 1
+            calls["keys"].append(ctx.idempotency_key)
+
+            async def side_effect() -> str:
+                calls["side_effects"] += 1
+                return f"effect-{calls['side_effects']}"
+
+            result = await run_idempotent(ctx, side_effect)
+            if calls["attempts"] == 1:
+                raise RuntimeError("transient failure after side effect")
+            return result
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_tool("side_effect_tool", idempotency_key=None),
+            tools={"side_effect_tool": side_effect_tool},
+        )
+
+        result = await engine.execute(
+            input_text="run tool",
+            agent_id="act-idempotency-miss",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        assert result["success"] is True
+        assert calls["attempts"] == 2
+        assert calls["side_effects"] == 2
+        assert calls["keys"] == [None, None]

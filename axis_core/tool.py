@@ -4,6 +4,7 @@ This module provides the complete tool system including:
 - Capability enum for security declarations
 - ToolManifest for tool metadata
 - ToolContext for runtime context with read-only budget access
+- Idempotency helpers for safe side-effect dedupe across retries
 - ToolCallRecord for execution tracking
 - RateLimiter for rate limiting with token bucket algorithm
 - generate_tool_schema() for automatic JSON schema generation
@@ -17,7 +18,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, cast, get_args, get_origin, get_type_hints
 
 from axis_core.budget import Budget, BudgetState
 from axis_core.config import RetryPolicy
@@ -85,6 +86,8 @@ class ToolContext:
         context: Mutable dict for sharing state between tools
         budget: Budget configuration (read-only)
         budget_state: Current budget consumption (read-only)
+        idempotency_key: Optional stable key for dedupe-safe side effects
+        retry_attempt: Current retry attempt number (1-indexed)
     """
 
     run_id: str
@@ -93,6 +96,8 @@ class ToolContext:
     context: dict[str, object]
     budget: Budget
     budget_state: BudgetState
+    idempotency_key: str | None = None
+    retry_attempt: int = 1
     _initialized: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -106,9 +111,84 @@ class ToolContext:
         while allowing context dict reassignment and normal initialization.
         """
         if getattr(self, "_initialized", False):
-            if name in ("run_id", "agent_id", "cycle", "budget", "budget_state"):
+            if name in (
+                "run_id",
+                "agent_id",
+                "cycle",
+                "budget",
+                "budget_state",
+                "idempotency_key",
+                "retry_attempt",
+            ):
                 raise AttributeError(f"ToolContext.{name} is read-only")
         object.__setattr__(self, name, value)
+
+
+_IDEMPOTENCY_RESULTS_CONTEXT_KEY = "__axis_idempotency_results__"
+
+
+def build_idempotency_key(*, run_id: str, cycle: int, step_id: str, tool_name: str) -> str:
+    """Build a stable tool idempotency key for a specific run/cycle/step."""
+    return f"axis:{run_id}:{cycle}:{step_id}:{tool_name}"
+
+
+def _get_idempotency_store(ctx: ToolContext) -> dict[str, Any]:
+    raw_store = ctx.context.get(_IDEMPOTENCY_RESULTS_CONTEXT_KEY)
+    if isinstance(raw_store, dict):
+        return cast(dict[str, Any], raw_store)
+
+    store: dict[str, Any] = {}
+    ctx.context[_IDEMPOTENCY_RESULTS_CONTEXT_KEY] = store
+    return store
+
+
+def get_idempotent_result(
+    ctx: ToolContext,
+    *,
+    key: str | None = None,
+) -> tuple[bool, Any]:
+    """Return cached idempotent result for key or context key."""
+    effective_key = key if key is not None else ctx.idempotency_key
+    if effective_key is None:
+        return (False, None)
+
+    store = _get_idempotency_store(ctx)
+    if effective_key not in store:
+        return (False, None)
+    return (True, store[effective_key])
+
+
+def set_idempotent_result(
+    ctx: ToolContext,
+    result: Any,
+    *,
+    key: str | None = None,
+) -> None:
+    """Persist idempotent result in tool context using key or context key."""
+    effective_key = key if key is not None else ctx.idempotency_key
+    if effective_key is None:
+        return
+
+    store = _get_idempotency_store(ctx)
+    store[effective_key] = result
+
+
+async def run_idempotent(
+    ctx: ToolContext,
+    operation: Callable[[], Any],
+    *,
+    key: str | None = None,
+) -> Any:
+    """Run operation and memoize result by idempotency key when available."""
+    found, cached_result = get_idempotent_result(ctx, key=key)
+    if found:
+        return cached_result
+
+    result = operation()
+    if inspect.isawaitable(result):
+        result = await result
+    set_idempotent_result(ctx, result, key=key)
+    return result
 
 
 @dataclass(frozen=True)
@@ -439,6 +519,10 @@ __all__ = [
     "Capability",
     "ToolManifest",
     "ToolContext",
+    "build_idempotency_key",
+    "get_idempotent_result",
+    "set_idempotent_result",
+    "run_idempotent",
     "generate_tool_schema",
     "tool",
 ]

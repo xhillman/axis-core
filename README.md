@@ -13,7 +13,8 @@ A modular, observable AI agent framework for building production-ready agents in
 - Built-in model fallback for recoverable provider errors
 - Transcript integrity normalization for tool-call/tool-result pairing before model calls
 - Optional context-window guard with tool-result-first pruning before model calls
-- Tool system with `@tool`, schema generation, and destructive-action confirmation hooks
+- Tool system with `@tool`, schema generation, destructive-action confirmation hooks, and
+  idempotency helpers for retry-safe side effects
 - Runtime policy enforcement (timeouts, retries, rate limits, cache)
 - Checkpoint/resume support for phase-boundary recovery
 - Budget controls for cost, token, and cycle limits
@@ -98,6 +99,29 @@ Optional controls:
   below threshold.
 - `AXIS_CONTEXT_PRUNE_ENABLED=true`: opt in to tool-result-first transcript pruning before block
   decisions.
+
+## Tool Idempotency
+
+Tool execution now propagates a stable per-step idempotency key through retry attempts:
+
+- Available in `ToolContext.idempotency_key` for tools that accept `ctx: ToolContext`.
+- Injected into the `idempotency_key` argument automatically when a tool function declares it.
+
+For in-tool dedupe, use `run_idempotent(...)` to memoize side-effect results by key:
+
+```python
+from axis_core import ToolContext, tool
+from axis_core.tool import run_idempotent
+
+
+@tool
+async def send_invoice(ctx: ToolContext, customer_id: str) -> str:
+    async def send_once() -> str:
+        # external side effect
+        return f"invoice:{customer_id}"
+
+    return await run_idempotent(ctx, send_once)
+```
 
 ## Documentation
 
