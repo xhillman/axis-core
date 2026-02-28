@@ -1,0 +1,414 @@
+# axis-core llms.txt
+# Generated for AI coding agent consumption. Describes external usage surface only.
+
+## Overview
+`axis-core` is a Python 3.10+ async-first agent runtime with a pluggable lifecycle (`initialize -> observe -> plan -> act -> evaluate -> finalize`). External consumers typically use `Agent` + `@tool`, optionally with adapter strings (`model`, `planner`, `memory`) resolved via registries. Install core with `pip install axis-core`; install provider/backing extras as needed (`axis-core[anthropic]`, `axis-core[openai]`, `axis-core[redis]`, `axis-core[sqlite]`, `axis-core[full]`).
+Core runtime behavior is code-defined; when docs/comments disagree, implementation behavior below is authoritative.
+
+## Import Reference
+`from axis_core import ...` (package-level canonical re-exports)
+- `__version__`
+- `Agent`
+- Tool API: `tool`, `ToolContext`, `ToolManifest`, `Capability`
+- Budget API: `Budget`, `BudgetState`
+- Config API: `config`, `Timeouts`, `RetryPolicy`, `RateLimits`, `CacheConfig`, `ToolPolicy`
+- Errors: `AxisError`, `InputError`, `ConfigError`, `PlanError`, `ToolError`, `ModelError`, `BudgetError`, `TimeoutError`, `CancelledError`, `ConcurrencyError`, `ErrorClass`, `ErrorRecord`
+- Results: `RunResult`, `StreamEvent`, `RunStats`
+- Context/session/attachments: `RunContext`, `RunState`, `Session`, `Message`, `Attachment`, `Image`, `PDF`, `CancelToken`
+
+`from axis_core.protocols import ...` (adapter contracts)
+- Model: `ModelAdapter`, `ModelResponse`, `ModelChunk`, `ToolCall`, `UsageStats` (`UsageStats` is alias of `NormalizedUsage`)
+- Memory: `MemoryAdapter`, `MemoryItem`, `MemoryCapability`, `SessionStore`
+- Planner: `Planner`, `Plan`, `PlanStep`, `StepType`
+- Telemetry: `TelemetrySink`, `TraceEvent`, `BufferMode`
+
+Other public modules (direct import paths)
+- `axis_core.config`: `Timeouts`, `RetryPolicy`, `RateLimits`, `CacheConfig`, `ToolPolicy`, `deep_merge`, `ResolvedConfig`, `Config`, `config`
+- `axis_core.tool`: `Capability`, `ToolManifest`, `ToolContext`, `build_idempotency_key`, `get_idempotent_result`, `set_idempotent_result`, `run_idempotent`, `generate_tool_schema`, `tool`
+- `axis_core.result`: `RunResult`, `RunStats`, `StreamEvent`
+- `axis_core.context`: `NormalizedInput`, `Observation`, `ExecutionResult`, `EvalDecision`, `ModelCallRecord`, `CycleState`, `RunState`, `RunContext`, `ContextWindowAssessment`, `ContextWindowGuard`, `WARN_CONTEXT_SIZE`, `MAX_CONTEXT_SIZE`, `estimate_transcript_tokens`, `normalize_transcript_messages`, `prune_messages_for_context_window`
+- `axis_core.session`: `ContentPart`, `Message`, `Session`, `SESSION_PREFIX`, `generate_session_id`
+- `axis_core.attachments`: `Attachment`, `Image`, `PDF`, `serialize_attachments`
+- `axis_core.cancel`: `CancelToken`
+- `axis_core.redaction`: `REDACTED_VALUE`, `is_sensitive_key`, `redact_sensitive_string`, `redact_sensitive_data`, `persist_sensitive_tool_data_enabled`
+- `axis_core.checkpoint`: `create_checkpoint`, `parse_checkpoint`
+- `axis_core.engine`: `LifecycleEngine`, `Phase`
+- `axis_core.engine.registry`: `AdapterRegistry`, `ModelRegistry`, `MemoryRegistry`, `PlannerRegistry`, `model_registry`, `memory_registry`, `planner_registry`, `make_lazy_factory`
+- `axis_core.engine.resolver`: `resolve_adapter`
+- `axis_core.engine.trace_collector`: `TraceCollector`
+- `axis_core.engine.phases`: `initialize`, `observe`, `plan`, `act`, `evaluate`, `finalize`
+- `axis_core.adapters.models`: `AnthropicModel`, `OpenAIModel`, `OpenAIResponsesModel`, `MODEL_PRICING`, `OPENAI_PRICING` (availability depends on optional deps)
+- `axis_core.adapters.memory`: `EphemeralMemory`, `SQLiteMemory`, `RedisMemory`, `SynapticAxisMemory` (last one is optional external package)
+- `axis_core.adapters.planners`: `SequentialPlanner`, `AutoPlanner`, `ReActPlanner`
+- `axis_core.adapters.telemetry`: `ConsoleSink`, `FileSink`, `CallbackSink`
+- `axis_core.adapters.telemetry.callback`: `TelemetryHandler`
+
+## API Reference
+### `Agent`
+- **Signature:** `Agent(tools: list[Callable[..., Any]] | None = None, *, system: str | None = None, persona: str | None = None, model: Any = _UNSET, fallback: list[Any] | None = None, memory: Any = _UNSET, planner: Any = _UNSET, budget: dict[str, Any] | Budget | None = None, timeouts: dict[str, Any] | Timeouts | None = None, rate_limits: dict[str, Any] | RateLimits | None = None, retry: dict[str, Any] | RetryPolicy | None = None, cache: dict[str, Any] | CacheConfig | None = None, tool_policy: dict[str, Any] | ToolPolicy | None = None, telemetry: bool | list[Any] = True, verbose: bool = False, auth: dict[str, dict[str, Any]] | None = None, confirmation_handler: Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None = None, checkpoint: bool = False, checkpoint_dir: str = "./checkpoints")`
+- **Purpose:** Primary external runtime API for executing one-shot, streaming, and checkpoint-resume agent runs.
+- **Parameters:**
+  `model/planner/memory`: adapter instance or registered string id (resolved at runtime).
+  `fallback`: fallback model chain.
+  `tools`: callables (ideally `@tool`-decorated).
+  `telemetry`: `True` => resolve sinks from env; `False` => disabled; `list` => explicit sinks.
+- **Returns:** `Agent` instance.
+- **Raises:** `TypeError` for invalid constructor argument types.
+- **Usage example:**
+```python
+from axis_core import Agent, tool
+
+@tool
+def ping() -> str:
+    return "pong"
+
+agent = Agent(tools=[ping], model="claude-sonnet", planner="sequential", memory="ephemeral")
+result = agent.run("use ping")
+```
+- **Gotchas:**
+  `run()/resume()/session()` cannot be called from a running async loop.
+  Single-execution lock prevents concurrent runs on same instance.
+  Empty input returns failed `RunResult` (does not raise to caller in `run_async`).
+  `auth` is deprecated and ignored.
+
+### `Agent.run_async` / `run`
+- **Signature:** `run_async(input: str | list[Any], *, context: dict[str, Any] | None = None, attachments: list[AttachmentLike] | None = None, output_schema: type | None = None, timeout: float | None = None, cancel_token: CancelToken | None = None) -> RunResult`
+- **Purpose:** Execute full lifecycle and return immutable `RunResult`.
+- **Raises:** `TypeError` for invalid input type; `RuntimeError` when already executing.
+- **Usage example:**
+```python
+result = await agent.run_async("hello", context={"user_id": "u1"})
+```
+- **Gotchas:** `timeout` wraps full run via `asyncio.wait_for`; timeout and budget exhaustion are returned as failed `RunResult.error`.
+
+### `Agent.stream_async` / `stream`
+- **Signature:** `stream_async(..., stream_telemetry: bool = False) -> AsyncIterator[StreamEvent]`
+- **Purpose:** Stream run lifecycle as events (`run_started`, `model_token`, `telemetry` opt-in, final event).
+- **Usage example:**
+```python
+async for ev in agent.stream_async("hello", stream_telemetry=True):
+    if ev.is_token:
+        print(ev.token, end="")
+```
+- **Gotchas:** final event type is `run_completed` or `run_failed`; telemetry events are redacted by default.
+
+### `Agent.resume_async` / `resume`
+- **Signature:** `resume_async(checkpoint: str | dict[str, Any], *, timeout: float | None = None, cancel_token: CancelToken | None = None) -> RunResult`
+- **Purpose:** Resume run from checkpoint payload or JSON file path.
+- **Raises:** `TypeError` for invalid checkpoint type; `ConfigError` wrapped into failed result when payload/file invalid.
+- **Usage example:**
+```python
+result = await agent.resume_async("./checkpoints/<run_id>.json")
+```
+- **Gotchas:** only pre-finalize phase boundaries are resumable.
+
+### `Agent.session_async` / `session`
+- **Signature:** `session_async(id: str | None = None, *, max_history: int = 100) -> Session`
+- **Purpose:** Create or resume a session object bound to this agent/memory.
+- **Gotchas:** if memory load fails, new in-memory `Session` is created and attached.
+
+### `tool`
+- **Signature:** `tool(func: Callable[..., Any] | None = None, *, name: str | None = None, description: str | None = None, capabilities: list[Capability] | None = None, cache_ttl: int | None = None, rate_limit: str | None = None, timeout: float | None = None, retry: RetryPolicy | None = None) -> Callable[..., Any]`
+- **Purpose:** Decorator that wraps function into async callable and attaches `_axis_manifest` metadata.
+- **Returns:** async wrapper function.
+- **Usage example:**
+```python
+from axis_core import tool, Capability
+
+@tool(capabilities=[Capability.NETWORK], timeout=20.0)
+async def fetch(url: str) -> str:
+    return "ok"
+```
+- **Gotchas:** wrapper is always async; non-decorated callables are accepted but may be skipped for model tool schema extraction.
+
+### `ToolManifest`
+- **Signature:** `ToolManifest(name: str, description: str, input_schema: dict[str, Any], output_schema: dict[str, Any], capabilities: tuple[Capability, ...], cache_ttl: int | None = None, rate_limit: str | None = None, timeout: float | None = None, retry: RetryPolicy | None = None)`
+- **Purpose:** Immutable tool metadata used by planner/model adapters.
+
+### `ToolContext`
+- **Signature:** `ToolContext(run_id: str, agent_id: str, cycle: int, context: dict[str, object], budget: Budget, budget_state: BudgetState, idempotency_key: str | None = None, retry_attempt: int = 1)`
+- **Purpose:** Runtime context injected into tools that accept `ctx` parameter.
+- **Gotchas:** fields except `context` are read-only after init.
+
+### `build_idempotency_key` / `get_idempotent_result` / `set_idempotent_result` / `run_idempotent`
+- **Signature:**
+  `build_idempotency_key(*, run_id: str, cycle: int, step_id: str, tool_name: str) -> str`
+  `get_idempotent_result(ctx: ToolContext, *, key: str | None = None) -> tuple[bool, Any]`
+  `set_idempotent_result(ctx: ToolContext, result: Any, *, key: str | None = None) -> None`
+  `run_idempotent(ctx: ToolContext, operation: Callable[[], Any], *, key: str | None = None) -> Any`
+- **Purpose:** tool-level dedupe helpers for side-effect safety across retries.
+
+### `generate_tool_schema`
+- **Signature:** `generate_tool_schema(func: Callable[..., Any]) -> dict[str, Any]`
+- **Purpose:** Build JSON input schema from function signature/type hints.
+- **Raises:** `TypeError` for unsupported multi-type unions (only `T | None` supported).
+- **Gotchas:** skips `ctx` parameter automatically.
+
+### `Capability`
+- **Signature:** `Enum[str]`
+- **Members:** `NETWORK`, `FILESYSTEM`, `DATABASE`, `EMAIL`, `PAYMENT`, `DESTRUCTIVE`, `SUBPROCESS`, `SECRETS`.
+- **Purpose:** Declares tool risk/scope metadata used for policy/confirmation behavior.
+
+### `Budget` / `BudgetState`
+- **Signature:**
+  `Budget(max_cycles: int = 10, max_tool_calls: int = 50, max_model_calls: int = 20, max_cost_usd: float = 1.0, max_wall_time_seconds: float = 300.0, max_input_tokens: int | None = None, max_output_tokens: int | None = None, warn_at_cost_usd: float = 0.8)`
+  `BudgetState(cycles: int = 0, tool_calls: int = 0, model_calls: int = 0, input_tokens: int = 0, output_tokens: int = 0, cost_usd: float = 0.0, wall_time_seconds: float = 0.0)`
+- **Purpose:** Declare and track run resource limits.
+- **Methods:** `record_model_usage`, `is_exhausted`, `should_warn`, remaining helpers.
+
+### `Timeouts`, `RetryPolicy`, `RateLimits`, `CacheConfig`, `ToolPolicy`
+- **Signature:**
+  `Timeouts(observe=10.0, plan=30.0, act=60.0, evaluate=5.0, finalize=30.0, total=300.0)`
+  `RetryPolicy(max_attempts=3, backoff="exponential", initial_delay=1.0, max_delay=60.0, jitter=True, retry_on: list[str] | None = None)`
+  `RateLimits(model_calls: str | None = None, tool_calls: str | None = None, requests: str | None = None)`
+  `CacheConfig(enabled=True, model_responses=True, tool_results=True, ttl=3600, backend="memory", max_size_mb=100)`
+  `ToolPolicy(allow: tuple[str, ...] = (), deny: tuple[str, ...] = ())`
+- **Purpose:** Runtime policy/config dataclasses.
+- **Key methods:** `RateLimits.parse_rate(field_name)`, `ToolPolicy.evaluate(tool_name)`.
+- **Gotchas:** deny patterns override allow patterns.
+
+### `deep_merge`
+- **Signature:** `deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]`
+- **Purpose:** recursive dict merge utility (override wins).
+
+### `ResolvedConfig`, `Config`, `config`
+- **Signature:** `ResolvedConfig(...)`, `Config()`, module singleton `config: Config`
+- **Purpose:** runtime-resolved policy bundle + mutable global defaults singleton.
+- **Gotchas:** `from axis_core import config` returns singleton object (not module).
+
+### `RunResult`, `RunStats`, `StreamEvent`
+- **Signature:**
+  `RunStats(cycles, tool_calls, model_calls, input_tokens, output_tokens, total_tokens, cost_usd, duration_ms)`
+  `StreamEvent(type: str, timestamp: datetime, data: dict[str, Any], sequence: int | None = None)`
+  `RunResult(output: Any, output_raw: str, success: bool, error: AxisError | None, had_recoverable_errors: bool, stats: RunStats, trace: list[TraceEvent], state: RunState, run_id: str, memory_error: AxisError | None = None)`
+- **Purpose:** immutable run outputs/telemetry.
+- **Helpers:** `StreamEvent.is_token`, `StreamEvent.token`, `StreamEvent.is_final`, `RunResult.copy(...)`.
+
+### `ErrorClass`, `AxisError`, error subclasses, `ErrorRecord`
+- **Signature:**
+  `ErrorClass(Enum): INPUT, CONFIG, PLAN, TOOL, MODEL, BUDGET, TIMEOUT, CANCELLED, RUNTIME`
+  `AxisError(message: str, error_class: ErrorClass, phase: str | None = None, cycle: int | None = None, step_id: str | None = None, recoverable: bool = False, retry_after: float | None = None, details: dict[str, object] = {}, cause: Exception | None = None)`
+  Subclasses: `InputError`, `ConfigError`, `PlanError`, `TimeoutError`, `CancelledError`, `ConcurrencyError`, `ToolError`, `ModelError`, `BudgetError`
+  `ErrorRecord(error: AxisError, timestamp: datetime, phase: str, cycle: int, recovered: bool)`
+- **Purpose:** typed failure representation with recoverability metadata.
+- **ModelError helpers:** `from_exception`, `is_reason_recoverable`, `reason_from_status_code`.
+
+### `RunContext`, `RunState`, lifecycle data classes
+- **Key signatures:**
+  `RunContext(...)` (mutable run envelope; `run_id/agent_id/input` become read-only)
+  `RunState(...)` (append-only history + current cycle state)
+  `NormalizedInput`, `Observation`, `ExecutionResult`, `EvalDecision`, `ModelCallRecord`, `CycleState`, `ContextWindowGuard`, `ContextWindowAssessment`
+- **Purpose:** serialization/checkpointable state and transcript management.
+- **Exported helpers/constants:** `WARN_CONTEXT_SIZE`, `MAX_CONTEXT_SIZE`, `normalize_transcript_messages`, `estimate_transcript_tokens`, `prune_messages_for_context_window`.
+
+### `Session`, `Message`, `ContentPart`, `generate_session_id`, `SESSION_PREFIX`
+- **Signature:**
+  `ContentPart(type: str, data: str | bytes, mime_type: str | None = None)`
+  `Message(role: str, content: str | list[ContentPart], timestamp: datetime = now, run_id: str | None = None, tool_calls: list[dict[str, Any]] | None = None)`
+  `Session(id: str, version: int = 0, history: list[Message] = [], max_history: int = 100, metadata: dict[str, Any] = {}, ...)`
+  `generate_session_id() -> str`
+  `SESSION_PREFIX = "session:"`
+- **Purpose:** multi-turn history + optimistic concurrency persistence.
+- **Gotchas:** `Session.add_message` truncates oldest messages beyond `max_history`.
+
+### `Attachment`, `Image`, `PDF`, `serialize_attachments`
+- **Signature:**
+  `Attachment(data: bytes, mime_type: str, filename: str | None = None)` with `from_file(path)`
+  `Image(Attachment)` (mime must start `image/`)
+  `PDF(Attachment)` (mime must be `application/pdf`)
+  `serialize_attachments(attachments: Iterable[Attachment | dict[str, Any]]) -> list[dict[str, Any]]`
+- **Purpose:** eager-load binary attachment metadata for model calls.
+- **Raises:** `FileNotFoundError`, `ValueError` (size > 10MB or invalid mime), `TypeError` for unsupported attachment type in serializer.
+
+### `CancelToken`
+- **Signature:** `CancelToken(); cancel(reason: str = "Cancelled by user")`
+- **Purpose:** cooperative cancellation signal.
+- **Properties:** `is_cancelled`, `reason`.
+
+### `create_checkpoint`, `parse_checkpoint`
+- **Signature:**
+  `create_checkpoint(ctx: RunContext, *, phase: str, next_phase: str | None = None) -> dict[str, Any>`
+  `parse_checkpoint(data: dict[str, Any]) -> tuple[RunContext, str, str | None]`
+- **Purpose:** phase-boundary checkpoint envelope creation/validation.
+- **Raises:** `ConfigError` for invalid version/shape.
+
+### `LifecycleEngine`, `Phase`
+- **Signature:**
+  `Phase(Enum): INITIALIZE, OBSERVE, PLAN, ACT, EVALUATE, FINALIZE`
+  `LifecycleEngine(model, planner, memory=None, telemetry=None, tools=None, system=None, fallback=None, checkpoint_handler=None)`
+  primary methods: `execute(...)`, `resume(...)`.
+- **Purpose:** orchestration API for engine-level integration/tests.
+- **Gotchas:** resolves string adapters immediately; model/planner required.
+
+### `resolve_adapter`
+- **Signature:** `resolve_adapter(value: str | T | None, registry: AdapterRegistry[T], **kwargs: Any) -> T | None`
+- **Purpose:** resolve string adapter IDs via registry, or pass through adapter instance/None.
+- **Raises:** `ConfigError` unknown adapter id; `TypeError` invalid primitive type.
+
+### `AdapterRegistry` family and globals
+- **Signature:** `AdapterRegistry(entry_point_group: str | None = None)`, `register/get/list`
+- **Globals:** `model_registry`, `memory_registry`, `planner_registry`
+- **Purpose:** adapter discovery and registration.
+- **Gotchas:** built-in adapters auto-register when `axis_core.engine.registry` is imported.
+
+### `TraceCollector`
+- **Signature:** `TraceCollector()` with `emit/flush/close/get_events/clear`
+- **Purpose:** in-memory telemetry sink used to populate `RunResult.trace`.
+
+### Protocols (`axis_core.protocols.*`)
+- **Model:** `NormalizedUsage`, `ToolCall`, `ModelResponse`, `ModelChunk`, `ModelAdapter`
+- **Memory:** `MemoryCapability`, `MemoryItem`, `MemoryAdapter`, `SessionStore`
+- **Planner:** `StepType`, `PlanStep`, `Plan`, `Planner`
+- **Telemetry:** `BufferMode`, `TraceEvent`, `TelemetrySink`
+- **Purpose:** structural contracts for custom adapters.
+
+### Built-in model adapters
+- **`AnthropicModel` signature:** `AnthropicModel(model_id: str, api_key: str | None = None, temperature: float = 1.0, max_tokens: int = 4096)`
+- **`OpenAIModel` signature:** `OpenAIModel(model_id: str, api_key: str | None = None, temperature: float = 1.0, max_tokens: int = 4096)`
+- **`OpenAIResponsesModel` signature:** same constructor.
+- **Purpose:** provider adapters implementing `ModelAdapter`.
+- **Raises:** `ValueError` if API key missing; `ModelError` on API failures.
+- **Gotchas:** `OpenAIModel` auto-routes certain model IDs to `OpenAIResponsesModel` backend.
+
+### Built-in memory adapters
+- **`EphemeralMemory` signature:** `EphemeralMemory()`
+- **`SQLiteMemory` signature:** `SQLiteMemory(db_path: str = "axis_memory.db")` (+ `initialize/close` or async context manager)
+- **`RedisMemory` signature:** `RedisMemory(client: redis.asyncio.Redis, key_prefix: str = "axis:")`
+- **Purpose:** memory/session persistence backends.
+- **Gotchas:** `EphemeralMemory` and `SQLiteMemory` reject `ttl`/`namespace` with `ValueError`; session writes use optimistic version checks and can raise `ConcurrencyError`.
+
+### Built-in planners
+- **`SequentialPlanner` signature:** `SequentialPlanner(); plan(...) -> Plan`
+- **`AutoPlanner` signature:** `AutoPlanner(model: Any); plan(...) -> Plan`
+- **`ReActPlanner` signature:** `ReActPlanner(model: Any, max_iterations: int = 10); plan(...) -> Plan`
+- **Gotchas:** `AutoPlanner` falls back to sequential on any model/JSON/validation failure, marking metadata with fallback reason.
+
+### Built-in telemetry sinks
+- **`ConsoleSink` signature:** `ConsoleSink(output: TextIO | None = None, compact: bool = False, redact: bool = True)`
+- **`FileSink` signature:** `FileSink(path: str | Path, *, batch_size: int = 100, buffering: BufferMode = BufferMode.BATCHED, redact: bool = True)`
+- **`CallbackSink` signature:** `CallbackSink(handler: TelemetryHandler, *, buffering: BufferMode = BufferMode.IMMEDIATE, redact: bool = True)`
+- **Purpose:** concrete `TelemetrySink` implementations.
+- **Raises:** `FileSink` `ValueError` if `batch_size < 1`; `CallbackSink` `TypeError` if handler not callable; runtime errors if emitting after close.
+
+### Redaction API
+- **`REDACTED_VALUE` signature:** `str = "[REDACTED]"`
+- **`is_sensitive_key(key: str) -> bool`**
+- **`redact_sensitive_string(value: str) -> str`**
+- **`redact_sensitive_data(value: Any) -> Any`**
+- **`persist_sensitive_tool_data_enabled() -> bool`**
+- **Purpose:** telemetry/state redaction utilities.
+
+## Configuration
+Required runtime deps
+- Core install: `pip install axis-core`
+- Core deps from package metadata: `pydantic>=2.0`, `python-dotenv>=1.0`, `httpx>=0.24`
+
+Optional dependencies and what they unlock
+- `axis-core[anthropic]`: Anthropic model adapter (`AnthropicModel`, Claude IDs)
+- `axis-core[openai]`: OpenAI model adapter (`OpenAIModel`, responses routing)
+- `axis-core[openrouter]`: OpenAI-compatible endpoint path via OpenAI SDK
+- `axis-core[sqlite]`: `SQLiteMemory`
+- `axis-core[redis]`: `RedisMemory`
+- `synaptic-core>=0.1.1` (separate): `SynapticAxisMemory` registration
+
+Environment variables read by implementation
+- Provider auth: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+- Default adapter ids (`Config` singleton): `AXIS_DEFAULT_MODEL`, `AXIS_DEFAULT_PLANNER`, `AXIS_DEFAULT_MEMORY`
+- Config flags (`Config` singleton): `AXIS_TELEMETRY`, `AXIS_VERBOSE`, `AXIS_DEBUG`
+- Telemetry sink resolution (`Agent`): `AXIS_TELEMETRY_SINK`, `AXIS_TELEMETRY_REDACT`, `AXIS_TELEMETRY_COMPACT`, `AXIS_TELEMETRY_FILE`, `AXIS_TELEMETRY_CALLBACK`, `AXIS_TELEMETRY_BUFFER_MODE`, `AXIS_TELEMETRY_BATCH_SIZE`
+- Transcript/context guards (`act` phase): `AXIS_CONTEXT_STRATEGY`, `AXIS_MAX_CYCLE_CONTEXT`, `AXIS_TRANSCRIPT_STRICT`, `AXIS_MAX_TOOL_RESULT_CHARS`, `AXIS_CONTEXT_GUARD_ENABLED`, `AXIS_CONTEXT_WINDOW_TOKENS`, `AXIS_CONTEXT_GUARD_WARN_TOKENS`, `AXIS_CONTEXT_GUARD_BLOCK_TOKENS`, `AXIS_CONTEXT_PRUNE_ENABLED`
+- Redaction persistence control: `AXIS_PERSIST_SENSITIVE_TOOL_DATA`
+- Synaptic default db path registration: `AXIS_SYNAPTIC_PATH`
+
+## Common Patterns
+```python
+# 1) Minimal async run
+from axis_core import Agent
+
+agent = Agent(model="claude-sonnet", planner="sequential", memory="ephemeral")
+result = await agent.run_async("hello")
+print(result.success, result.output)
+```
+
+```python
+# 2) Define a tool and call it
+from axis_core import Agent, tool
+
+@tool
+def add(a: int, b: int) -> int:
+    return a + b
+
+agent = Agent(tools=[add], model="gpt-4o", planner="sequential")
+print((await agent.run_async("add 2 and 3")).output)
+```
+
+```python
+# 3) Stream tokens
+async for event in agent.stream_async("explain this"):
+    if event.is_token and event.token:
+        print(event.token, end="")
+```
+
+```python
+# 4) Use tool idempotency helpers
+from axis_core import ToolContext, tool
+from axis_core.tool import run_idempotent
+
+@tool
+async def charge(ctx: ToolContext, customer_id: str) -> str:
+    async def once() -> str:
+        return f"charged:{customer_id}"
+    return await run_idempotent(ctx, once)
+```
+
+```python
+# 5) Sessioned chat
+session = await agent.session_async(id="support-room", max_history=50)
+await session.run_async("hello")
+await session.run_async("summarize previous answer")
+```
+
+```python
+# 6) Resolve adapters explicitly (extension/integration)
+from axis_core.engine.registry import model_registry
+from axis_core.engine.resolver import resolve_adapter
+
+model = resolve_adapter("claude-haiku", model_registry, api_key="...")
+```
+
+```python
+# 7) Tool policy allow/deny
+from axis_core import Agent, ToolPolicy
+
+agent = Agent(
+    tools=[...],
+    tool_policy=ToolPolicy(allow=("safe_*",), deny=("safe_delete_*",)),
+)
+```
+
+```python
+# 8) Checkpoint + resume
+agent = Agent(model="gpt-4o", planner="sequential", checkpoint=True)
+first = await agent.run_async("long workflow")
+resumed = await agent.resume_async(f"./checkpoints/{first.run_id}.json")
+```
+
+## Known Limitations & Gotchas
+- `Agent` has single-run lock; use multiple `Agent` instances for concurrent executions.
+- `run()/session()/resume()` are sync wrappers and fail when called inside an active async loop.
+- `output_schema` argument is currently accepted but not enforced in runtime execution.
+- `persona` constructor arg is stored but not consumed by lifecycle/model calls.
+- Tool decorator currently uses fixed `output_schema={"type":"string"}` (return-type inference not implemented).
+- Unknown model IDs in pricing tables produce estimated cost `0.0`.
+- Runtime cache currently supports only in-memory backend; non-memory cache backend config is downgraded with warning.
+- `EphemeralMemory`/`SQLiteMemory` do not support TTL or namespaces.
+- `SQLiteMemory` must be initialized (`await initialize()` or async context manager) before use.
+- Session persistence uses optimistic versioning; stale writes raise `ConcurrencyError`.
+- Destructive tools (`Capability.DESTRUCTIVE`) require a confirmation handler or fail with `ToolError`.
+
+## Discrepancies Found
+- [NOTE: docstring mismatch] `Agent.run_async(... output_schema=...)` and `RunResult` docs imply structured output enforcement, but runtime path never uses `output_schema`.
+- [NOTE: docstring mismatch] `Session.run_async(... output_schema=...)` forwards `output_schema`, but downstream runtime still ignores it.
+- [NOTE: docstring mismatch] `SQLiteMemory` module/class docs describe FTS5 keyword search behavior, but `search()` implementation uses `LIKE` key matching (FTS tables/triggers are created but not used in query path).
+- [UNCERTAIN] `SynapticAxisMemory` behavior/signature is external (`synaptic_core.axis`) and not inspectable in this repository.
+- [UNCERTAIN] OpenRouter-specific behavior relies on OpenAI SDK/env configuration; `axis-core` does not explicitly pass `base_url` in adapter constructors.
