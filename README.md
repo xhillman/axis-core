@@ -189,20 +189,6 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 - Beta means APIs are stabilizing, but breaking changes are still possible before `1.0.0`.
 - See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
-## Roadmap
-
-### Planned (Committed)
-
-- Semantic memory search capabilities
-- Memory adapter URL-style resolution
-- Preconfigured loadouts (`research_agent`, `support_agent`, `code_agent`)
-
-### Exploring (Not Committed)
-
-- Additional provider integrations
-- Deeper model-specific optimizations
-- Extended developer tooling and enterprise workflow support
-
 ## Development
 
 ```bash
