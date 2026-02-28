@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0b] - 2026-02-28
+
 ### Added
 
 - Added reason-coded model fallback semantics: model errors now carry normalized reason/status/code
