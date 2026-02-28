@@ -30,6 +30,8 @@ All notable changes to this project will be documented in this file.
   including Synaptic memory path/bootstrap options.
 - Added built-in `synaptic` memory adapter registration via lazy factory, with optional dependency
   guidance and `AXIS_SYNAPTIC_PATH` support.
+- Added CLI runtime commands: `axis-core ask` (single prompt) and `axis-core chat`
+  (interactive session loop), plus a `session` namespace placeholder for future admin commands.
 
 ### Changed
 

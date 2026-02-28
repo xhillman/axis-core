@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from axis_core.config import config
 from axis_core.engine.registry import memory_registry, planner_registry
@@ -304,6 +304,125 @@ def _run_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _agent_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    for field_name in ("model", "planner", "memory", "system"):
+        value = getattr(args, field_name, None)
+        if value is not None:
+            kwargs[field_name] = value
+    return kwargs
+
+
+def _make_agent(args: argparse.Namespace) -> Any:
+    from axis_core import Agent
+
+    return Agent(**_agent_kwargs_from_args(args))
+
+
+def _render_result_output(result: Any) -> str:
+    output_raw = getattr(result, "output_raw", "")
+    if isinstance(output_raw, str) and output_raw:
+        return output_raw
+
+    output = getattr(result, "output", None)
+    if output is None:
+        return ""
+    return str(output)
+
+
+def _run_ask(args: argparse.Namespace) -> int:
+    prompt = args.prompt or ""
+    if prompt == "-":
+        prompt = sys.stdin.read()
+    if not prompt:
+        prompt = sys.stdin.read()
+    if not prompt.strip():
+        print("Prompt is required. Pass text or pipe stdin.", file=sys.stderr)
+        return 1
+
+    try:
+        agent = _make_agent(args)
+        result = agent.run(prompt, timeout=args.timeout)
+    except Exception as exc:
+        print(f"ask failed: {exc}", file=sys.stderr)
+        return 1
+
+    if not getattr(result, "success", False):
+        error = getattr(result, "error", None)
+        message = str(error) if error is not None else "unknown error"
+        print(f"ask failed: {message}", file=sys.stderr)
+        return 1
+
+    print(_render_result_output(result))
+    return 0
+
+
+def _run_chat(args: argparse.Namespace) -> int:
+    try:
+        agent = _make_agent(args)
+        session = agent.session(id=args.session_id, max_history=args.max_history)
+    except Exception as exc:
+        print(f"chat setup failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Chat session: {session.id}")
+    print("Type /exit or /quit to leave.")
+
+    while True:
+        try:
+            user_input = input("you> ").strip()
+        except EOFError:
+            print()
+            return 0
+        except KeyboardInterrupt:
+            print("\nExiting chat.")
+            return 0
+
+        if not user_input:
+            continue
+
+        if user_input in {"/exit", "/quit"}:
+            return 0
+
+        if user_input == "/help":
+            print("Commands: /help, /exit, /quit, /session")
+            continue
+
+        if user_input == "/session":
+            print(session.id)
+            continue
+
+        try:
+            result = session.run(user_input, timeout=args.timeout)
+        except Exception as exc:
+            print(f"assistant error: {exc}", file=sys.stderr)
+            continue
+
+        if not getattr(result, "success", False):
+            error = getattr(result, "error", None)
+            message = str(error) if error is not None else "unknown error"
+            print(f"assistant error: {message}", file=sys.stderr)
+            continue
+
+        print(f"assistant> {_render_result_output(result)}")
+
+
+def _run_session(_args: argparse.Namespace) -> int:
+    print(
+        "Session management commands are not implemented yet. "
+        "Use 'axis-core chat --session-id <id>' for ongoing conversations."
+    )
+    return 0
+
+
+def _add_agent_runtime_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--model", help="Model adapter name.")
+    parser.add_argument("--planner", help="Planner adapter name.")
+    parser.add_argument("--memory", help="Memory adapter name.")
+    parser.add_argument("--system", help="System prompt.")
+    parser.add_argument("--timeout", type=float, help="Per-run timeout in seconds.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="axis-core",
@@ -351,6 +470,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create/initialize the synaptic database during setup.",
     )
 
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help="Run a single, non-interactive prompt.",
+    )
+    ask_parser.add_argument(
+        "prompt",
+        nargs="?",
+        help="Prompt text. Use '-' or omit to read from stdin.",
+    )
+    _add_agent_runtime_args(ask_parser)
+
+    chat_parser = subparsers.add_parser(
+        "chat",
+        help="Start an interactive multi-turn chat session.",
+    )
+    _add_agent_runtime_args(chat_parser)
+    chat_parser.add_argument("--session-id", help="Existing session id to resume.")
+    chat_parser.add_argument(
+        "--max-history",
+        type=int,
+        default=100,
+        help="Maximum messages retained in session history.",
+    )
+
+    subparsers.add_parser(
+        "session",
+        help="Session management command namespace (placeholder).",
+    )
+
     return parser
 
 
@@ -360,6 +508,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         return _run_init(args)
+    if args.command == "ask":
+        return _run_ask(args)
+    if args.command == "chat":
+        return _run_chat(args)
+    if args.command == "session":
+        return _run_session(args)
 
     parser.error(f"Unknown command: {args.command}")
     return 2

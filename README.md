@@ -60,6 +60,28 @@ Useful non-interactive flags:
 - `--synaptic-db-path <path>`: set `AXIS_SYNAPTIC_PATH` when using `synaptic` memory
 - `--bootstrap-synaptic-db`: initialize Synaptic SQLite schema during setup
 
+## CLI Runtime
+
+Use `ask` for one-shot prompts and `chat` for interactive sessions.
+
+```bash
+# Single prompt
+axis-core ask "Summarize the latest deployment status"
+
+# Interactive chat (resume by id)
+axis-core chat --session-id ops-room
+```
+
+Runtime flags are shared across `ask` and `chat`:
+
+- `--model <name>`
+- `--planner <name>`
+- `--memory <name>`
+- `--system "<prompt>"`
+- `--timeout <seconds>`
+
+The `session` command namespace is reserved for future session-admin operations.
+
 ## Quick Start
 
 ```python
