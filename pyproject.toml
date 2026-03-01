@@ -93,5 +93,5 @@ warn_unused_configs = true
 # Optional dependencies that lack type stubs or py.typed markers.
 # Per-module overrides keep source files free of inline type: ignore comments.
 [[tool.mypy.overrides]]
-module = ["redis.*", "aiosqlite"]
+module = ["redis.*", "aiosqlite", "synaptic_core.*"]
 ignore_missing_imports = true

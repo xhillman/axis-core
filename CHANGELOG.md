@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added a first-party `axis_core.adapters.memory.synaptic.SynapticMemory` wrapper that
+  normalizes Synaptic memory/search/session results to axis-core protocol types, and added
+  unit coverage for Synaptic adapter capabilities, CRUD/search behavior, namespaces, and sessions.
+
 ## [0.10.0b] - 2026-02-28
 
 ### Added
