@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0b] - 2026-03-01
+
 ### Added
 
 - Added a first-party `axis_core.adapters.memory.synaptic.SynapticMemory` wrapper that
