@@ -101,7 +101,7 @@ class TestCliInit:
         )
 
         assert exit_code == 0
-        assert installs == ["synaptic-core>=0.1.1"]
+        assert installs == ["axis-core[synaptic]"]
 
 
 @pytest.mark.unit
@@ -244,7 +244,7 @@ class TestCliRuntime:
 
         def fake_install(requirement: str) -> None:
             installs.append(requirement)
-            if requirement == "synaptic-core>=0.1.1":
+            if requirement == "axis-core[synaptic]":
                 availability["synaptic_core"] = True
 
         monkeypatch.setattr(cli, "_module_available", fake_available)
@@ -266,7 +266,7 @@ class TestCliRuntime:
         )
 
         assert exit_code == 0
-        assert installs == ["synaptic-core>=0.1.1"]
+        assert installs == ["axis-core[synaptic]"]
 
     def test_make_agent_and_metadata_uses_project_factory_with_selective_overrides(
         self,

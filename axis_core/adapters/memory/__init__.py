@@ -7,7 +7,7 @@ Available adapters:
 - EphemeralMemory: In-memory dictionary storage (no dependencies)
 - SQLiteMemory: SQLite-based persistent storage (requires: pip install axis-core[sqlite])
 - RedisMemory: Redis-based storage with TTL support (requires: pip install axis-core[redis])
-- SynapticAxisMemory: Graph-backed memory adapter (requires: pip install synaptic-core)
+- SynapticMemory: Synaptic-backed adapter (requires: pip install axis-core[synaptic])
 """
 
 import os
@@ -51,12 +51,12 @@ memory_registry.register(
 memory_registry.register(
     "synaptic",
     make_lazy_factory(
-        "synaptic_core.axis",
-        "SynapticAxisMemory",
+        f"{_MEMORY_MODULE}.synaptic",
+        "SynapticMemory",
         defaults={"db_path": os.getenv("AXIS_SYNAPTIC_PATH", "synaptic.db")},
         missing_dep_message=(
             "Memory adapter 'synaptic' requires the synaptic-core package. "
-            "Install with: pip install synaptic-core>=0.1.1"
+            "Install with: pip install 'axis-core[synaptic]'"
         ),
     ),
 )
@@ -88,11 +88,8 @@ except ImportError:
     pass
 
 try:
-    import importlib
+    from axis_core.adapters.memory.synaptic import SynapticAxisMemory, SynapticMemory  # noqa: F401
 
-    _synaptic_module = importlib.import_module("synaptic_core.axis")
-    SynapticAxisMemory = getattr(_synaptic_module, "SynapticAxisMemory")  # noqa: F401
-
-    __all__.extend(["SynapticAxisMemory"])
+    __all__.extend(["SynapticMemory", "SynapticAxisMemory"])
 except ImportError:
     pass

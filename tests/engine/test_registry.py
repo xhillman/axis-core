@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -273,6 +275,20 @@ class TestMemoryRegistry:
         from axis_core.engine.registry import memory_registry
 
         assert "synaptic" in memory_registry.list()
+
+    def test_string_resolution_creates_synaptic_instance(self, tmp_path: Path) -> None:
+        from axis_core.engine.registry import memory_registry
+        from axis_core.engine.resolver import resolve_adapter
+
+        if importlib.util.find_spec("synaptic_core") is None:
+            pytest.skip("synaptic-core not installed")
+
+        from axis_core.adapters.memory.synaptic import SynapticMemory
+
+        db_path = str(tmp_path / "axis_synaptic.db")
+        memory = resolve_adapter("synaptic", memory_registry, db_path=db_path)
+
+        assert isinstance(memory, SynapticMemory)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0b] - 2026-03-01
+
+### Added
+
+- Added a first-party `axis_core.adapters.memory.synaptic.SynapticMemory` wrapper that
+  normalizes Synaptic memory/search/session results to axis-core protocol types, and added
+  unit coverage for Synaptic adapter capabilities, CRUD/search behavior, namespaces, and sessions.
+- Added a `synaptic` optional dependency extra (`axis-core[synaptic]`) and included it in the
+  `full` extra.
+
+### Changed
+
+- Updated CLI Synaptic dependency/install guidance to use `axis-core[synaptic]`.
+- Updated Synaptic database bootstrap to instantiate the local `SynapticMemory` adapter class.
+
 ## [0.10.0b] - 2026-02-28
 
 ### Added

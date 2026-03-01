@@ -35,7 +35,7 @@ pip install axis-core[openai]
 pip install axis-core[openrouter]
 pip install axis-core[redis]
 pip install axis-core[sqlite]
-pip install synaptic-core
+pip install axis-core[synaptic]
 
 # Everything
 pip install axis-core[full]
@@ -245,7 +245,7 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 
 ## Status
 
-`v0.10.0b` (Beta pre-release)
+`v0.11.0b` (Beta pre-release)
 
 - Beta means APIs are stabilizing, but breaking changes are still possible before `1.0.0`.
 - See [CHANGELOG.md](CHANGELOG.md) for release notes.

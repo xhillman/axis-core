@@ -26,13 +26,13 @@ _BUNDLES: Final[dict[str, tuple[str, str, str]]] = {
     "openrouter": ("OpenRouter compatibility adapter", "axis-core[openrouter]", "openai"),
     "redis": ("Redis memory adapter", "axis-core[redis]", "redis"),
     "sqlite": ("SQLite memory adapter", "axis-core[sqlite]", "aiosqlite"),
-    "synaptic": ("Synaptic memory adapter", "synaptic-core>=0.1.1", "synaptic_core"),
+    "synaptic": ("Synaptic memory adapter", "axis-core[synaptic]", "synaptic_core"),
 }
 
 _MEMORY_DEPS: Final[dict[str, tuple[str, str]]] = {
     "redis": ("redis", "axis-core[redis]"),
     "sqlite": ("aiosqlite", "axis-core[sqlite]"),
-    "synaptic": ("synaptic_core", "synaptic-core>=0.1.1"),
+    "synaptic": ("synaptic_core", "axis-core[synaptic]"),
 }
 
 
@@ -199,12 +199,10 @@ def _ensure_memory_dependency(
 
 
 def _bootstrap_synaptic_db(db_path: str) -> None:
-    import importlib
+    from axis_core.adapters.memory.synaptic import SynapticMemory
 
     Path(db_path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-    synaptic_module = importlib.import_module("synaptic_core.axis")
-    synaptic_memory_cls = getattr(synaptic_module, "SynapticAxisMemory")
-    synaptic_memory_cls(db_path=db_path)
+    SynapticMemory(db_path=db_path)
 
 
 def _run_init(args: argparse.Namespace) -> int:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "axis-core"
-version = "0.10.0b"
+version = "0.11.0b"
 description = "A modular, observable AI agent framework"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -39,12 +39,14 @@ openai = ["openai>=1.0"]
 openrouter = ["openai>=1.0"]
 redis = ["redis>=5.0"]
 sqlite = ["aiosqlite>=0.19"]
+synaptic = ["synaptic-core>=0.1.1"]
 full = [
     "axis-core[anthropic]",
     "axis-core[openai]",
     "axis-core[openrouter]",
     "axis-core[redis]",
     "axis-core[sqlite]",
+    "axis-core[synaptic]",
 ]
 dev = [
     "pytest>=8.0",
@@ -93,5 +95,5 @@ warn_unused_configs = true
 # Optional dependencies that lack type stubs or py.typed markers.
 # Per-module overrides keep source files free of inline type: ignore comments.
 [[tool.mypy.overrides]]
-module = ["redis.*", "aiosqlite"]
+module = ["redis.*", "aiosqlite", "synaptic_core.*"]
 ignore_missing_imports = true
