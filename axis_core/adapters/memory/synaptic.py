@@ -3,7 +3,7 @@
 This adapter wraps ``synaptic_core.axis.SynapticAxisMemory`` and normalizes
 results to axis-core memory/session protocol types.
 
-Requires: pip install synaptic-core>=0.1.1
+Requires: pip install axis-core[synaptic]
 """
 
 from __future__ import annotations

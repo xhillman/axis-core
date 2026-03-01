@@ -7,7 +7,7 @@ Available adapters:
 - EphemeralMemory: In-memory dictionary storage (no dependencies)
 - SQLiteMemory: SQLite-based persistent storage (requires: pip install axis-core[sqlite])
 - RedisMemory: Redis-based storage with TTL support (requires: pip install axis-core[redis])
-- SynapticMemory: Synaptic-backed adapter (requires: pip install synaptic-core>=0.1.1)
+- SynapticMemory: Synaptic-backed adapter (requires: pip install axis-core[synaptic])
 """
 
 import os
@@ -56,7 +56,7 @@ memory_registry.register(
         defaults={"db_path": os.getenv("AXIS_SYNAPTIC_PATH", "synaptic.db")},
         missing_dep_message=(
             "Memory adapter 'synaptic' requires the synaptic-core package. "
-            "Install with: pip install synaptic-core>=0.1.1"
+            "Install with: pip install 'axis-core[synaptic]'"
         ),
     ),
 )

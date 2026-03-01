@@ -98,8 +98,26 @@ class TestDependencyLockfile:
             "Full extra should not include deprecated ollama optional install target."
         )
 
+    def test_synaptic_extra_is_declared_and_included_in_full(self, pyproject_path: Path) -> None:
+        """Verify Synaptic adapter extra is exposed in pyproject metadata."""
+        content = pyproject_path.read_text()
+
+        assert re.search(
+            r'^synaptic\s*=\s*\["synaptic-core>=0.1.1"\]$',
+            content,
+            re.MULTILINE,
+        ), "Expected synaptic extra mapped to synaptic-core dependency."
+        assert '"axis-core[synaptic]"' in content, (
+            "Full extra should include synaptic optional install target."
+        )
+
     def test_readme_documents_openrouter_optional_install(self, readme_path: Path) -> None:
         """Verify README includes OpenRouter install guidance."""
         content = readme_path.read_text()
         assert "OpenRouter" in content
         assert "axis-core[openrouter]" in content
+
+    def test_readme_documents_synaptic_optional_install(self, readme_path: Path) -> None:
+        """Verify README includes Synaptic optional install guidance."""
+        content = readme_path.read_text()
+        assert "axis-core[synaptic]" in content

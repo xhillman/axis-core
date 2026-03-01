@@ -35,7 +35,7 @@ pip install axis-core[openai]
 pip install axis-core[openrouter]
 pip install axis-core[redis]
 pip install axis-core[sqlite]
-pip install synaptic-core
+pip install axis-core[synaptic]
 
 # Everything
 pip install axis-core[full]
