@@ -46,6 +46,40 @@ jobs:
       - name: Run pytest
         run: pytest
 
+  synaptic-interop:
+    name: synaptic interop (${{ matrix.synaptic_source }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        synaptic_source: ["release", "main"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install axis-core test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Install synaptic-core release
+        if: matrix.synaptic_source == 'release'
+        run: pip install "synaptic-core>=0.2.0,<0.3.0"
+
+      - name: Install synaptic-core main
+        if: matrix.synaptic_source == 'main'
+        run: pip install "git+https://github.com/xhillman/synaptic-core.git@main"
+
+      - name: Run synaptic interop tests
+        run: |
+          pytest tests/adapters/memory/test_synaptic.py tests/engine/test_registry.py
+
   ruff:
     name: ruff
     runs-on: ubuntu-latest

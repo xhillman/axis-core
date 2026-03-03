@@ -56,7 +56,8 @@ memory_registry.register(
         defaults={"db_path": os.getenv("AXIS_SYNAPTIC_PATH", "synaptic.db")},
         missing_dep_message=(
             "Memory adapter 'synaptic' requires the synaptic-core package. "
-            "Install with: pip install 'axis-core[synaptic]'"
+            "Install with: pip install 'axis-core[synaptic]' "
+            "(supports synaptic-core>=0.2.0,<0.3.0)"
         ),
     ),
 )

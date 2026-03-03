@@ -103,7 +103,7 @@ class TestDependencyLockfile:
         content = pyproject_path.read_text()
 
         assert re.search(
-            r'^synaptic\s*=\s*\["synaptic-core>=0.1.1"\]$',
+            r'^synaptic\s*=\s*\["synaptic-core>=0.2.0,<0.3.0"\]$',
             content,
             re.MULTILINE,
         ), "Expected synaptic extra mapped to synaptic-core dependency."

@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added a Synaptic compatibility matrix at
+  `docs/contracts/synaptic-compatibility-matrix.md` with explicit supported and blocked
+  `synaptic-core` ranges.
+- Added adapter contract tests for Synaptic version gating, required native API methods, and
+  non-positive search limits.
+- Added `quality-gates` CI Synaptic interop matrix coverage for both released
+  `synaptic-core` and `synaptic-core@main`.
+
+### Changed
+
+- Refactored `axis_core.adapters.memory.synaptic.SynapticMemory` to integrate directly with
+  `synaptic_core.core.SynapticMemory` native `kv_*` and session APIs.
+- Added fail-fast provider validation at Synaptic adapter initialization, including actionable
+  version-range errors and required-method checks.
+- Updated optional Synaptic dependency constraint to `synaptic-core>=0.2.0,<0.3.0`.
+
 ## [0.11.0b] - 2026-03-01
 
 ### Added
