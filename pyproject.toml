@@ -39,7 +39,7 @@ openai = ["openai>=1.0"]
 openrouter = ["openai>=1.0"]
 redis = ["redis>=5.0"]
 sqlite = ["aiosqlite>=0.19"]
-synaptic = ["synaptic-core>=0.1.1"]
+synaptic = ["synaptic-core>=0.2.0,<0.3.0"]
 full = [
     "axis-core[anthropic]",
     "axis-core[openai]",

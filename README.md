@@ -36,6 +36,7 @@ pip install axis-core[openrouter]
 pip install axis-core[redis]
 pip install axis-core[sqlite]
 pip install axis-core[synaptic]
+# installs synaptic-core>=0.2.0,<0.3.0
 
 # Everything
 pip install axis-core[full]
@@ -242,6 +243,14 @@ For OpenRouter:
 OPENAI_API_KEY=<openrouter-api-key>
 OPENAI_BASE_URL=https://openrouter.ai/api/v1
 ```
+
+## Synaptic Interop
+
+- Synaptic integration is Axis-owned via
+  `axis_core.adapters.memory.synaptic.SynapticMemory`.
+- Supported `synaptic-core` range: `>=0.2.0,<0.3.0`.
+- Axis integrates against `synaptic_core.core.SynapticMemory` native KV/session APIs.
+- Compatibility matrix: [Synaptic Compatibility Matrix](docs/contracts/synaptic-compatibility-matrix.md).
 
 ## Status
 
