@@ -270,7 +270,7 @@ await client.set("axis:last_run", {"ok": True}, namespace="axis")
 
 ## Status
 
-`v0.12.0b` (Beta pre-release)
+`v0.12.1` (Beta)
 
 - Beta means APIs are stabilizing, but breaking changes are still possible before `1.0.0`.
 - See [CHANGELOG.md](CHANGELOG.md) for release notes.

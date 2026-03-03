@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-03-03
+
+### Changed
+
+- Promoted the Synaptic 0.3 clean-break upgrade from pre-release to stable package versioning
+  (`0.12.1`) with aligned docs/version metadata.
+
 ## [0.12.0b] - 2026-03-03
 
 ### Added
