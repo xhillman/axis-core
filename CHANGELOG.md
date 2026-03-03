@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.0b] - 2026-03-03
+
 ### Added
 
 - Added a Synaptic compatibility matrix at
