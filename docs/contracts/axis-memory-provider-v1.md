@@ -154,7 +154,9 @@ A provider integration is contract-compliant only if it passes:
 5. Cross-repo interop CI job against supported version matrix.
 
 ## Synaptic Mapping Notes (Informative)
-1. Synaptic should implement required memory/session primitives through `SynapticMemory` public APIs.
+1. Synaptic should implement required memory/session primitives through canonical
+   `synaptic_core.api.AsyncSynaptic` APIs (`set/get/find`, `remember/recall`) plus session
+   persistence support.
 2. Axis should own Synaptic adapter semantics in `axis-core`.
 3. Synaptic package should remain framework-agnostic and not require Axis integration artifacts.
 

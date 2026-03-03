@@ -23,6 +23,7 @@ pip install axis-core[openai]
 # Optional adapters
 pip install axis-core[redis]
 pip install axis-core[sqlite]
+pip install axis-core[synaptic]  # installs synaptic-core>=0.3.0,<0.4.0
 
 # Everything
 pip install axis-core[full]

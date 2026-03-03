@@ -67,6 +67,78 @@ class TestSynapticMemory:
             assert item.metadata["type"] == "observation"
 
     @pytest.mark.asyncio
+    async def test_uses_canonical_client_methods(self, tmp_path: Path) -> None:
+        class _RecordingEngine:
+            async def kv_delete(self, *args: Any, **kwargs: Any) -> bool:
+                del args, kwargs
+                return True
+
+            async def kv_clear(self, *args: Any, **kwargs: Any) -> int:
+                del args, kwargs
+                return 1
+
+            async def store_session(self, session: Any) -> Any:
+                return session
+
+            async def retrieve_session(self, session_id: str) -> Any | None:
+                del session_id
+                return None
+
+            async def update_session(self, session: Any) -> Any:
+                return session
+
+        class _RecordingClient:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+                self.engine = _RecordingEngine()
+
+            def session(self, session_id: str) -> object:
+                del session_id
+                return object()
+
+            async def set(self, *args: Any, **kwargs: Any) -> None:
+                del args, kwargs
+                self.calls.append("set")
+
+            async def get(self, *args: Any, **kwargs: Any) -> Any | None:
+                del args, kwargs
+                self.calls.append("get")
+                return {"value": "alpha"}
+
+            async def find(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+                del args, kwargs
+                self.calls.append("find")
+                return [
+                    {
+                        "key": "obs:1",
+                        "value": {"value": "alpha"},
+                        "metadata": {"type": "observation"},
+                        "score": 0.7,
+                        "namespace": None,
+                    }
+                ]
+
+            async def remember(self, *args: Any, **kwargs: Any) -> Any:
+                del args, kwargs
+                return None
+
+            async def recall(self, *args: Any, **kwargs: Any) -> Any:
+                del args, kwargs
+                return None
+
+        memory = SynapticMemory(
+            db_path=str(tmp_path / "canon.db"),
+            synaptic_client=cast(Any, _RecordingClient()),
+        )
+
+        await memory.store("obs:1", {"value": "alpha"})
+        assert await memory.retrieve("obs:1") == {"value": "alpha"}
+        results = await memory.search("obs", limit=5)
+
+        assert [item.key for item in results] == ["obs:1"]
+        assert cast(Any, memory)._client.calls == ["set", "get", "find"]
+
+    @pytest.mark.asyncio
     async def test_search_returns_empty_for_non_positive_limit(self, tmp_path: Path) -> None:
         memory = _make_memory(tmp_path)
         await memory.store("obs:1", {"value": "alpha"})
@@ -114,7 +186,7 @@ class TestSynapticMemory:
         monkeypatch.setattr(
             synaptic_adapter,
             "_load_synaptic_core_version",
-            lambda: "0.1.1",
+            lambda: "0.2.9",
         )
 
         with pytest.raises(ConfigError, match="Unsupported synaptic-core version"):
@@ -122,25 +194,20 @@ class TestSynapticMemory:
 
     def test_rejects_provider_missing_required_methods(self, tmp_path: Path) -> None:
         class _IncompleteProvider:
-            async def kv_set(self, *args: Any, **kwargs: Any) -> None: ...
+            def session(self, session_id: str) -> object:
+                del session_id
+                return object()
 
-            async def kv_get(self, *args: Any, **kwargs: Any) -> Any | None:
+            async def set(self, *args: Any, **kwargs: Any) -> None: ...
+
+            async def get(self, *args: Any, **kwargs: Any) -> Any | None:
                 return None
 
-            async def kv_delete(self, *args: Any, **kwargs: Any) -> bool:
-                return False
-
-            async def kv_clear(self, *args: Any, **kwargs: Any) -> int:
-                return 0
-
-            async def store_session(self, session: Any) -> Any:
-                return session
-
-            async def retrieve_session(self, session_id: str) -> Any | None:
+            async def remember(self, *args: Any, **kwargs: Any) -> Any:
                 return None
 
-            async def update_session(self, session: Any) -> Any:
-                return session
+            async def recall(self, *args: Any, **kwargs: Any) -> Any:
+                return None
 
         with pytest.raises(
             ConfigError,
@@ -148,7 +215,7 @@ class TestSynapticMemory:
         ):
             SynapticMemory(
                 db_path=str(tmp_path / "bad.db"),
-                synaptic_memory=cast(Any, _IncompleteProvider()),
+                synaptic_client=cast(Any, _IncompleteProvider()),
             )
 
     def test_initializes_without_legacy_axis_module(self, tmp_path: Path) -> None:

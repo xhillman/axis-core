@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "axis-core"
-version = "0.11.0b"
+version = "0.12.0b"
 description = "A modular, observable AI agent framework"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -39,7 +39,7 @@ openai = ["openai>=1.0"]
 openrouter = ["openai>=1.0"]
 redis = ["redis>=5.0"]
 sqlite = ["aiosqlite>=0.19"]
-synaptic = ["synaptic-core>=0.2.0,<0.3.0"]
+synaptic = ["synaptic-core>=0.3.0,<0.4.0"]
 full = [
     "axis-core[anthropic]",
     "axis-core[openai]",

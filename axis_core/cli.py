@@ -215,11 +215,14 @@ def _run_init(args: argparse.Namespace) -> int:
         return 1
 
     memory_choices = _memory_choices()
-    if config.default_memory in memory_choices:
+    if "synaptic" in memory_choices:
+        memory_default = "synaptic"
+    elif config.default_memory in memory_choices:
         memory_default = config.default_memory
     else:
         memory_default = "ephemeral"
     selected_memory = args.memory
+    selected_memory_from_default = selected_memory is None
     if selected_memory is None and interactive:
         selected_memory = _prompt_choice(
             "Select default memory adapter:",
@@ -257,9 +260,12 @@ def _run_init(args: argparse.Namespace) -> int:
         )
         return 1
 
+    auto_install_default_synaptic = (
+        selected_memory_from_default and not interactive and selected_memory == "synaptic"
+    )
     if not _ensure_memory_dependency(
         selected_memory,
-        install_missing=args.install_missing,
+        install_missing=args.install_missing or auto_install_default_synaptic,
         interactive=interactive,
     ):
         return 1

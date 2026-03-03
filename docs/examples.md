@@ -16,6 +16,10 @@ This page points to runnable examples in `/examples`.
   - Shows `ReActPlanner` with explicit thought/action cycles
   - Demonstrates reasoning visibility patterns
 
+- `examples/synaptic_session_first.py`
+  - Shows canonical Synaptic 0.3 session-first API (`AsyncSynaptic`)
+  - Demonstrates axis-core Synaptic adapter interop (`store/retrieve/search` + sessions)
+
 ## How to Run
 
 From repository root:
@@ -30,6 +34,9 @@ python examples/autoplanner_example.py
 
 # Example: ReAct planner
 python examples/react_planner_example.py
+
+# Example: Synaptic session-first interop
+python examples/synaptic_session_first.py
 ```
 
 ## Validation Policy for Docs
