@@ -1,8 +1,7 @@
 """Synaptic-backed memory adapter.
 
-This axis-owned adapter wraps ``synaptic_core.core.SynapticMemory`` native
-KV/session APIs and normalizes results to axis-core memory/session protocol
-types.
+This axis-owned adapter wraps ``synaptic_core.api.AsyncSynaptic`` canonical
+APIs and normalizes results to axis-core memory/session protocol types.
 
 Requires: pip install axis-core[synaptic]
 """
@@ -18,19 +17,24 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, cast
 
-from synaptic_core.core import SynapticMemory as _SynapticMemory
+from synaptic_core.api import AsyncSynaptic as _AsyncSynaptic
 
 from axis_core.errors import ConfigError
 from axis_core.protocols.memory import MemoryCapability, MemoryItem
 from axis_core.session import Session
 
-_SUPPORTED_SYNAPTIC_VERSION = ">=0.2.0,<0.3.0"
-_MIN_SUPPORTED_VERSION = (0, 2, 0)
-_MAX_SUPPORTED_VERSION_EXCLUSIVE = (0, 3, 0)
-_REQUIRED_PROVIDER_METHODS = (
-    "kv_set",
-    "kv_get",
-    "kv_search",
+_SUPPORTED_SYNAPTIC_VERSION = ">=0.3.0,<0.4.0"
+_MIN_SUPPORTED_VERSION = (0, 3, 0)
+_MAX_SUPPORTED_VERSION_EXCLUSIVE = (0, 4, 0)
+_REQUIRED_CLIENT_ASYNC_METHODS = (
+    "set",
+    "get",
+    "find",
+    "remember",
+    "recall",
+)
+_REQUIRED_CLIENT_SYNC_METHODS = ("session",)
+_REQUIRED_ENGINE_ASYNC_METHODS = (
     "kv_delete",
     "kv_clear",
     "store_session",
@@ -47,29 +51,30 @@ class SynapticMemory:
         *,
         db_path: str = "synaptic.db",
         embedding_fn: Callable[[str], Sequence[float] | Any] | None = None,
-        synaptic_memory: _SynapticMemory | None = None,
+        synaptic_client: _AsyncSynaptic | None = None,
         session_deserializer: Callable[[dict[str, Any]], Any] | None = None,
         **synaptic_kwargs: Any,
     ) -> None:
         provider_version = _load_synaptic_core_version()
         _validate_provider_version(provider_version)
 
-        if synaptic_memory is None:
-            self._delegate = _SynapticMemory(
+        if synaptic_client is None:
+            self._client = _AsyncSynaptic(
                 db_path=db_path,
                 embedding_fn=embedding_fn,
                 session_deserializer=session_deserializer,
                 **synaptic_kwargs,
             )
         else:
-            self._delegate = synaptic_memory
+            self._client = synaptic_client
 
-        _validate_provider_api(self._delegate)
+        _validate_provider_api(self._client)
+        self._engine = self._client.engine
 
     @property
     def capabilities(self) -> set[MemoryCapability]:
         """Return supported capabilities, normalized to axis-core enum values."""
-        raw_capabilities = getattr(self._delegate, "capabilities", None)
+        raw_capabilities = getattr(self._engine, "capabilities", None)
         if raw_capabilities is None:
             return {
                 MemoryCapability.KEYWORD_SEARCH,
@@ -100,12 +105,12 @@ class SynapticMemory:
         ttl: int | None = None,
         namespace: str | None = None,
     ) -> None:
-        await self._delegate.kv_set(
-            key=key,
-            value=value,
+        await self._client.set(
+            key,
+            value,
+            namespace=namespace,
             metadata=metadata,
             ttl=ttl,
-            namespace=namespace,
         )
 
     async def retrieve(
@@ -113,7 +118,7 @@ class SynapticMemory:
         key: str,
         namespace: str | None = None,
     ) -> Any | None:
-        return await self._delegate.kv_get(key=key, namespace=namespace)
+        return await self._client.get(key, namespace=namespace)
 
     async def search(
         self,
@@ -125,10 +130,10 @@ class SynapticMemory:
         if limit <= 0:
             return []
 
-        items = await self._delegate.kv_search(
-            query=query,
-            limit=limit,
+        items = await self._client.find(
+            query,
             namespace=namespace,
+            limit=limit,
             filters=filters,
         )
         return [self._normalize_item(item) for item in items]
@@ -138,54 +143,55 @@ class SynapticMemory:
         key: str,
         namespace: str | None = None,
     ) -> bool:
-        deleted = await self._delegate.kv_delete(key=key, namespace=namespace)
+        deleted = await self._engine.kv_delete(key=key, namespace=namespace)
         return cast(bool, deleted)
 
     async def clear(
         self,
         namespace: str | None = None,
     ) -> int:
-        count = await self._delegate.kv_clear(namespace=namespace)
+        count = await self._engine.kv_clear(namespace=namespace)
         return cast(int, count)
 
     async def store_session(self, session: Session) -> Session:
-        stored = await self._delegate.store_session(session)
+        stored = await self._engine.store_session(session)
         return self._normalize_session(stored)
 
     async def retrieve_session(self, session_id: str) -> Session | None:
-        retrieved = await self._delegate.retrieve_session(session_id)
+        retrieved = await self._engine.retrieve_session(session_id)
         if retrieved is None:
             return None
         return self._normalize_session(retrieved)
 
     async def update_session(self, session: Session) -> Session:
-        updated = await self._delegate.update_session(session)
+        updated = await self._engine.update_session(session)
         return self._normalize_session(updated)
 
     @staticmethod
     def _normalize_item(item: Any) -> MemoryItem:
-        namespace = item.namespace if hasattr(item, "namespace") else None
+        get_value: Callable[[str], Any]
+        if isinstance(item, Mapping):
+            get_value = item.get
+        else:
+            def _attribute_value(name: str) -> Any:
+                return getattr(item, name, None)
+
+            get_value = _attribute_value
+
+        namespace = get_value("namespace")
         if namespace is not None:
             namespace = str(namespace)
             if not namespace:
                 namespace = None
 
         return MemoryItem(
-            key=str(item.key),
-            value=item.value,
-            metadata=SynapticMemory._normalize_metadata(
-                item.metadata if hasattr(item, "metadata") else None
-            ),
-            score=SynapticMemory._normalize_score(
-                item.score if hasattr(item, "score") else None
-            ),
+            key=str(get_value("key")),
+            value=get_value("value"),
+            metadata=SynapticMemory._normalize_metadata(get_value("metadata")),
+            score=SynapticMemory._normalize_score(get_value("score")),
             namespace=namespace,
-            created_at=SynapticMemory._normalize_datetime(
-                item.created_at if hasattr(item, "created_at") else None
-            ),
-            expires_at=SynapticMemory._normalize_datetime(
-                item.expires_at if hasattr(item, "expires_at") else None
-            ),
+            created_at=SynapticMemory._normalize_datetime(get_value("created_at")),
+            expires_at=SynapticMemory._normalize_datetime(get_value("expires_at")),
         )
 
     @staticmethod
@@ -229,11 +235,6 @@ class SynapticMemory:
                 return datetime.fromisoformat(raw)
         return None
 
-
-# Backward compatibility for earlier naming in axis-core.
-SynapticAxisMemory = SynapticMemory
-
-
 def _load_synaptic_core_version() -> str:
     try:
         return package_version("synaptic-core")
@@ -261,19 +262,36 @@ def _validate_provider_version(provider_version: str) -> None:
             message=(
                 "Unsupported synaptic-core version "
                 f"'{provider_version}'. Supported range is {_SUPPORTED_SYNAPTIC_VERSION}. "
-                "Upgrade with: pip install --upgrade 'synaptic-core>=0.2.0,<0.3.0'"
+                "Upgrade with: pip install --upgrade 'synaptic-core>=0.3.0,<0.4.0'"
             )
         )
 
 
-def _validate_provider_api(delegate: _SynapticMemory) -> None:
+def _validate_provider_api(client: _AsyncSynaptic) -> None:
     missing_methods = [
         method_name
-        for method_name in _REQUIRED_PROVIDER_METHODS
-        if not callable(getattr(delegate, method_name, None))
+        for method_name in _REQUIRED_CLIENT_ASYNC_METHODS
+        if not callable(getattr(client, method_name, None))
     ]
+    missing_methods.extend(
+        method_name
+        for method_name in _REQUIRED_CLIENT_SYNC_METHODS
+        if not callable(getattr(client, method_name, None))
+    )
+
+    engine = getattr(client, "engine", None)
+    if engine is None:
+        missing_methods.append("engine")
+
+    if engine is not None:
+        missing_methods.extend(
+            method_name
+            for method_name in _REQUIRED_ENGINE_ASYNC_METHODS
+            if not callable(getattr(engine, method_name, None))
+        )
+
     if missing_methods:
-        missing = ", ".join(sorted(missing_methods))
+        missing = ", ".join(sorted(set(missing_methods)))
         raise ConfigError(
             message=(
                 "synaptic-core provider is missing required methods for axis interop: "
@@ -283,11 +301,16 @@ def _validate_provider_api(delegate: _SynapticMemory) -> None:
 
     non_async_methods = [
         method_name
-        for method_name in _REQUIRED_PROVIDER_METHODS
-        if not inspect.iscoroutinefunction(getattr(delegate, method_name))
+        for method_name in _REQUIRED_CLIENT_ASYNC_METHODS
+        if not inspect.iscoroutinefunction(getattr(client, method_name))
     ]
+    non_async_methods.extend(
+        method_name
+        for method_name in _REQUIRED_ENGINE_ASYNC_METHODS
+        if not inspect.iscoroutinefunction(getattr(engine, method_name))
+    )
     if non_async_methods:
-        non_async = ", ".join(sorted(non_async_methods))
+        non_async = ", ".join(sorted(set(non_async_methods)))
         raise ConfigError(
             message=(
                 "synaptic-core provider methods must be async for axis interop. "

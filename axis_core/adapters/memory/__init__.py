@@ -57,7 +57,7 @@ memory_registry.register(
         missing_dep_message=(
             "Memory adapter 'synaptic' requires the synaptic-core package. "
             "Install with: pip install 'axis-core[synaptic]' "
-            "(supports synaptic-core>=0.2.0,<0.3.0)"
+            "(supports synaptic-core>=0.3.0,<0.4.0)"
         ),
     ),
 )
@@ -89,8 +89,8 @@ except ImportError:
     pass
 
 try:
-    from axis_core.adapters.memory.synaptic import SynapticAxisMemory, SynapticMemory  # noqa: F401
+    from axis_core.adapters.memory.synaptic import SynapticMemory  # noqa: F401
 
-    __all__.extend(["SynapticMemory", "SynapticAxisMemory"])
+    __all__.extend(["SynapticMemory"])
 except ImportError:
     pass

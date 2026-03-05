@@ -36,7 +36,7 @@ pip install axis-core[openrouter]
 pip install axis-core[redis]
 pip install axis-core[sqlite]
 pip install axis-core[synaptic]
-# installs synaptic-core>=0.2.0,<0.3.0
+# installs synaptic-core>=0.3.0,<0.4.0
 
 # Everything
 pip install axis-core[full]
@@ -58,6 +58,7 @@ Useful non-interactive flags:
 - `--install <bundle>`: install optional adapter bundle (`anthropic`, `openai`, `openrouter`,
   `redis`, `sqlite`, `synaptic`)
 - `--memory <name>` / `--planner <name>`: set default adapters
+- Default scaffold memory is `synaptic` (session-first setup) when no `--memory` is provided
 - `--synaptic-db-path <path>`: set `AXIS_SYNAPTIC_PATH` when using `synaptic` memory
 - `--bootstrap-synaptic-db`: initialize Synaptic SQLite schema during setup
 
@@ -248,13 +249,28 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 
 - Synaptic integration is Axis-owned via
   `axis_core.adapters.memory.synaptic.SynapticMemory`.
-- Supported `synaptic-core` range: `>=0.2.0,<0.3.0`.
-- Axis integrates against `synaptic_core.core.SynapticMemory` native KV/session APIs.
+- Supported `synaptic-core` range: `>=0.3.0,<0.4.0`.
+- Axis uses canonical Synaptic 0.3 client APIs (`set/get/find`, `remember/recall`, session helpers)
+  via `synaptic_core.api.AsyncSynaptic`.
 - Compatibility matrix: [Synaptic Compatibility Matrix](docs/contracts/synaptic-compatibility-matrix.md).
+
+Session-first canonical Synaptic usage:
+
+```python
+from synaptic_core.api import AsyncSynaptic
+
+client = AsyncSynaptic(db_path="synaptic.db")
+session = client.session("agent-session")
+
+await session.remember("User asked about deployment status.")
+result = await session.recall("deployment status")
+
+await client.set("axis:last_run", {"ok": True}, namespace="axis")
+```
 
 ## Status
 
-`v0.11.0b` (Beta pre-release)
+`v0.12.1` (Beta)
 
 - Beta means APIs are stabilizing, but breaking changes are still possible before `1.0.0`.
 - See [CHANGELOG.md](CHANGELOG.md) for release notes.

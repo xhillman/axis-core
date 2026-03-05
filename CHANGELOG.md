@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-03-03
+
+### Changed
+
+- Promoted the Synaptic 0.3 clean-break upgrade from pre-release to stable package versioning
+  (`0.12.1`) with aligned docs/version metadata.
 ## [0.12.0b] - 2026-03-03
 
 ### Added
@@ -11,18 +17,22 @@ All notable changes to this project will be documented in this file.
 - Added a Synaptic compatibility matrix at
   `docs/contracts/synaptic-compatibility-matrix.md` with explicit supported and blocked
   `synaptic-core` ranges.
-- Added adapter contract tests for Synaptic version gating, required native API methods, and
+- Added adapter contract tests for Synaptic version gating, required canonical API methods, and
   non-positive search limits.
+- Added Synaptic integration coverage pinned to `synaptic-core` `0.3.x` in
+  `tests/adapters/memory/test_synaptic_integration.py`.
 - Added `quality-gates` CI Synaptic interop matrix coverage for both released
   `synaptic-core` and `synaptic-core@main`.
 
 ### Changed
 
 - Refactored `axis_core.adapters.memory.synaptic.SynapticMemory` to integrate directly with
-  `synaptic_core.core.SynapticMemory` native `kv_*` and session APIs.
+  canonical `synaptic_core.api.AsyncSynaptic` methods (`set/get/find`, `remember/recall`) with
+  no legacy alias paths.
 - Added fail-fast provider validation at Synaptic adapter initialization, including actionable
   version-range errors and required-method checks.
-- Updated optional Synaptic dependency constraint to `synaptic-core>=0.2.0,<0.3.0`.
+- Updated optional Synaptic dependency constraint to `synaptic-core>=0.3.0,<0.4.0`.
+- Updated `axis-core init` scaffold defaults to Synaptic memory for session-first setup.
 
 ## [0.11.0b] - 2026-03-01
 

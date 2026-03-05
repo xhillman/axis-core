@@ -103,6 +103,44 @@ class TestCliInit:
         assert exit_code == 0
         assert installs == ["axis-core[synaptic]"]
 
+    def test_init_yes_defaults_to_synaptic_and_auto_installs_dependency(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        env_file = tmp_path / ".env"
+        installs: list[str] = []
+        availability = {"synaptic_core": False}
+
+        def fake_available(module_name: str) -> bool:
+            if module_name == "synaptic_core":
+                return availability["synaptic_core"]
+            return True
+
+        def fake_install(requirement: str) -> None:
+            installs.append(requirement)
+            if requirement == "axis-core[synaptic]":
+                availability["synaptic_core"] = True
+
+        monkeypatch.setattr(cli, "_module_available", fake_available)
+        monkeypatch.setattr(cli, "_install_requirement", fake_install)
+
+        exit_code = cli.main(
+            [
+                "init",
+                "--yes",
+                "--planner",
+                "auto",
+                "--env-file",
+                str(env_file),
+            ]
+        )
+
+        assert exit_code == 0
+        assert installs == ["axis-core[synaptic]"]
+        content = env_file.read_text(encoding="utf-8")
+        assert "AXIS_DEFAULT_MEMORY=synaptic" in content
+
 
 @pytest.mark.unit
 class TestCliRuntime:
