@@ -355,6 +355,101 @@ class TestOpenAIModel:
         assert cost == 0.0
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        (
+            "error_factory",
+            "expected_reason",
+            "expected_recoverable",
+            "expected_status",
+            "expected_provider_code",
+        ),
+        [
+            (
+                lambda: __import__("openai").RateLimitError(
+                    "Rate limit exceeded",
+                    response=Mock(status_code=429),
+                    body={"error": {"code": "rate_limit_exceeded"}},
+                ),
+                "rate_limit",
+                True,
+                429,
+                "rate_limit_exceeded",
+            ),
+            (
+                lambda: __import__("openai").AuthenticationError(
+                    "Invalid API key",
+                    response=Mock(status_code=401),
+                    body=None,
+                ),
+                "authentication",
+                False,
+                401,
+                None,
+            ),
+            (
+                lambda: __import__("openai").APITimeoutError(request=Mock()),
+                "timeout",
+                True,
+                None,
+                None,
+            ),
+            (
+                lambda: __import__("openai").BadRequestError(
+                    "Invalid request",
+                    response=Mock(status_code=400),
+                    body={"error": {"code": "context_length_exceeded"}},
+                ),
+                "invalid_request",
+                False,
+                400,
+                "context_length_exceeded",
+            ),
+        ],
+    )
+    async def test_error_classification_parity_between_chat_and_responses_backends(
+        self,
+        error_factory,
+        expected_reason: str,
+        expected_recoverable: bool,
+        expected_status: int | None,
+        expected_provider_code: str | None,
+    ) -> None:
+        """Equivalent OpenAI failures should classify identically across both backends."""
+        from axis_core.errors import ModelError
+
+        chat_model = OpenAIModel(model_id="gpt-4o", api_key="test_key")
+        responses_model = OpenAIModel(model_id="gpt-5-codex", api_key="test_key")
+        assert responses_model._responses_model is not None
+
+        with patch.object(
+            chat_model._client.chat.completions,
+            "create",
+            new=AsyncMock(side_effect=error_factory()),
+        ):
+            with pytest.raises(ModelError) as chat_exc:
+                await chat_model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        with patch.object(
+            responses_model._responses_model._client.responses,
+            "create",
+            new=AsyncMock(side_effect=error_factory()),
+        ):
+            with pytest.raises(ModelError) as responses_exc:
+                await responses_model.complete(messages=[{"role": "user", "content": "Test"}])
+
+        for exc in (chat_exc.value, responses_exc.value):
+            assert exc.reason == expected_reason
+            assert exc.recoverable is expected_recoverable
+            assert exc.status_code == expected_status
+            assert exc.provider_code == expected_provider_code
+            assert exc.details["error_type"] == expected_reason
+
+        assert responses_exc.value.reason == chat_exc.value.reason
+        assert responses_exc.value.recoverable is chat_exc.value.recoverable
+        assert responses_exc.value.status_code == chat_exc.value.status_code
+        assert responses_exc.value.provider_code == chat_exc.value.provider_code
+
+    @pytest.mark.asyncio
     async def test_error_classification_rate_limit(self) -> None:
         """Test that rate limit errors are classified as recoverable."""
         model = OpenAIModel(model_id="gpt-4", api_key="test_key")

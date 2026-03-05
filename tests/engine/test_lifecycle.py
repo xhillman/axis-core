@@ -2237,6 +2237,46 @@ class TestModelFallback:
         assert len(fallback.calls) == 0
 
     @pytest.mark.asyncio
+    async def test_fallback_blocks_when_reason_unknown_even_if_recoverable_true(self) -> None:
+        """Fallback should still block when reason normalization is missing."""
+
+        class UnknownReasonPrimary(MockModelAdapter):
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise ModelError(
+                    message="Timeout",
+                    model_id="primary",
+                    reason="unknown",
+                    recoverable=True,
+                )
+
+        primary = UnknownReasonPrimary()
+        fallback = MockModelAdapter(
+            responses=[
+                ModelResponse(
+                    content="Should not be called",
+                    tool_calls=None,
+                    usage=UsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
+                    cost_usd=0.0001,
+                )
+            ]
+        )
+
+        engine = LifecycleEngine(
+            model=primary,
+            planner=self._model_step_planner(),
+            fallback=[fallback],
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="test-agent",
+            budget=Budget(max_cycles=5),
+        )
+
+        assert result["success"] is False
+        assert len(fallback.calls) == 0
+
+    @pytest.mark.asyncio
     async def test_fallback_emits_telemetry_event(self) -> None:
         """Should emit model_fallback telemetry event on fallback."""
         class ReasonRecoverablePrimary(MockModelAdapter):

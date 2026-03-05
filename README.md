@@ -218,6 +218,8 @@ agent = Agent(
 - Model fallback decisions branch on normalized failure reasons (`rate_limit`, `timeout`,
   `connection_error`, `service_unavailable`, `transient_provider_error`) so non-recoverable causes
   fail fast instead of attempting fallback.
+- OpenAI Chat Completions and Responses backends now share identical error normalization
+  (`reason`, `status_code`, `provider_code`) so fallback/retry behavior is backend-independent.
 - OpenAI and Anthropic adapters sanitize provider-problematic tool schema fields and normalize
   tool-call identifiers before provider submission.
 - Usage accounting is normalized across providers (`prompt/completion` and `input/output` variants)

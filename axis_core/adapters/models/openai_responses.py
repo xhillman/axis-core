@@ -16,6 +16,7 @@ except ImportError as e:
     ) from e
 
 from axis_core.adapters.models.openai import MODEL_PRICING
+from axis_core.adapters.models.openai_error_utils import build_openai_model_error
 from axis_core.errors import ModelError
 from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
@@ -369,57 +370,4 @@ class OpenAIResponsesModel:
 
     def _classify_openai_error(self, error: Exception) -> ModelError:
         """Normalize OpenAI SDK errors into ModelError."""
-        import openai
-
-        if isinstance(error, openai.RateLimitError):
-            return ModelError(
-                message=f"Rate limit exceeded for {self._model_id}: {error}",
-                model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "rate_limit"},
-                cause=error,
-            )
-
-        if isinstance(error, openai.AuthenticationError):
-            return ModelError(
-                message=f"Authentication failed for {self._model_id}: {error}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "authentication"},
-                cause=error,
-            )
-
-        if isinstance(error, openai.BadRequestError):
-            return ModelError(
-                message=f"Bad request to {self._model_id}: {error}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "bad_request"},
-                cause=error,
-            )
-
-        if isinstance(error, openai.APITimeoutError):
-            return ModelError(
-                message=f"API timeout for {self._model_id}: {error}",
-                model_id=self._model_id,
-                recoverable=True,
-                details={"error_type": "timeout"},
-                cause=error,
-            )
-
-        if isinstance(error, openai.APIError):
-            return ModelError(
-                message=f"API error for {self._model_id}: {error}",
-                model_id=self._model_id,
-                recoverable=False,
-                details={"error_type": "api_error"},
-                cause=error,
-            )
-
-        return ModelError(
-            message=f"Unexpected error for {self._model_id}: {error}",
-            model_id=self._model_id,
-            recoverable=False,
-            details={"error_type": "unknown"},
-            cause=error,
-        )
+        return build_openai_model_error(error, self._model_id)
