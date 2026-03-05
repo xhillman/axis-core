@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from axis_core.budget import Budget, BudgetState
+from axis_core.config import RetryPolicy
 from axis_core.errors import AxisError, ErrorClass, ErrorRecord
 from axis_core.protocols.model import ToolCall
 from axis_core.protocols.planner import Plan, PlanStep, StepType
@@ -1027,6 +1028,70 @@ class TestSerializationRoundTrip:
         assert restored.cycles[1].cycle_number == 1
         assert restored.cycles[2].cycle_number == 2
         assert restored.cycles[2].evaluation.done is True
+
+    def test_run_state_plan_retry_policy_roundtrip(self) -> None:
+        """Current plan step retry policy should round-trip via checkpoint serialization."""
+        from axis_core.context import RunState
+
+        retry_policy = RetryPolicy(
+            max_attempts=2,
+            backoff="fixed",
+            initial_delay=0.0,
+            max_delay=0.0,
+            jitter=False,
+            retry_on=["ratelimiterror"],
+        )
+        state = RunState()
+        state.current_plan = Plan(
+            id="plan-retry",
+            goal="roundtrip retry policy",
+            steps=(
+                PlanStep(
+                    id="model-step",
+                    type=StepType.MODEL,
+                    payload={},
+                    retry_policy=retry_policy,
+                ),
+            ),
+        )
+
+        data = state.to_dict()
+        assert data["current_plan"]["steps"][0]["retry_policy"] == {
+            "max_attempts": 2,
+            "backoff": "fixed",
+            "initial_delay": 0.0,
+            "max_delay": 0.0,
+            "jitter": False,
+            "retry_on": ["ratelimiterror"],
+        }
+
+        restored = RunState.from_dict(data)
+        assert restored.current_plan is not None
+        assert restored.current_plan.steps[0].retry_policy == retry_policy
+
+    def test_run_state_deserialize_legacy_plan_without_retry_policy(self) -> None:
+        """Legacy checkpoints without step retry policy should default to None."""
+        from axis_core.context import RunState
+
+        state = RunState()
+        state.current_plan = Plan(
+            id="plan-legacy",
+            goal="legacy payload",
+            steps=(
+                PlanStep(
+                    id="model-step",
+                    type=StepType.MODEL,
+                    payload={},
+                ),
+            ),
+        )
+
+        legacy_payload = state.to_dict()
+        legacy_payload["current_plan"]["steps"][0].pop("retry_policy", None)
+
+        restored = RunState.from_dict(legacy_payload)
+        assert restored.current_plan is not None
+        assert restored.current_plan.steps[0].retry_policy is None
 
     def test_error_serialization(self) -> None:
         """Test that errors are serialized as string representations."""

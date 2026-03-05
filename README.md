@@ -18,7 +18,7 @@ A modular, observable AI agent framework for building production-ready agents in
   idempotency helpers for retry-safe side effects
 - Optional per-agent tool allow/deny policy with glob patterns and deny-overrides-allow semantics
 - Runtime policy enforcement (timeouts, retries, rate limits, cache)
-- Checkpoint/resume support for phase-boundary recovery
+- Checkpoint/resume support for phase-boundary recovery with per-step retry-policy fidelity
 - Budget controls for cost, token, and cycle limits
 - Provider-agnostic usage normalization for budget and telemetry accounting
 - Type hints with strict mypy coverage

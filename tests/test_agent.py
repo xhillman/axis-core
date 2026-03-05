@@ -633,6 +633,40 @@ class TestCheckpointResumeTask19:
         assert result.error is not None
         assert "current_plan" in str(result.error)
 
+    @pytest.mark.asyncio
+    async def test_resume_async_accepts_legacy_checkpoint_without_retry_policy(
+        self,
+        tmp_path: Any,
+    ) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            checkpoint=True,
+            checkpoint_dir=str(tmp_path),
+        )
+        first = await agent.run_async("legacy checkpoint retry policy")
+        checkpoint_path = tmp_path / f"{first.run_id}.json"
+        checkpoint = json.loads(checkpoint_path.read_text())
+
+        state = checkpoint["context"]["state"]
+        for cycle in state.get("cycles", []):
+            plan = cycle.get("plan")
+            if plan is None:
+                continue
+            for step in plan.get("steps", []):
+                step.pop("retry_policy", None)
+
+        current_plan = state.get("current_plan")
+        if current_plan is not None:
+            for step in current_plan.get("steps", []):
+                step.pop("retry_policy", None)
+
+        resumed = await agent.resume_async(checkpoint)
+
+        assert resumed.success is True
+        assert resumed.run_id == first.run_id
+
     def test_resume_sync_from_checkpoint_path(self, tmp_path: Any) -> None:
         agent = Agent(
             model=MockModel(),

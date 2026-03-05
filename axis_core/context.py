@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from axis_core.attachments import AttachmentLike, serialize_attachments
 from axis_core.budget import Budget, BudgetState
+from axis_core.config import RetryPolicy
 from axis_core.errors import AxisError, ErrorClass, ErrorRecord
 from axis_core.redaction import (
     persist_sensitive_tool_data_enabled,
@@ -1114,6 +1115,43 @@ def _deserialize_axis_error(data: dict[str, Any]) -> AxisError:
     )
 
 
+def _serialize_retry_policy(policy: RetryPolicy | None) -> dict[str, Any] | None:
+    """Serialize RetryPolicy to dict."""
+    if policy is None:
+        return None
+    return {
+        "max_attempts": policy.max_attempts,
+        "backoff": policy.backoff,
+        "initial_delay": policy.initial_delay,
+        "max_delay": policy.max_delay,
+        "jitter": policy.jitter,
+        "retry_on": list(policy.retry_on) if policy.retry_on is not None else None,
+    }
+
+
+def _deserialize_retry_policy(data: dict[str, Any] | None) -> RetryPolicy | None:
+    """Deserialize RetryPolicy from dict.
+
+    Missing or null payloads are treated as "no step override" for compatibility
+    with checkpoints written before retry-policy serialization was introduced.
+    """
+    if data is None:
+        return None
+
+    default_policy = RetryPolicy()
+    retry_on_raw = data.get("retry_on", default_policy.retry_on)
+    retry_on = None if retry_on_raw is None else [str(item) for item in retry_on_raw]
+
+    return RetryPolicy(
+        max_attempts=int(data.get("max_attempts", default_policy.max_attempts)),
+        backoff=str(data.get("backoff", default_policy.backoff)),
+        initial_delay=float(data.get("initial_delay", default_policy.initial_delay)),
+        max_delay=float(data.get("max_delay", default_policy.max_delay)),
+        jitter=bool(data.get("jitter", default_policy.jitter)),
+        retry_on=retry_on,
+    )
+
+
 def _serialize_plan(plan: Plan) -> dict[str, Any]:
     """Serialize Plan to dict."""
     return {
@@ -1125,7 +1163,7 @@ def _serialize_plan(plan: Plan) -> dict[str, Any]:
                 "type": step.type.value,
                 "payload": step.payload,
                 "dependencies": list(step.dependencies) if step.dependencies else None,
-                "retry_policy": None,  # RetryPolicy serialization simplified
+                "retry_policy": _serialize_retry_policy(step.retry_policy),
             }
             for step in plan.steps
         ],
@@ -1145,7 +1183,7 @@ def _deserialize_plan(data: dict[str, Any]) -> Plan:
             type=StepType(s["type"]),
             payload=s.get("payload", {}),
             dependencies=tuple(s["dependencies"]) if s.get("dependencies") else None,
-            retry_policy=None,  # RetryPolicy deserialization simplified
+            retry_policy=_deserialize_retry_policy(s.get("retry_policy")),
         )
         for s in data.get("steps", [])
     )

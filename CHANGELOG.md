@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Checkpoint plan serialization now preserves `PlanStep.retry_policy` so resumed runs keep the
+  same per-step retry semantics as uninterrupted runs.
+- Resume remains backward compatible with legacy checkpoints that do not include
+  `retry_policy` on plan steps.
+
 ## [0.12.1] - 2026-03-03
 
 ### Changed

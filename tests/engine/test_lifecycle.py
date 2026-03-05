@@ -3280,6 +3280,100 @@ class TestCheckpointResumeTask19:
         assert resumed_result["cycles_completed"] == 1
 
     @pytest.mark.asyncio
+    async def test_resume_from_plan_checkpoint_preserves_step_retry_policy(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        checkpoints_by_phase: dict[str, dict[str, Any]] = {}
+
+        class StepRetryPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                _ = (observation, ctx)
+                return Plan(
+                    id="step-retry-plan",
+                    goal="enforce step retry policy",
+                    steps=(
+                        PlanStep(
+                            id="model-step",
+                            type=StepType.MODEL,
+                            payload={},
+                            retry_policy=RetryPolicy(
+                                max_attempts=1,
+                                backoff="fixed",
+                                initial_delay=0.0,
+                                max_delay=0.0,
+                                jitter=False,
+                            ),
+                        ),
+                        PlanStep(
+                            id="terminal-step",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("model-step",),
+                        ),
+                    ),
+                )
+
+        async def checkpoint_handler(checkpoint: dict[str, Any]) -> None:
+            checkpoints_by_phase[checkpoint["phase"]] = checkpoint
+
+        capture_engine = LifecycleEngine(
+            model=mock_model,
+            planner=StepRetryPlanner(),
+            checkpoint_handler=checkpoint_handler,
+        )
+
+        await capture_engine.execute(
+            input_text="checkpoint retry policy",
+            agent_id="agent-task19-step-retry",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        class FlakyModel(MockModelAdapter):
+            def __init__(self) -> None:
+                super().__init__(
+                    responses=[
+                        ModelResponse(
+                            content="model-ok",
+                            tool_calls=None,
+                            usage=UsageStats(
+                                input_tokens=5,
+                                output_tokens=5,
+                                total_tokens=10,
+                            ),
+                            cost_usd=0.0005,
+                        )
+                    ]
+                )
+                self.attempts = 0
+
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                self.attempts += 1
+                if self.attempts == 1:
+                    exc_class = type("RateLimitError", (Exception,), {})
+                    raise exc_class("transient")
+                return await super().complete(*args, **kwargs)
+
+        resumed_model = FlakyModel()
+        resumed_engine = LifecycleEngine(model=resumed_model, planner=StepRetryPlanner())
+        resumed_result = await resumed_engine.resume(
+            checkpoints_by_phase[Phase.PLAN.value],
+            config=_runtime_config(
+                retry=RetryPolicy(
+                    max_attempts=3,
+                    backoff="fixed",
+                    initial_delay=0.0,
+                    max_delay=0.0,
+                    jitter=False,
+                )
+            ),
+        )
+
+        assert resumed_result["success"] is False
+        assert resumed_model.attempts == 1
+
+    @pytest.mark.asyncio
     async def test_resume_rejects_invalid_phase_boundary_state(
         self,
         mock_model: MockModelAdapter,
