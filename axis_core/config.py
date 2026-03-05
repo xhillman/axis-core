@@ -346,6 +346,16 @@ class Config:
 
     Resolution order: defaults → env → constructor → runtime
 
+    Config-owned environment variables:
+        - AXIS_DEFAULT_MODEL
+        - AXIS_DEFAULT_PLANNER
+        - AXIS_DEFAULT_MEMORY
+        - ANTHROPIC_API_KEY
+        - OPENAI_API_KEY
+        - AXIS_TELEMETRY
+        - AXIS_VERBOSE
+        - AXIS_DEBUG
+
     Usage:
         from axis_core.config import config
 

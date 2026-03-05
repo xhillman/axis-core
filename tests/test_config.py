@@ -1,6 +1,8 @@
 """Tests for axis_core.config module."""
 
 import os
+import re
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +16,52 @@ from axis_core.config import (
     Timeouts,
     deep_merge,
 )
+
+_CONFIG_OWNED_ENV_VARS = {
+    "AXIS_DEFAULT_MODEL",
+    "AXIS_DEFAULT_PLANNER",
+    "AXIS_DEFAULT_MEMORY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "AXIS_TELEMETRY",
+    "AXIS_VERBOSE",
+    "AXIS_DEBUG",
+}
+
+_RUNTIME_OWNED_ENV_VARS = {
+    "AXIS_TRANSCRIPT_STRICT",
+    "AXIS_MAX_TOOL_RESULT_CHARS",
+    "AXIS_CONTEXT_STRATEGY",
+    "AXIS_MAX_CYCLE_CONTEXT",
+    "AXIS_CONTEXT_GUARD_ENABLED",
+    "AXIS_CONTEXT_WINDOW_TOKENS",
+    "AXIS_CONTEXT_GUARD_WARN_TOKENS",
+    "AXIS_CONTEXT_GUARD_BLOCK_TOKENS",
+    "AXIS_CONTEXT_PRUNE_ENABLED",
+    "AXIS_TELEMETRY_SINK",
+    "AXIS_TELEMETRY_REDACT",
+    "AXIS_TELEMETRY_COMPACT",
+    "AXIS_TELEMETRY_FILE",
+    "AXIS_TELEMETRY_CALLBACK",
+    "AXIS_TELEMETRY_BUFFER_MODE",
+    "AXIS_TELEMETRY_BATCH_SIZE",
+    "AXIS_PERSIST_SENSITIVE_TOOL_DATA",
+    "AXIS_SYNAPTIC_PATH",
+}
+
+_PROVIDER_SDK_ENV_VARS = {"OPENAI_BASE_URL"}
+
+_ENV_EXAMPLE_PATH = Path(__file__).resolve().parents[1] / ".env.example"
+_ENV_DECLARATION_PATTERN = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]+)\s*=")
+
+
+def _documented_env_vars(path: Path) -> set[str]:
+    documented: set[str] = set()
+    for line in path.read_text().splitlines():
+        match = _ENV_DECLARATION_PATTERN.match(line)
+        if match:
+            documented.add(match.group(1))
+    return documented
 
 
 class TestTimeouts:
@@ -368,6 +416,55 @@ class TestConfigSingleton:
         cfg = Config()
         assert cfg.anthropic_api_key == "test-key"
 
+    @pytest.mark.parametrize(
+        ("env_var", "raw_value", "attr_name", "expected_value"),
+        [
+            ("AXIS_DEFAULT_MODEL", "env-model", "default_model", "env-model"),
+            ("AXIS_DEFAULT_PLANNER", "env-planner", "default_planner", "env-planner"),
+            ("AXIS_DEFAULT_MEMORY", "env-memory", "default_memory", "env-memory"),
+            ("ANTHROPIC_API_KEY", "ant-key", "anthropic_api_key", "ant-key"),
+            ("OPENAI_API_KEY", "openai-key", "openai_api_key", "openai-key"),
+            ("AXIS_TELEMETRY", "true", "telemetry", True),
+            ("AXIS_TELEMETRY", "false", "telemetry", False),
+            ("AXIS_VERBOSE", "true", "verbose", True),
+            ("AXIS_VERBOSE", "false", "verbose", False),
+            ("AXIS_DEBUG", "true", "debug", True),
+            ("AXIS_DEBUG", "false", "debug", False),
+        ],
+    )
+    def test_config_owned_env_matrix(
+        self,
+        env_var: str,
+        raw_value: str,
+        attr_name: str,
+        expected_value: str | bool,
+    ) -> None:
+        with patch.dict(os.environ, {env_var: raw_value}):
+            cfg = Config()
+        assert getattr(cfg, attr_name) == expected_value
+
+    def test_config_defaults_without_env_overrides(self) -> None:
+        # Stub dotenv import so .env files do not affect this default-value smoke test.
+        class _DotenvStub:
+            @staticmethod
+            def load_dotenv() -> bool:
+                return False
+
+        with (
+            patch.dict("sys.modules", {"dotenv": _DotenvStub()}),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            cfg = Config()
+
+        assert cfg.default_model == "claude-sonnet-4-20250514"
+        assert cfg.default_planner == "auto"
+        assert cfg.default_memory == "ephemeral"
+        assert cfg.anthropic_api_key == ""
+        assert cfg.openai_api_key == ""
+        assert cfg.telemetry is True
+        assert cfg.verbose is False
+        assert cfg.debug is False
+
 
 # ---------------------------------------------------------------------------
 # ResolvedConfig tests (9.5)
@@ -448,3 +545,18 @@ class TestConfigPackageExport:
         from axis_core.config import config as direct_config
 
         assert pkg_config is direct_config
+
+
+class TestEnvExampleContract:
+    """Contract tests ensuring .env.example matches implemented env behavior."""
+
+    def test_env_example_documents_only_implemented_env_vars(self) -> None:
+        documented_vars = _documented_env_vars(_ENV_EXAMPLE_PATH)
+        implemented_vars = (
+            _CONFIG_OWNED_ENV_VARS | _RUNTIME_OWNED_ENV_VARS | _PROVIDER_SDK_ENV_VARS
+        )
+        assert documented_vars - implemented_vars == set()
+
+    def test_env_example_includes_all_config_owned_env_vars(self) -> None:
+        documented_vars = _documented_env_vars(_ENV_EXAMPLE_PATH)
+        assert _CONFIG_OWNED_ENV_VARS - documented_vars == set()

@@ -43,8 +43,15 @@ This table documents variables currently read by axis-core runtime code.
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `AXIS_TRANSCRIPT_STRICT` | `false` | Reject unresolved tool-call/tool-result pairing instead of best-effort repair/drop behavior. |
+| `AXIS_MAX_TOOL_RESULT_CHARS` | unset | Cap persisted tool-result content passed to model calls. |
 | `AXIS_CONTEXT_STRATEGY` | `smart` | Context history strategy in act phase (`smart`, `full`, `minimal`). |
 | `AXIS_MAX_CYCLE_CONTEXT` | `5` | Max prior cycles included when strategy is `smart`. |
+| `AXIS_CONTEXT_GUARD_ENABLED` | `false` | Enable token-threshold checks before model calls. |
+| `AXIS_CONTEXT_WINDOW_TOKENS` | unset | Context-window token budget used by guard/pruning checks. |
+| `AXIS_CONTEXT_GUARD_WARN_TOKENS` | `32000` | Warning threshold for low remaining tokens. |
+| `AXIS_CONTEXT_GUARD_BLOCK_TOKENS` | `16000` | Hard-block threshold for low remaining tokens. |
+| `AXIS_CONTEXT_PRUNE_ENABLED` | `false` | Enable tool-result-first pruning before block decisions. |
 
 ## Memory Adapter Paths
 
@@ -55,5 +62,4 @@ This table documents variables currently read by axis-core runtime code.
 ## Notes
 
 - `.env` loading is attempted automatically when `python-dotenv` is installed.
-- Some variables listed in `.env.example` are roadmap or compatibility placeholders and
-  may not be consumed by current runtime code.
+- `AXIS_TELEMETRY`, `AXIS_VERBOSE`, and `AXIS_DEBUG` are loaded into the global `config` singleton.

@@ -62,6 +62,20 @@ Useful non-interactive flags:
 - `--synaptic-db-path <path>`: set `AXIS_SYNAPTIC_PATH` when using `synaptic` memory
 - `--bootstrap-synaptic-db`: initialize Synaptic SQLite schema during setup
 
+## Environment Variable Contract
+
+Axis tracks env vars by ownership so behavior is predictable:
+
+- `Config`-owned (loaded by `axis_core.config.Config`): `AXIS_DEFAULT_MODEL`,
+  `AXIS_DEFAULT_MEMORY`, `AXIS_DEFAULT_PLANNER`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+  `AXIS_TELEMETRY`, `AXIS_VERBOSE`, `AXIS_DEBUG`
+- Runtime-owned (read directly by runtime code): transcript/context controls, telemetry sink
+  controls, `AXIS_PERSIST_SENSITIVE_TOOL_DATA`, and `AXIS_SYNAPTIC_PATH`
+- Provider-SDK-owned passthrough: `OPENAI_BASE_URL`
+
+See [docs/reference/env-vars.md](docs/reference/env-vars.md) and `.env.example` for the full
+current matrix.
+
 ## CLI Runtime
 
 Use `ask` for one-shot prompts and `chat` for interactive sessions.

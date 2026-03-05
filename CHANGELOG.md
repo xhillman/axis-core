@@ -19,6 +19,8 @@ All notable changes to this project will be documented in this file.
   `retry_policy` on plan steps.
 - Unified OpenAI error classification across Chat Completions and Responses backends so
   normalized `ModelError` reason/status/provider metadata drives consistent fallback behavior.
+- Aligned `.env.example`, README env guidance, and config/env contract tests to remove stale
+  undocumented knobs and keep documented env variables tied to implemented behavior.
 
 ## [0.12.1] - 2026-03-03
 
