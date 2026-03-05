@@ -108,6 +108,26 @@ class SlowPlanner:
         )
 
 
+class JsonTerminalPlanner:
+    """Planner that emits JSON output in terminal step."""
+
+    def __init__(self, output: str = '{"status":"ok"}') -> None:
+        self._output = output
+
+    async def plan(self, observation: Any, ctx: Any) -> Plan:
+        return Plan(
+            id="plan-json-terminal",
+            goal="emit json terminal output",
+            steps=[
+                PlanStep(
+                    id="step-terminal",
+                    type=StepType.TERMINAL,
+                    payload={"output": self._output},
+                ),
+            ],
+        )
+
+
 class MockMemory:
     """Minimal mock memory adapter."""
 
@@ -504,6 +524,25 @@ class TestRunAsync:
             await agent.run_async(123)  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
+    async def test_run_async_output_schema_enforces_declared_type(self) -> None:
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        result = await agent.run_async("Hello", output_schema=dict)
+        assert result.success is False
+        assert result.error is not None
+        assert "output_schema validation failed" in result.error.message
+
+    @pytest.mark.asyncio
+    async def test_run_async_output_schema_coerces_json_output(self) -> None:
+        agent = Agent(
+            model=MockModel(response_text='{"status":"ok"}'),
+            planner=JsonTerminalPlanner(output='{"status":"ok"}'),
+            memory=None,
+        )
+        result = await agent.run_async("Hello", output_schema=dict)
+        assert result.success is True
+        assert result.output == {"status": "ok"}
+
+    @pytest.mark.asyncio
     async def test_run_async_honors_explicit_timeout(self) -> None:
         agent = Agent(model=MockModel(), planner=SlowPlanner(delay_seconds=0.2), memory=None)
         result = await agent.run_async("Hello", timeout=0.05)
@@ -855,6 +894,51 @@ class TestStreamAsync:
         with pytest.raises(TypeError, match="input"):
             async for _ in agent.stream_async(42):  # type: ignore[arg-type]
                 pass
+
+    @pytest.mark.asyncio
+    async def test_stream_async_output_schema_fails_invalid_output(self) -> None:
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello", output_schema=dict):
+            events.append(event)
+        assert events[-1].type == "run_failed"
+        assert "output_schema validation failed" in str(events[-1].data["error"])
+
+    @pytest.mark.asyncio
+    async def test_stream_async_output_schema_emits_structured_events(self) -> None:
+        class StreamingJsonPlanner:
+            async def plan(self, observation: Any, ctx: Any) -> Plan:
+                return Plan(
+                    id="plan-stream-json",
+                    goal="stream and emit structured output",
+                    steps=[
+                        PlanStep(id="model", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": '{"answer":"ok"}'},
+                            dependencies=("model",),
+                        ),
+                    ],
+                )
+
+        model = MockModel(
+            response_text='{"answer":"ok"}',
+            stream_chunks=['{"answer"', ':', '"ok"', "}"],
+        )
+        agent = Agent(model=model, planner=StreamingJsonPlanner(), memory=None)
+
+        events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello", output_schema=dict):
+            events.append(event)
+
+        partial_events = [event for event in events if event.type == "structured_partial"]
+        final_structured = [event for event in events if event.type == "structured_final"]
+        assert partial_events
+        assert final_structured
+        assert final_structured[-1].data["output"] == {"answer": "ok"}
+        assert events[-1].type == "run_completed"
+        assert events[-1].data["output"] == {"answer": "ok"}
 
     @pytest.mark.asyncio
     async def test_stream_async_honors_explicit_timeout(self) -> None:

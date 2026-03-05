@@ -83,7 +83,7 @@ class RunResult:
     a completed agent run. Use copy() to create modified copies.
 
     Attributes:
-        output: Final output value (typed if output_schema was used)
+        output: Final output value (typed/coerced when output_schema is enforced)
         output_raw: Raw string output from the model
         success: True if completed without fatal error
         error: Error if success=False

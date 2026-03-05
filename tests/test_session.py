@@ -131,3 +131,15 @@ async def test_session_run_persists_history() -> None:
     stored = await memory.retrieve_session("session-6")
     assert stored is not None
     assert len(stored.history) == 2
+
+
+@pytest.mark.asyncio
+async def test_session_run_output_schema_enforces_validation() -> None:
+    memory = EphemeralMemory()
+    agent = Agent(model=_MockModel(), planner=_MockPlanner(), memory=memory)
+    session = await agent.session_async(id="session-7")
+
+    result = await session.run_async("Hello", output_schema=dict)
+    assert result.success is False
+    assert result.error is not None
+    assert "output_schema validation failed" in result.error.message

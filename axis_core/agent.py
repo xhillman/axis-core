@@ -46,6 +46,7 @@ from axis_core.engine.resolver import resolve_adapter
 from axis_core.engine.trace_collector import TraceCollector
 from axis_core.errors import AxisError, ConfigError, ErrorClass
 from axis_core.errors import TimeoutError as AxisTimeoutError
+from axis_core.output_schema import coerce_to_output_schema, parse_stream_partial, schema_name
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
 from axis_core.result import RunResult, RunStats, StreamEvent
 from axis_core.session import Session, generate_session_id, load_session
@@ -498,6 +499,7 @@ class Agent:
         raw: dict[str, Any],
         duration_ms: float,
         trace: list[Any] | None = None,
+        output_schema: type[Any] | None = None,
     ) -> RunResult:
         """Convert lifecycle engine raw result dict into a RunResult."""
         budget_state: BudgetState = raw.get("budget_state", BudgetState())
@@ -515,6 +517,22 @@ class Agent:
         )
 
         error = raw.get("error")
+        output = raw.get("output")
+        output_raw = raw.get("output_raw", "")
+        success = raw.get("success", False)
+
+        if output_schema is not None and success:
+            try:
+                output = coerce_to_output_schema(
+                    output=output,
+                    output_raw=output_raw,
+                    schema=output_schema,
+                )
+            except AxisError as schema_error:
+                success = False
+                error = schema_error
+                output = None
+
         memory_error_str = raw.get("memory_error")
         memory_error: AxisError | None = None
         if memory_error_str:
@@ -526,9 +544,9 @@ class Agent:
             )
 
         return RunResult(
-            output=raw.get("output"),
-            output_raw=raw.get("output_raw", ""),
-            success=raw.get("success", False),
+            output=output,
+            output_raw=output_raw,
+            success=success,
             error=error,
             had_recoverable_errors=any(
                 getattr(e, "recovered", False) for e in errors
@@ -724,7 +742,7 @@ class Agent:
             input: Text or multimodal input
             context: Arbitrary context dict passed to tools
             attachments: Images, PDFs, etc.
-            output_schema: Force structured output (Pydantic model)
+            output_schema: Structured output schema to enforce on final output.
             timeout: Override default timeout
             cancel_token: For external cancellation
 
@@ -801,7 +819,12 @@ class Agent:
 
                 duration_ms = (time.monotonic() - start) * 1000
                 trace = trace_collector.get_events() if trace_collector else []
-                return self._build_result(raw, duration_ms, trace=trace)
+                return self._build_result(
+                    raw,
+                    duration_ms,
+                    trace=trace,
+                    output_schema=output_schema,
+                )
             finally:
                 self._running = False
 
@@ -984,6 +1007,8 @@ class Agent:
             self._running = True
             start = time.monotonic()
             queue: asyncio.Queue[Any] = asyncio.Queue()
+            structured_buffer: list[str] = []
+            last_structured_fingerprint: str | None = None
             try:
                 effective_timeout = self._effective_timeout(timeout)
                 trace_collector = TraceCollector() if self._telemetry_enabled else None
@@ -996,7 +1021,28 @@ class Agent:
                 input_text = input if isinstance(input, str) else str(input)
 
                 async def _on_token(token: str) -> None:
+                    nonlocal last_structured_fingerprint
                     if token:
+                        if output_schema is not None:
+                            structured_buffer.append(token)
+                            partial = parse_stream_partial(
+                                "".join(structured_buffer),
+                                output_schema,
+                            )
+                            if partial is not None:
+                                fingerprint = _structured_payload_fingerprint(partial)
+                                if fingerprint != last_structured_fingerprint:
+                                    last_structured_fingerprint = fingerprint
+                                    await queue.put(
+                                        StreamEvent(
+                                            type="structured_partial",
+                                            timestamp=datetime.utcnow(),
+                                            data={
+                                                "schema": schema_name(output_schema),
+                                                "output": partial,
+                                            },
+                                        )
+                                    )
                         await queue.put(
                             StreamEvent(
                                 type="model_token",
@@ -1069,7 +1115,22 @@ class Agent:
                         trace=trace,
                     )
                 else:
-                    result = self._build_result(raw, duration_ms, trace=trace)
+                    result = self._build_result(
+                        raw,
+                        duration_ms,
+                        trace=trace,
+                        output_schema=output_schema,
+                    )
+
+                if output_schema is not None and result.success:
+                    yield StreamEvent(
+                        type="structured_final",
+                        timestamp=datetime.utcnow(),
+                        data={
+                            "schema": schema_name(output_schema),
+                            "output": result.output,
+                        },
+                    )
 
                 # Emit final event
                 event_type = "run_completed" if result.success else "run_failed"
@@ -1128,3 +1189,10 @@ class Agent:
 
 
 __all__ = ["Agent"]
+
+
+def _structured_payload_fingerprint(payload: Any) -> str:
+    try:
+        return json.dumps(payload, sort_keys=True, default=str)
+    except Exception:
+        return repr(payload)

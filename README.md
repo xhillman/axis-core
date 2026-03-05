@@ -145,6 +145,13 @@ for event in agent.stream("Solve 42 * 137"):
         print("\nDone")
 ```
 
+## API Notes
+
+- `output_schema` on `Agent.run*`, `Agent.stream*`, and `Session.run*` is enforced at runtime for
+  final output coercion/validation.
+- `stream_async(..., output_schema=...)` also emits structured events:
+  `structured_partial` (best effort while tokens arrive) and `structured_final` (validated output).
+
 ## Transcript Guards
 
 Axis normalizes transcript tool-call/tool-result pairing before model calls to reduce provider

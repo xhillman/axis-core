@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Enforced `output_schema` for public `Agent.run*`, `Agent.stream*`, and `Session.run*` APIs with
+  final-output coercion/validation in core runtime.
+- Added schema-aware streaming events for `stream_async(..., output_schema=...)`:
+  `structured_partial` (best effort) and `structured_final` (validated).
+
 ### Fixed
 
 - Checkpoint plan serialization now preserves `PlanStep.retry_policy` so resumed runs keep the
