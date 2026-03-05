@@ -57,6 +57,10 @@ logger = logging.getLogger("axis_core.agent")
 _UNSET = object()
 _STREAM_DONE = object()
 ConfirmationHandler = Callable[[str, dict[str, Any]], bool | Awaitable[bool]]
+ExecutionOperation = Callable[
+    [LifecycleEngine, ResolvedConfig],
+    Awaitable[dict[str, Any]],
+]
 
 
 def _trace_event_to_dict(event: TraceEvent) -> dict[str, Any]:
@@ -660,6 +664,84 @@ class Agent:
             memory_error=None,
         )
 
+    @staticmethod
+    async def _await_operation(
+        operation: Awaitable[dict[str, Any]],
+        timeout: float | None,
+    ) -> dict[str, Any]:
+        """Await an operation with an optional wall-clock timeout."""
+        if timeout is None:
+            return await operation
+        return await asyncio.wait_for(operation, timeout=timeout)
+
+    def _build_timeout_error(self, timeout: float | None) -> AxisTimeoutError:
+        """Create a normalized timeout error payload."""
+        timeout_seconds = timeout if timeout is not None else self._timeouts.total
+        return AxisTimeoutError(
+            message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
+            details={"timeout_seconds": timeout_seconds},
+        )
+
+    async def _execute_guarded(
+        self,
+        *,
+        operation: ExecutionOperation,
+        timeout: float | None,
+        output_schema: type[Any] | None = None,
+        prepare: Callable[[], None] | None = None,
+    ) -> RunResult:
+        """Execute run/resume operations with shared lock + timeout/error handling."""
+        if self._lock.locked():
+            raise RuntimeError(
+                "Agent is already executing. "
+                "Create multiple Agent instances for concurrent execution."
+            )
+
+        async with self._lock:
+            self._running = True
+            try:
+                start = time.monotonic()
+                effective_timeout = self._effective_timeout(timeout)
+                trace_collector = TraceCollector() if self._telemetry_enabled else None
+                extra_sinks = [trace_collector] if trace_collector else []
+                engine = self._build_engine(extra_sinks=extra_sinks)
+                runtime_config = self._resolved_config()
+                try:
+                    if prepare is not None:
+                        prepare()
+
+                    raw = await self._await_operation(
+                        operation(engine, runtime_config),
+                        effective_timeout,
+                    )
+                except AxisError as e:
+                    trace = trace_collector.get_events() if trace_collector else []
+                    duration_ms = (time.monotonic() - start) * 1000
+                    return self._build_failure_result(
+                        error=e,
+                        duration_ms=duration_ms,
+                        trace=trace,
+                    )
+                except asyncio.TimeoutError:
+                    trace = trace_collector.get_events() if trace_collector else []
+                    duration_ms = (time.monotonic() - start) * 1000
+                    return self._build_failure_result(
+                        error=self._build_timeout_error(effective_timeout),
+                        duration_ms=duration_ms,
+                        trace=trace,
+                    )
+
+                duration_ms = (time.monotonic() - start) * 1000
+                trace = trace_collector.get_events() if trace_collector else []
+                return self._build_result(
+                    raw,
+                    duration_ms,
+                    trace=trace,
+                    output_schema=output_schema,
+                )
+            finally:
+                self._running = False
+
     async def session_async(
         self,
         id: str | None = None,
@@ -759,74 +841,20 @@ class Agent:
                 f"Argument 'input' must be str or list, got {type(input).__name__}"
             )
 
-        # AD-008: Single-execution constraint
-        if self._lock.locked():
-            raise RuntimeError(
-                "Agent is already executing. "
-                "Create multiple Agent instances for concurrent execution."
-            )
-
-        async with self._lock:
-            self._running = True
-            start = time.monotonic()
-            try:
-                effective_timeout = self._effective_timeout(timeout)
-                trace_collector = TraceCollector() if self._telemetry_enabled else None
-                extra_sinks = [trace_collector] if trace_collector else []
-                engine = self._build_engine(extra_sinks=extra_sinks)
-                runtime_config = self._resolved_config()
-
-                input_text = input if isinstance(input, str) else str(input)
-
-                try:
-                    execute_coro = engine.execute(
-                        input_text=input_text,
-                        agent_id=self._agent_id,
-                        budget=self._budget,
-                        context=context,
-                        attachments=attachments,
-                        cancel_token=cancel_token,
-                        config=runtime_config,
-                    )
-                    if effective_timeout is None:
-                        raw = await execute_coro
-                    else:
-                        raw = await asyncio.wait_for(execute_coro, timeout=effective_timeout)
-                except AxisError as e:
-                    # Engine raised before finalize (e.g. empty input)
-                    trace = trace_collector.get_events() if trace_collector else []
-                    duration_ms = (time.monotonic() - start) * 1000
-                    return self._build_failure_result(
-                        error=e,
-                        duration_ms=duration_ms,
-                        trace=trace,
-                    )
-                except asyncio.TimeoutError:
-                    trace = trace_collector.get_events() if trace_collector else []
-                    duration_ms = (time.monotonic() - start) * 1000
-                    timeout_seconds = (
-                        effective_timeout if effective_timeout is not None else self._timeouts.total
-                    )
-                    timeout_error = AxisTimeoutError(
-                        message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
-                        details={"timeout_seconds": timeout_seconds},
-                    )
-                    return self._build_failure_result(
-                        error=timeout_error,
-                        duration_ms=duration_ms,
-                        trace=trace,
-                    )
-
-                duration_ms = (time.monotonic() - start) * 1000
-                trace = trace_collector.get_events() if trace_collector else []
-                return self._build_result(
-                    raw,
-                    duration_ms,
-                    trace=trace,
-                    output_schema=output_schema,
-                )
-            finally:
-                self._running = False
+        input_text = input if isinstance(input, str) else str(input)
+        return await self._execute_guarded(
+            operation=lambda engine, runtime_config: engine.execute(
+                input_text=input_text,
+                agent_id=self._agent_id,
+                budget=self._budget,
+                context=context,
+                attachments=attachments,
+                cancel_token=cancel_token,
+                config=runtime_config,
+            ),
+            timeout=timeout,
+            output_schema=output_schema,
+        )
 
     # =========================================================================
     # run — sync wrapper (8.4, AD-027)
@@ -846,62 +874,21 @@ class Agent:
                 f"got {type(checkpoint).__name__}"
             )
 
-        if self._lock.locked():
-            raise RuntimeError(
-                "Agent is already executing. "
-                "Create multiple Agent instances for concurrent execution."
-            )
+        checkpoint_payload: dict[str, Any] = {}
 
-        async with self._lock:
-            self._running = True
-            start = time.monotonic()
-            try:
-                effective_timeout = self._effective_timeout(timeout)
-                trace_collector = TraceCollector() if self._telemetry_enabled else None
-                extra_sinks = [trace_collector] if trace_collector else []
-                engine = self._build_engine(extra_sinks=extra_sinks)
-                runtime_config = self._resolved_config()
-                checkpoint_payload = self._load_checkpoint_payload(checkpoint)
+        def _prepare_checkpoint() -> None:
+            nonlocal checkpoint_payload
+            checkpoint_payload = self._load_checkpoint_payload(checkpoint)
 
-                try:
-                    execute_coro = engine.resume(
-                        checkpoint=checkpoint_payload,
-                        cancel_token=cancel_token,
-                        config=runtime_config,
-                    )
-                    if effective_timeout is None:
-                        raw = await execute_coro
-                    else:
-                        raw = await asyncio.wait_for(execute_coro, timeout=effective_timeout)
-                except AxisError as e:
-                    trace = trace_collector.get_events() if trace_collector else []
-                    duration_ms = (time.monotonic() - start) * 1000
-                    return self._build_failure_result(
-                        error=e,
-                        duration_ms=duration_ms,
-                        trace=trace,
-                    )
-                except asyncio.TimeoutError:
-                    trace = trace_collector.get_events() if trace_collector else []
-                    duration_ms = (time.monotonic() - start) * 1000
-                    timeout_seconds = (
-                        effective_timeout if effective_timeout is not None else self._timeouts.total
-                    )
-                    timeout_error = AxisTimeoutError(
-                        message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
-                        details={"timeout_seconds": timeout_seconds},
-                    )
-                    return self._build_failure_result(
-                        error=timeout_error,
-                        duration_ms=duration_ms,
-                        trace=trace,
-                    )
-
-                duration_ms = (time.monotonic() - start) * 1000
-                trace = trace_collector.get_events() if trace_collector else []
-                return self._build_result(raw, duration_ms, trace=trace)
-            finally:
-                self._running = False
+        return await self._execute_guarded(
+            operation=lambda engine, runtime_config: engine.resume(
+                checkpoint=checkpoint_payload,
+                cancel_token=cancel_token,
+                config=runtime_config,
+            ),
+            timeout=timeout,
+            prepare=_prepare_checkpoint,
+        )
 
     def resume(
         self,

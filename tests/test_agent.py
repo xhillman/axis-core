@@ -11,7 +11,7 @@ import pytest
 from axis_core.agent import Agent
 from axis_core.budget import Budget
 from axis_core.config import Timeouts
-from axis_core.errors import BudgetError
+from axis_core.errors import BudgetError, ConfigError
 from axis_core.errors import TimeoutError as AxisTimeoutError
 from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
@@ -574,6 +574,27 @@ class TestRunAsync:
         assert isinstance(result.error, BudgetError)
         assert result.error.resource == "wall_time"
 
+    @pytest.mark.asyncio
+    async def test_run_async_returns_failure_for_pre_finalize_axis_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class FailingEngine:
+            async def execute(self, **kwargs: Any) -> dict[str, Any]:
+                del kwargs
+                raise ConfigError(message="run failed before finalize")
+
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        monkeypatch.setattr(
+            agent,
+            "_build_engine",
+            lambda extra_sinks=None: FailingEngine(),
+        )
+        result = await agent.run_async("Hello")
+        assert result.success is False
+        assert isinstance(result.error, ConfigError)
+        assert "before finalize" in result.error.message
+
 
 class TestCheckpointResumeTask19:
     """Task 19 tests for Agent checkpoint persistence and resume APIs."""
@@ -624,6 +645,77 @@ class TestCheckpointResumeTask19:
         assert result.success is False
         assert result.error is not None
         assert "checkpoint" in str(result.error).lower()
+
+    @pytest.mark.asyncio
+    async def test_resume_async_honors_explicit_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class SlowResumeEngine:
+            async def resume(self, **kwargs: Any) -> dict[str, Any]:
+                del kwargs
+                await asyncio.sleep(0.2)
+                return {}
+
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        monkeypatch.setattr(
+            agent,
+            "_build_engine",
+            lambda extra_sinks=None: SlowResumeEngine(),
+        )
+
+        result = await agent.resume_async({}, timeout=0.05)
+        assert result.success is False
+        assert isinstance(result.error, AxisTimeoutError)
+
+    @pytest.mark.asyncio
+    async def test_resume_async_uses_default_total_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class SlowResumeEngine:
+            async def resume(self, **kwargs: Any) -> dict[str, Any]:
+                del kwargs
+                await asyncio.sleep(0.2)
+                return {}
+
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            timeouts=Timeouts(total=0.05),
+        )
+        monkeypatch.setattr(
+            agent,
+            "_build_engine",
+            lambda extra_sinks=None: SlowResumeEngine(),
+        )
+
+        result = await agent.resume_async({})
+        assert result.success is False
+        assert isinstance(result.error, AxisTimeoutError)
+
+    @pytest.mark.asyncio
+    async def test_resume_async_returns_failure_for_pre_finalize_axis_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class FailingResumeEngine:
+            async def resume(self, **kwargs: Any) -> dict[str, Any]:
+                del kwargs
+                raise ConfigError(message="resume failed before finalize")
+
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        monkeypatch.setattr(
+            agent,
+            "_build_engine",
+            lambda extra_sinks=None: FailingResumeEngine(),
+        )
+
+        result = await agent.resume_async({})
+        assert result.success is False
+        assert isinstance(result.error, ConfigError)
+        assert "before finalize" in result.error.message
 
     @pytest.mark.asyncio
     async def test_resume_async_rejects_unsupported_checkpoint_version(
@@ -721,6 +813,27 @@ class TestCheckpointResumeTask19:
 
         assert resumed.success is True
         assert resumed.run_id == first.run_id
+
+    def test_resume_sync_honors_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class SlowResumeEngine:
+            async def resume(self, **kwargs: Any) -> dict[str, Any]:
+                del kwargs
+                await asyncio.sleep(0.2)
+                return {}
+
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        monkeypatch.setattr(
+            agent,
+            "_build_engine",
+            lambda extra_sinks=None: SlowResumeEngine(),
+        )
+
+        result = agent.resume({}, timeout=0.05)
+        assert result.success is False
+        assert isinstance(result.error, AxisTimeoutError)
 
 
 # ---------------------------------------------------------------------------
