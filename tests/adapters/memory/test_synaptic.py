@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import importlib.util
+from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-pytest.importorskip("synaptic_core", reason="synaptic-core not installed")
+try:
+    import_module("synaptic_core.api")
+except Exception as exc:  # pragma: no cover - exercised only in missing/partial installs
+    pytest.skip(
+        f"synaptic-core API module not available: {exc}",
+        allow_module_level=True,
+    )
 
 from axis_core.adapters.memory import synaptic as synaptic_adapter  # noqa: E402
 from axis_core.adapters.memory.synaptic import SynapticMemory  # noqa: E402

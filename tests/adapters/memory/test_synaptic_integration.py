@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import re
+from importlib import import_module
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
 
 import pytest
 
-pytest.importorskip("synaptic_core", reason="synaptic-core not installed")
+try:
+    import_module("synaptic_core.api")
+except Exception as exc:  # pragma: no cover - exercised only in missing/partial installs
+    pytest.skip(
+        f"synaptic-core API module not available: {exc}",
+        allow_module_level=True,
+    )
 
 from synaptic_core.api import AsyncSynaptic  # noqa: E402
 
@@ -17,7 +25,13 @@ from axis_core.session import Session  # noqa: E402
 
 
 def _installed_synaptic_version() -> tuple[int, int, int]:
-    raw = package_version("synaptic-core")
+    try:
+        raw = package_version("synaptic-core")
+    except PackageNotFoundError:
+        pytest.skip(
+            "synaptic-core distribution metadata not found",
+            allow_module_level=True,
+        )
     match = re.match(r"^\s*(\d+)\.(\d+)\.(\d+)", raw)
     if match is None:
         pytest.skip(f"Unparseable synaptic-core version: {raw}", allow_module_level=True)
