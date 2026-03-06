@@ -129,4 +129,5 @@ Treat these as mandatory checks before marking work complete:
 - Update `REPO_MAP.md` and any affected `.agent/maps/*.md` in the same change whenever development makes router summaries or routing targets stale.
 - Post task summary in chat after completion.
 - Run acceptance checks before parent execution and production safety checks before production release.
+- After policy-doc edits, run `python3 scripts/check_doc_policy_consistency.py`.
 - When process policy changes, update `AGENTS.md`, `CLAUDE.md`, and related map docs in the same change.

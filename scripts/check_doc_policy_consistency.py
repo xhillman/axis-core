@@ -1,107 +1,91 @@
 #!/usr/bin/env python3
-"""Validate key policy anchors across process and prompt docs.
+"""Validate a few high-value documentation drift risks.
 
-This script is intentionally lightweight and string-based. It helps catch
-accidental drift when updating agent/process guidance documents.
+This checker stays intentionally small:
+- `REPO_MAP.md` router links must resolve
+- a curated set of metadata path claims must still exist
+- the maintained version in `build_release.md` must match `pyproject.toml`
 """
 
 from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
-REQUIRED_SNIPPETS: dict[str, list[str]] = {
-    "dev/process-tasks.md": [
-        "## Quality Gates (Canonical)",
-        "## Acceptance Contract (Required Per Parent Task)",
-        "## Production Release Gate (Required Before Production Deployments)",
-        "## Memory Hygiene Gate",
-        "## Task Metadata Standard (for New/Updated Tasks)",
-        "Post the same concise summary in chat",
-        "ACCEPTANCE_CHECK_COMMAND",
-        "PRODUCTION_SAFETY_CHECK_COMMAND",
-        "MEMORY_HYGIENE_COMMAND",
-    ],
-    "dev/spec-driven.md": [
-        "## 0. Bootstrap (Mandatory)",
-        "## 3. Execution Protocol",
-        "## 4. Testing Boundaries",
-        "{{TASK_ID}}",
-        "{{MEMORY_PATH}}",
-        "{{SUMMARY_LOG_PATH}}",
-        "{{ACCEPTANCE_CHECK_COMMAND}}",
-        "{{PRODUCTION_SAFETY_CHECK_COMMAND}}",
-        "{{MEMORY_HYGIENE_COMMAND}}",
-        "post the same concise summary in chat",
-    ],
-    "REPO_MAP.md": [
-        "meta_process.md",
-    ],
-    "AGENTS.md": [
-        "Execution Process: process-tasks.md (canonical source",
-        "Production Safety Gate: `dev/production-safety-gate.md`",
-        "## Process Ownership (Avoid Drift)",
-    ],
-    "CLAUDE.md": [
-        "Execution Process: process-tasks.md (canonical source",
-        "Production Safety Gate: `dev/production-safety-gate.md`",
-        "## Process Ownership (Avoid Drift)",
-    ],
-    ".agent/maps/meta_process.md": [
-        "## Ownership Model",
-        "dev/memory.md",
-        "dev/task-summaries.md",
-    ],
-    "dev/memory.md": [
-        "## Stable Preferences",
-        "## Mistakes Log",
-        "## Do Not Repeat Checklist",
-    ],
-    "dev/task-summaries.md": [
-        "## Entry Template",
-        "## Entries",
-    ],
-    "dev/production-safety-gate.md": [
-        "## Required Checklist",
-        "## Evidence",
-    ],
-    "dev/skills/route-context/SKILL.md": [
-        "name: route-context",
-    ],
-    "dev/skills/execute-parent-task/SKILL.md": [
-        "name: execute-parent-task",
-    ],
-    "dev/skills/run-quality-gates/SKILL.md": [
-        "name: run-quality-gates",
-    ],
-    "dev/skills/update-memory-and-summary/SKILL.md": [
-        "name: update-memory-and-summary",
-    ],
-    "dev/skills/release-safety-gate/SKILL.md": [
-        "name: release-safety-gate",
-    ],
-    "scripts/check_acceptance_contracts.py": [
-        "Acceptance contracts check passed.",
-        "REQUIRED_FIELDS",
-    ],
-    "scripts/check_production_safety_gate.py": [
-        "REQUIRED_CHECKLIST_ITEMS",
-        "Production safety gate check passed",
-    ],
-    "scripts/check_memory_hygiene.py": [
-        "Memory hygiene check passed.",
-        "ALLOWED_STATUSES",
-    ],
-    ".agent/maps/testing_quality.md": [
-        "## Gate Levels",
-    ],
-}
-
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 PYPROJECT_VERSION_RE = re.compile(r'^version = "(?P<version>[^"]+)"$', re.MULTILINE)
 BUILD_RELEASE_VERSION_RE = re.compile(
     r"^- Current version: `(?P<version>[^`]+)`$",
     re.MULTILINE,
+)
+
+
+@dataclass(frozen=True)
+class PathClaim:
+    document_path: str
+    reference_text: str
+    target_path: str
+
+
+PATH_CLAIMS: tuple[PathClaim, ...] = (
+    PathClaim(
+        document_path="REPO_MAP.md",
+        reference_text="context/",
+        target_path="axis_core/context/",
+    ),
+    PathClaim(
+        document_path="REPO_MAP.md",
+        reference_text="engine/lifecycle.py",
+        target_path="axis_core/engine/lifecycle.py",
+    ),
+    PathClaim(
+        document_path="REPO_MAP.md",
+        reference_text="axis_core/adapters/",
+        target_path="axis_core/adapters/",
+    ),
+    PathClaim(
+        document_path="REPO_MAP.md",
+        reference_text="tests/",
+        target_path="tests/",
+    ),
+    PathClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="dev/process-tasks.md",
+        target_path="dev/process-tasks.md",
+    ),
+    PathClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="dev/spec-driven.md",
+        target_path="dev/spec-driven.md",
+    ),
+    PathClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="dev/contracts/README.md",
+        target_path="dev/contracts/README.md",
+    ),
+    PathClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="dev/archive/",
+        target_path="dev/archive/",
+    ),
+    PathClaim(
+        document_path="dev/process-tasks.md",
+        reference_text="python3 scripts/check_doc_policy_consistency.py",
+        target_path="scripts/check_doc_policy_consistency.py",
+    ),
+    PathClaim(
+        document_path="AGENTS.md",
+        reference_text="python3 scripts/check_doc_policy_consistency.py",
+        target_path="scripts/check_doc_policy_consistency.py",
+    ),
+    PathClaim(
+        document_path="CLAUDE.md",
+        reference_text="python3 scripts/check_doc_policy_consistency.py",
+        target_path="scripts/check_doc_policy_consistency.py",
+    ),
 )
 
 
@@ -117,6 +101,63 @@ def extract_build_release_version(build_release_text: str) -> str | None:
     if match is None:
         return None
     return match.group("version")
+
+
+def iter_relative_markdown_links(markdown_text: str) -> Iterable[tuple[str, str]]:
+    for label, target in MARKDOWN_LINK_RE.findall(markdown_text):
+        if target.startswith(("http://", "https://", "mailto:", "#", "/")):
+            continue
+        yield label, target
+
+
+def path_target_exists(root: Path, target_path: str) -> bool:
+    if any(token in target_path for token in ("*", "?", "[")):
+        return any(root.glob(target_path))
+    return (root / target_path).exists()
+
+
+def find_router_link_drift(root: Path, router_path: str = "REPO_MAP.md") -> list[str]:
+    file_path = root / router_path
+    if not file_path.exists():
+        return [f"Missing file: {router_path}"]
+
+    failures: list[str] = []
+    router_text = file_path.read_text(encoding="utf-8")
+    for label, target in iter_relative_markdown_links(router_text):
+        resolved_target = (file_path.parent / target).resolve().relative_to(root.resolve())
+        if not (root / resolved_target).exists():
+            failures.append(
+                "Router link drift in "
+                f"{router_path}: link '{label}' points to missing path "
+                f"{resolved_target.as_posix()}",
+            )
+    return failures
+
+
+def find_path_claim_drift(root: Path, claims: Iterable[PathClaim] = PATH_CLAIMS) -> list[str]:
+    failures: list[str] = []
+
+    for claim in claims:
+        file_path = root / claim.document_path
+        if not file_path.exists():
+            failures.append(f"Missing file: {claim.document_path}")
+            continue
+
+        text = file_path.read_text(encoding="utf-8")
+        if claim.reference_text not in text:
+            failures.append(
+                "Missing metadata claim in "
+                f"{claim.document_path}: {claim.reference_text!r}",
+            )
+            continue
+
+        if not path_target_exists(root, claim.target_path):
+            failures.append(
+                "Metadata drift in "
+                f"{claim.document_path}: referenced path {claim.target_path!r} does not exist",
+            )
+
+    return failures
 
 
 def find_build_release_version_drift(root: Path) -> list[str]:
@@ -151,22 +192,11 @@ def find_build_release_version_drift(root: Path) -> list[str]:
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
-    failures: list[str] = []
-
-    for relative_path, snippets in REQUIRED_SNIPPETS.items():
-        file_path = root / relative_path
-        if not file_path.exists():
-            failures.append(f"Missing file: {relative_path}")
-            continue
-
-        text = file_path.read_text(encoding="utf-8")
-        for snippet in snippets:
-            if snippet not in text:
-                failures.append(
-                    f"Missing snippet in {relative_path}: {snippet!r}",
-                )
-
-    failures.extend(find_build_release_version_drift(root))
+    failures = [
+        *find_router_link_drift(root),
+        *find_path_claim_drift(root),
+        *find_build_release_version_drift(root),
+    ]
 
     if failures:
         print("Documentation policy consistency check failed:")
