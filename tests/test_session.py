@@ -10,7 +10,7 @@ import pytest
 from axis_core.adapters.memory.ephemeral import EphemeralMemory
 from axis_core.agent import Agent
 from axis_core.errors import ConcurrencyError
-from axis_core.protocols.model import ModelResponse, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.session import Message, Session, prepare_session_for_persistence, save_session
 
@@ -113,6 +113,20 @@ class _MockModel:
             usage=UsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
             cost_usd=0.0,
         )
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        yield ModelChunk(content="ok", is_final=True)
+
+    def estimate_tokens(self, text: str) -> int:
+        return len(text.split())
+
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        return float(input_tokens + output_tokens)
 
 
 class _MockPlanner:

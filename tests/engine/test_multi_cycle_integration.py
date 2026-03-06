@@ -15,7 +15,7 @@ import pytest
 
 from axis_core.budget import Budget
 from axis_core.engine.lifecycle import LifecycleEngine
-from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
 
 
 class IntegrationMockModel:
@@ -65,6 +65,20 @@ class IntegrationMockModel:
             usage=UsageStats(input_tokens=5, output_tokens=5, total_tokens=10),
             cost_usd=0.001,
         )
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        yield ModelChunk(content="stream", is_final=True)
+
+    def estimate_tokens(self, text: str) -> int:
+        return len(text.split())
+
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        return float(input_tokens + output_tokens)
 
 
 async def mock_search_tool(q: str) -> str:
@@ -214,6 +228,20 @@ async def test_max_cycle_context_runtime_config() -> None:
                 usage=UsageStats(input_tokens=10, output_tokens=10, total_tokens=20),
                 cost_usd=0.001,
             )
+
+        async def stream(
+            self,
+            messages: list[dict[str, Any]],
+            system: str | None = None,
+            tools: list[dict[str, Any]] | None = None,
+        ) -> Any:
+            yield ModelChunk(content="stream", is_final=True)
+
+        def estimate_tokens(self, text: str) -> int:
+            return len(text.split())
+
+        def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+            return float(input_tokens + output_tokens)
 
     mock_model = MultiCycleModel()
 

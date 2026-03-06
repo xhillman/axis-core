@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tightened adapter resolver validation so invalid `model`/`planner`/`memory` objects now fail
+  fast with category-specific configuration guidance instead of being accepted until later runtime
+  use.
 - Checkpoint plan serialization now preserves `PlanStep.retry_policy` so resumed runs keep the
   same per-step retry semantics as uninterrupted runs.
 - Resume remains backward compatible with legacy checkpoints that do not include

@@ -475,8 +475,28 @@ class TestObservePhase:
                 self.value = value
 
         class MemoryAdapter:
+            @property
+            def capabilities(self) -> set[Any]:
+                return set()
+
+            async def store(self, key: str, value: Any, **kwargs: Any) -> None:
+                return None
+
+            async def retrieve(
+                self,
+                key: str,
+                namespace: str | None = None,
+            ) -> Any | None:
+                return None
+
             async def search(self, query: str, limit: int = 10) -> list[Any]:
                 return [MemoryItem("pref", "dark")]
+
+            async def delete(self, key: str, namespace: str | None = None) -> bool:
+                return False
+
+            async def clear(self, namespace: str | None = None) -> int:
+                return 0
 
         engine = LifecycleEngine(
             model=mock_model,

@@ -165,6 +165,9 @@ for event in agent.stream("Solve 42 * 137"):
   final output coercion/validation.
 - `stream_async(..., output_schema=...)` also emits structured events:
   `structured_partial` (best effort while tokens arrive) and `structured_final` (validated output).
+- `model`, `planner`, and `memory` config values accept either a registered adapter name or a
+  protocol-conforming adapter instance; invalid objects now fail fast during resolver setup with a
+  clear error.
 
 ## Transcript Guards
 

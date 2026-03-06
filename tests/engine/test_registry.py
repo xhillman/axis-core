@@ -280,7 +280,10 @@ class TestMemoryRegistry:
         from axis_core.engine.registry import memory_registry
         from axis_core.engine.resolver import resolve_adapter
 
-        if importlib.util.find_spec("synaptic_core") is None:
+        if (
+            importlib.util.find_spec("synaptic_core") is None
+            or importlib.util.find_spec("synaptic_core.api") is None
+        ):
             pytest.skip("synaptic-core not installed")
 
         from axis_core.adapters.memory.synaptic import SynapticMemory

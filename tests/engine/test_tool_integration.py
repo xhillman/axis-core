@@ -12,7 +12,7 @@ import pytest
 
 from axis_core.budget import Budget
 from axis_core.engine.lifecycle import LifecycleEngine
-from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.tool import ToolContext, tool
 
@@ -70,6 +70,15 @@ class MockModelWithTools:
             usage=UsageStats(input_tokens=100, output_tokens=50, total_tokens=150),
             cost_usd=0.004,
         )
+
+    async def stream(self, messages: list, system: str | None = None, tools=None, **kwargs):
+        yield ModelChunk(content="stream", is_final=True)
+
+    def estimate_tokens(self, text: str) -> int:
+        return len(text.split())
+
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        return float(input_tokens + output_tokens)
 
 
 class SimplePlanner:
@@ -404,6 +413,15 @@ class TestToolIntegration:
                     usage=UsageStats(input_tokens=10, output_tokens=10, total_tokens=20),
                     cost_usd=0.001,
                 )
+
+            async def stream(self, messages, system: str | None = None, tools=None):
+                yield ModelChunk(content="stream", is_final=True)
+
+            def estimate_tokens(self, text: str) -> int:
+                return len(text.split())
+
+            def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+                return float(input_tokens + output_tokens)
 
         async def bad_tool(x: int) -> int:
             return x * 2

@@ -19,7 +19,7 @@ from axis_core.context import (
     RunState,
 )
 from axis_core.engine.lifecycle import LifecycleEngine
-from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
+from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 
 # =============================================================================
@@ -59,6 +59,20 @@ class MockModel:
             usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
             cost_usd=0.001,
         )
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        yield ModelChunk(content="stream", is_final=True)
+
+    def estimate_tokens(self, text: str) -> int:
+        return len(text.split())
+
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        return float(input_tokens + output_tokens)
 
 
 class MockPlanner:
