@@ -722,6 +722,55 @@ class TestOpenAIModel:
         assert "examples" not in city_schema
         assert parameters["required"] == ["city"]
 
+    def test_convert_tool_manifest_to_openai_schema_snapshot(self) -> None:
+        """OpenAI schema sanitization should preserve a stable normalized structure."""
+        from axis_core.tool import ToolManifest
+
+        manifest = ToolManifest(
+            name="search",
+            description="Search",
+            input_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "SearchInput",
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "default": "latest",
+                        "examples": ["latest"],
+                    },
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type": "integer", "default": 10},
+                            "mode": {"type": "string"},
+                        },
+                        "required": ["limit", "missing"],
+                    },
+                },
+                "required": ["query", "filters", "ghost"],
+            },
+            output_schema={"type": "string"},
+            capabilities=(),
+        )
+
+        result = OpenAIModel._convert_tool_manifest_to_openai(manifest)
+        assert result["function"]["parameters"] == {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "filters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer"},
+                        "mode": {"type": "string"},
+                    },
+                    "required": ["limit"],
+                },
+            },
+            "required": ["query", "filters"],
+        }
+
     def test_convert_tools_with_manifests(self) -> None:
         """Test _convert_tools_to_openai with ToolManifest objects."""
         from axis_core.tool import ToolManifest
@@ -806,6 +855,26 @@ class TestOpenAIModel:
         assert ":" not in normalized_tool_call_id
         assert len(normalized_tool_call_id) <= 64
         assert converted[1]["tool_call_id"] == normalized_tool_call_id
+
+    def test_convert_messages_to_openai_tool_call_id_parity(self) -> None:
+        """OpenAI ID normalization should stay deterministic for collisions and valid IDs."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "bad id", "name": "search", "arguments": {}},
+                    {"id": "bad/id", "name": "search", "arguments": {}},
+                    {"id": "call_ok", "name": "search", "arguments": {}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "bad/id", "content": "done"},
+        ]
+
+        converted = OpenAIModel._convert_messages_to_openai(messages)
+        assistant_ids = [tool_call["id"] for tool_call in converted[0]["tool_calls"]]
+        assert assistant_ids == ["call_bad_id", "call_bad_id_1", "call_ok"]
+        assert converted[1]["tool_call_id"] == "call_bad_id_1"
 
     @pytest.mark.asyncio
     async def test_complete_with_tool_manifests(self) -> None:

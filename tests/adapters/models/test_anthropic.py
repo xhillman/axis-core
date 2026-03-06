@@ -475,6 +475,55 @@ class TestAnthropicModel:
         assert "examples" not in query_schema
         assert input_schema["required"] == ["query"]
 
+    def test_convert_tool_manifest_to_anthropic_schema_snapshot(self) -> None:
+        """Anthropic schema sanitization should preserve a stable normalized structure."""
+        from axis_core.tool import ToolManifest
+
+        manifest = ToolManifest(
+            name="search",
+            description="Search",
+            input_schema={
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": "SearchInput",
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "default": "latest",
+                        "examples": ["latest"],
+                    },
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type": "integer", "default": 10},
+                            "mode": {"type": "string"},
+                        },
+                        "required": ["limit", "missing"],
+                    },
+                },
+                "required": ["query", "filters", "ghost"],
+            },
+            output_schema={"type": "string"},
+            capabilities=(),
+        )
+
+        result = AnthropicModel._convert_tool_manifest_to_anthropic(manifest)
+        assert result["input_schema"] == {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "filters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer"},
+                        "mode": {"type": "string"},
+                    },
+                    "required": ["limit"],
+                },
+            },
+            "required": ["query", "filters"],
+        }
+
     def test_convert_tools_with_manifests(self) -> None:
         """Test _convert_tools_to_anthropic with ToolManifest objects."""
         from axis_core.tool import ToolManifest
@@ -748,3 +797,25 @@ class TestAnthropicModel:
         assert ":" not in normalized_id
         assert len(normalized_id) <= 64
         assert tool_result_block["tool_use_id"] == normalized_id
+
+    def test_convert_messages_tool_call_id_parity(self) -> None:
+        """Anthropic ID normalization should stay deterministic for collisions and valid IDs."""
+        messages = [
+            {"role": "user", "content": "Run tool"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "bad id", "name": "search", "arguments": {}},
+                    {"id": "bad/id", "name": "search", "arguments": {}},
+                    {"id": "toolu_ok", "name": "search", "arguments": {}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "bad/id", "content": "done"},
+        ]
+
+        converted = AnthropicModel._convert_messages_to_anthropic(messages)
+        assistant_blocks = converted[1]["content"]
+        assistant_ids = [block["id"] for block in assistant_blocks if block["type"] == "tool_use"]
+        assert assistant_ids == ["toolu_bad_id", "toolu_bad_id_1", "toolu_ok"]
+        assert converted[2]["content"][0]["tool_use_id"] == "toolu_bad_id_1"

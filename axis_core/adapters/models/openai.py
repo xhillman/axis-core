@@ -6,7 +6,6 @@ Requires the 'openai' package: pip install axis-core[openai]
 
 import json
 import os
-import re
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
@@ -23,6 +22,12 @@ except ImportError as e:
 from axis_core.adapters.models.openai_error_utils import (
     build_openai_model_error,
     classify_openai_error,
+)
+from axis_core.adapters.models.provider_helpers import (
+    DEFAULT_SCHEMA_FIELDS_TO_STRIP,
+    DEFAULT_TOOL_CALL_ID_INVALID_CHARS,
+    normalize_tool_call_id,
+    sanitize_tool_schema_for_provider,
 )
 from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
@@ -153,16 +158,8 @@ class OpenAIModel:
     }
     _TOOL_CALL_ID_MAX_LEN = 64
     _TOOL_CALL_ID_PREFIX = "call"
-    _TOOL_CALL_ID_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
-    _SCHEMA_FIELDS_TO_STRIP = frozenset(
-        {
-            "$schema",
-            "$id",
-            "title",
-            "default",
-            "examples",
-        }
-    )
+    _TOOL_CALL_ID_INVALID_CHARS = DEFAULT_TOOL_CALL_ID_INVALID_CHARS
+    _SCHEMA_FIELDS_TO_STRIP = DEFAULT_SCHEMA_FIELDS_TO_STRIP
 
     def __init__(
         self,
@@ -265,52 +262,12 @@ class OpenAIModel:
         }
 
     @classmethod
-    def _sanitize_schema_node(cls, value: Any) -> Any:
-        """Recursively strip schema fields that frequently trigger provider rejections."""
-        if isinstance(value, dict):
-            sanitized: dict[str, Any] = {}
-            for key, raw in value.items():
-                if key in cls._SCHEMA_FIELDS_TO_STRIP or raw is None:
-                    continue
-                sanitized[key] = cls._sanitize_schema_node(raw)
-
-            properties = sanitized.get("properties")
-            required = sanitized.get("required")
-            if isinstance(properties, dict) and isinstance(required, list):
-                allowed = set(properties.keys())
-                sanitized["required"] = [
-                    item for item in required if isinstance(item, str) and item in allowed
-                ]
-
-            return sanitized
-
-        if isinstance(value, list):
-            return [cls._sanitize_schema_node(item) for item in value]
-
-        return value
-
-    @classmethod
     def _sanitize_tool_schema_for_provider(cls, schema: Any) -> dict[str, Any]:
         """Sanitize schema for OpenAI function/tool compatibility."""
-        if not isinstance(schema, dict):
-            return {"type": "object", "properties": {}}
-
-        sanitized = cls._sanitize_schema_node(schema)
-        if not isinstance(sanitized, dict):
-            return {"type": "object", "properties": {}}
-
-        if "type" not in sanitized:
-            sanitized["type"] = "object"
-
-        properties = sanitized.get("properties")
-        if not isinstance(properties, dict):
-            sanitized["properties"] = {}
-
-        required = sanitized.get("required")
-        if not isinstance(required, list):
-            sanitized.pop("required", None)
-
-        return sanitized
+        return sanitize_tool_schema_for_provider(
+            schema,
+            fields_to_strip=cls._SCHEMA_FIELDS_TO_STRIP,
+        )
 
     @classmethod
     def _normalize_tool_call_id(
@@ -322,39 +279,15 @@ class OpenAIModel:
         used_ids: set[str],
     ) -> str:
         """Normalize tool call IDs to provider-safe format and maintain stable mapping."""
-        raw_text = str(raw_id).strip() if raw_id is not None else ""
-        if raw_text and raw_text in id_map:
-            return id_map[raw_text]
-
-        if (
-            raw_text
-            and not cls._TOOL_CALL_ID_INVALID_CHARS.search(raw_text)
-            and len(raw_text) <= cls._TOOL_CALL_ID_MAX_LEN
-        ):
-            candidate = raw_text
-        else:
-            base = cls._TOOL_CALL_ID_INVALID_CHARS.sub("_", raw_text).strip("_")
-            if not base:
-                base = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
-            elif not base.startswith(f"{cls._TOOL_CALL_ID_PREFIX}_"):
-                base = f"{cls._TOOL_CALL_ID_PREFIX}_{base}"
-
-            candidate = base[: cls._TOOL_CALL_ID_MAX_LEN].rstrip("_")
-            if not candidate:
-                candidate = f"{cls._TOOL_CALL_ID_PREFIX}_{next_index}"
-
-        suffix = 1
-        unique_candidate = candidate
-        while unique_candidate in used_ids:
-            suffix_text = f"_{suffix}"
-            max_base_len = cls._TOOL_CALL_ID_MAX_LEN - len(suffix_text)
-            unique_candidate = f"{candidate[:max_base_len]}{suffix_text}"
-            suffix += 1
-
-        used_ids.add(unique_candidate)
-        if raw_text:
-            id_map[raw_text] = unique_candidate
-        return unique_candidate
+        return normalize_tool_call_id(
+            raw_id,
+            next_index=next_index,
+            id_map=id_map,
+            used_ids=used_ids,
+            invalid_chars=cls._TOOL_CALL_ID_INVALID_CHARS,
+            prefix=cls._TOOL_CALL_ID_PREFIX,
+            max_len=cls._TOOL_CALL_ID_MAX_LEN,
+        )
 
     @classmethod
     def _convert_messages_to_openai(cls, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
