@@ -2958,6 +2958,47 @@ class TestExecutionPoliciesTask17:
         assert result["error"].phase == Phase.ACT.value
 
     @pytest.mark.asyncio
+    async def test_model_rate_limit_acquisition_emits_telemetry_event(self) -> None:
+        class ModelThenTerminalPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="model-rate-limit-plan",
+                    goal="emit rate limit telemetry",
+                    steps=(
+                        PlanStep(id="model-1", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("model-1",),
+                        ),
+                    ),
+                )
+
+        telemetry_sink = MockTelemetrySink()
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=ModelThenTerminalPlanner(),
+            telemetry=[telemetry_sink],
+        )
+
+        result = await engine.execute(
+            input_text="rate limit model",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(rate_limits=RateLimits(model_calls="1/hour")),
+        )
+
+        assert result["success"] is True
+        acquired_events = [
+            event for event in telemetry_sink.events if event.type == "rate_limit_acquired"
+        ]
+        assert len(acquired_events) == 1
+        assert acquired_events[0].phase == Phase.ACT.value
+        assert acquired_events[0].step_id == "model-1"
+        assert acquired_events[0].data["target"] == "model"
+
+    @pytest.mark.asyncio
     async def test_model_response_cache_hit_avoids_second_model_call(self) -> None:
         class ModelThenModelPlanner:
             async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
