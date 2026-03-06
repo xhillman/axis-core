@@ -59,22 +59,23 @@ tests/
 
 | Command | Purpose |
 |---|---|
-| `pytest <affected-tests>` | Sub-task gate: validate touched behavior |
+| `./scripts/test.sh <affected-tests>` | Sub-task gate: validate touched behavior in the project `.venv` |
 | `ruff check <touched-paths>` | Sub-task gate: lint touched scope |
 | `mypy <touched-python-paths>` | Sub-task gate: type-check touched scope |
-| `pytest` | Run the full suite |
-| `pytest --cov=axis_core` | With coverage |
-| `pytest -m "not slow"` | Skip slow tests |
-| `pytest tests/engine/test_lifecycle.py` | Single file |
+| `./scripts/test.sh` | Run the full suite |
+| `./scripts/test.sh --cov=axis_core` | With coverage |
+| `./scripts/test.sh -m "not slow"` | Skip slow tests |
+| `./scripts/test.sh tests/engine/test_lifecycle.py` | Single file |
 | `ruff check axis_core tests` | Parent-task gate: full lint |
 | `mypy axis_core --strict` | Parent-task gate: full type check |
 
-Current baseline: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest --collect-only -q` collects `831` items with `3` skipped in this repo.
+Use the wrapper to avoid broken global pytest plugins and ensure `pytest-asyncio` loads from the
+project environment.
 
 ## Gate Levels
 
 - **Sub-task gate:** run touched-scope tests/lint/types before marking sub-task complete.
-- **Parent-task gate:** run full `pytest`, `ruff check axis_core tests`, and `mypy axis_core --strict` before marking parent complete.
+- **Parent-task gate:** run full `./scripts/test.sh`, `ruff check axis_core tests`, and `mypy axis_core --strict` before marking parent complete.
 
 ## Testing Rules
 

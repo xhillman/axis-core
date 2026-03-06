@@ -6,6 +6,7 @@
 
 | File | Responsibility |
 |---|---|
+| `scripts/test.sh` | Run pytest through the project `.venv` |
 | `pyproject.toml` | Package metadata, deps, optional extras, ruff/mypy config |
 | `requirements.lock` | Pinned dependencies (all transitive) |
 | `scripts/bump_version.sh` | Updates version in `pyproject.toml` + `__init__.py` |
@@ -38,7 +39,7 @@
 ## Release Workflow
 
 1. `./scripts/bump_version.sh <new-version>` — updates pyproject.toml + __init__.py
-2. Run tests: `pytest && ruff check axis_core --fix && mypy axis_core --strict`
+2. Run tests: `./scripts/test.sh && ruff check axis_core --fix && mypy axis_core --strict`
 3. `./scripts/publish.sh testpypi` — build + upload to TestPyPI
 4. `./scripts/test_install.sh <version> testpypi` — verify in fresh venv
 5. `./scripts/publish.sh pypi` — publish to production PyPI
@@ -51,7 +52,7 @@
 uv pip compile pyproject.toml -o requirements.lock
 
 # Verify lockfile
-pytest tests/test_lockfile.py
+./scripts/test.sh tests/test_lockfile.py
 
 # Audit for vulnerabilities
 pip-audit -r requirements.lock

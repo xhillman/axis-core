@@ -25,14 +25,14 @@ For meta-process or prompt-document updates, route via `REPO_MAP.md` to `.agent/
 
 - `pip install -e ".[dev]"` installs local dev dependencies.
 - `pip install -e ".[anthropic,openai,redis,full]"` installs optional adapters.
-- `pytest` runs the full test suite.
-- `pytest --cov=axis_core` runs tests with coverage.
-- `pytest -m "not slow"` skips slow tests.
+- `./scripts/test.sh` runs the full test suite in the project `.venv`.
+- `./scripts/test.sh --cov=axis_core` runs tests with coverage.
+- `./scripts/test.sh -m "not slow"` skips slow tests.
 - `ruff check axis_core tests --fix` lints and auto-fixes where safe.
 - `mypy axis_core --strict` runs strict type checks.
 - `uv pip compile pyproject.toml -o requirements.lock` regenerates the lockfile.
 - `pip install -r requirements.lock` installs pinned dependencies.
-- `pytest tests/test_lockfile.py` verifies the lockfile.
+- `./scripts/test.sh tests/test_lockfile.py` verifies the lockfile.
 
 ## Coding Style & Naming Conventions
 

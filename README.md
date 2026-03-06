@@ -44,6 +44,17 @@ pip install axis-core[full]
 
 Requires Python 3.10+.
 
+## Development
+
+For local test runs, prefer the repo wrapper so pytest uses the project's `.venv` instead of any
+globally installed plugins:
+
+```bash
+./scripts/test.sh
+./scripts/test.sh tests/test_lockfile.py
+./scripts/test.sh -m "not slow"
+```
+
 ## Project Init Wizard
 
 Use the setup wizard to install optional adapter packages and write defaults to `.env`.

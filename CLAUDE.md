@@ -39,17 +39,17 @@ pip install -e ".[dev]"
 # Install with specific adapters
 pip install -e ".[anthropic,openai,redis,full]"
 
-# Run all tests
-pytest
+# Run all tests from the project virtualenv
+./scripts/test.sh
 
 # Run tests with coverage
-pytest --cov=axis_core
+./scripts/test.sh --cov=axis_core
 
 # Skip slow tests
-pytest -m "not slow"
+./scripts/test.sh -m "not slow"
 
 # Run single test file
-pytest tests/engine/test_lifecycle.py
+./scripts/test.sh tests/engine/test_lifecycle.py
 
 # Lint
 ruff check axis_core --fix
@@ -65,7 +65,7 @@ uv pip compile pyproject.toml -o requirements.lock
 pip install -r requirements.lock
 
 # Verify lockfile is valid
-pytest tests/test_lockfile.py
+./scripts/test.sh tests/test_lockfile.py
 ```
 
 ## Dependency Management & Supply Chain Security
