@@ -222,6 +222,7 @@ Treat these as mandatory checks before marking work complete:
 - Keep execution mechanics in `dev/process-tasks.md`.
 - Keep behavioral prompt constraints in `dev/spec-driven.md`.
 - Keep routing rules in `REPO_MAP.md` and `.agent/maps/*.md`.
+- Update `REPO_MAP.md` and any affected `.agent/maps/*.md` in the same change whenever development makes router summaries or routing targets stale.
 - Keep persistent preferences/mistakes in `dev/memory.md` and update it as needed during execution.
 - Keep completed-task summaries in `dev/task-summaries.md` and append entries after parent completion.
 - Post the same concise parent-task summary in chat after completion.

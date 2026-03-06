@@ -4,55 +4,50 @@
 
 ## Key Files
 
-| File | Lines | Responsibility |
-|---|---|---|
-| `axis_core/engine/lifecycle.py` | 489 | `LifecycleEngine.execute()` — main loop, phase orchestration |
-| `axis_core/engine/phases/initialize.py` | 93 | Create RunContext, validate config, emit telemetry |
-| `axis_core/engine/phases/observe.py` | 108 | Gather input, load memory, assess state |
-| `axis_core/engine/phases/plan.py` | 120 | Call planner, validate plan (AD-006) |
-| `axis_core/engine/phases/act.py` | 618 | Execute steps: tool calls + model calls, fallback (AD-013) |
-| `axis_core/engine/phases/evaluate.py` | 137 | Check termination: cancel, terminal step, budget, errors |
-| `axis_core/engine/phases/finalize.py` | 96 | Persist memory (non-fatal AD-007), emit summary |
-| `axis_core/engine/registry.py` | 223 | `AdapterRegistry`, `make_lazy_factory()`, built-in registration |
-| `axis_core/engine/resolver.py` | 72 | `resolve_adapter()` — string to adapter instance |
-| `axis_core/engine/trace_collector.py` | 63 | Event accumulator (BufferMode.END) |
-| `axis_core/agent.py` | 783 | `Agent` class — public API, builds engine, wraps async |
+| File | Responsibility |
+|---|---|
+| `axis_core/engine/lifecycle.py` | `LifecycleEngine`, loop orchestration, checkpoint/resume coordination |
+| `axis_core/engine/phases/initialize.py` | Create `RunContext`, validate config, emit telemetry |
+| `axis_core/engine/phases/observe.py` | Gather input, memory, and transcript context |
+| `axis_core/engine/phases/plan.py` | Planner invocation and plan validation |
+| `axis_core/engine/phases/act.py` | Tool execution, model execution, fallback, retry/policy enforcement |
+| `axis_core/engine/phases/evaluate.py` | Stop/continue decisions and budget checks |
+| `axis_core/engine/phases/finalize.py` | Persist memory, flush telemetry, build `RunResult` |
+| `axis_core/engine/registry.py` | Registries, lazy-factory helpers, entry-point loading |
+| `axis_core/engine/resolver.py` | String/name → adapter resolution |
+| `axis_core/engine/trace_collector.py` | Buffered trace accumulation |
+| `axis_core/agent.py` | Public API wrapper over the engine |
 
 ## Execution Flow
 
-```
+```text
 Agent.run(prompt) / run_async(prompt)
   → Agent._build_engine() → LifecycleEngine
   → LifecycleEngine.execute()
-      → phases.initialize()     → RunContext created
-      → LOOP:
-          → phases.observe()    → Observation
-          → phases.plan()       → Plan (via Planner adapter)
-          → phases.act()        → ExecutionResult (tool + model steps)
-          → phases.evaluate()   → EvalDecision (continue/stop)
-      → phases.finalize()       → RunResult
+      → initialize → observe → plan → act → evaluate
+      → repeat loop until done
+      → finalize
 ```
 
 ## Ownership Boundaries
 
-- **lifecycle.py** owns the loop and phase dispatch — do NOT add execution logic here
-- **phases/*.py** own individual phase behavior — each is self-contained
-- **act.py** is the largest phase (618L) — owns tool execution, model fallback, step dependencies
-- **agent.py** owns public API surface — do NOT put engine logic here
-- **registry.py** owns adapter factories — adapters register themselves here
+- `lifecycle.py` owns the loop, phase dispatch, and checkpoint/resume coordination
+- `phases/*.py` own individual phase behavior
+- `act.py` is the heaviest phase and still carries most execution policy logic
+- `agent.py` owns public API surface, not engine internals
+- `registry.py` owns adapter factories and plugin discovery
 
 ## Common Change Patterns
 
-- **If you change a Phase enum value** → update lifecycle.py phase dispatch + telemetry events
-- **If you change Plan/PlanStep** → update `protocols/planner.py`, then `phases/plan.py` and `phases/act.py`
-- **If you change RunContext** → check all 6 phase modules (they all receive it)
-- **If you add a budget constraint** → update `phases/evaluate.py` and `budget.py`
-- **If you change model calling** → update `phases/act.py` (`try_models_with_fallback`, `_execute_model_step`)
+- **Phase enum change** → update lifecycle dispatch and telemetry/checkpoint references
+- **Plan/PlanStep change** → update `protocols/planner.py`, `plan.py`, and `act.py`
+- **RunContext change** → review all six phase modules
+- **Budget constraint change** → update `evaluate.py` and `budget.py`
+- **Model-calling change** → update `act.py` (`try_models_with_fallback`, `_execute_model_step`) and regression tests around transcript/tool-manifest handling
 
 ## Sharp Edges
 
-- `act.py` has both tool execution AND model execution — they share dependency resolution logic
-- `lifecycle.py` was split from 1,400 lines → phases are now separate modules but lifecycle.py still orchestrates
-- `finalize()` persists memory in a try/except (AD-007: memory persistence is non-fatal)
-- Model fallback in `act.py` (`try_models_with_fallback`) retries with fallback models on failure
-- Phase functions are standalone functions, not methods — they receive all deps as arguments
+- `act.py` mixes tool execution and model execution and is still the largest lifecycle hotspot
+- `lifecycle.py` owns both loop control and checkpoint/resume mechanics
+- `finalize()` persists memory in a non-fatal try/except path
+- Phase functions are standalone functions, not methods
