@@ -20,6 +20,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -108,6 +109,21 @@ class _StreamTelemetrySink:
 
     async def close(self) -> None:
         pass
+
+
+@dataclasses.dataclass(slots=True)
+class _ExecutionSession:
+    timeout: float | None
+    started_at: float
+    trace_collector: TraceCollector | None
+    engine: Any
+    runtime_config: ResolvedConfig
+
+    def duration_ms(self) -> float:
+        return (time.monotonic() - self.started_at) * 1000
+
+    def trace(self) -> list[Any]:
+        return self.trace_collector.get_events() if self.trace_collector else []
 
 
 class Agent:
@@ -321,15 +337,14 @@ class Agent:
             default_timeout=self._timeouts.total,
         )
 
-    async def _execute_guarded(
+    @asynccontextmanager
+    async def _execution_session(
         self,
         *,
-        operation: ExecutionOperation,
         timeout: float | None,
-        output_schema: type[Any] | None = None,
-        prepare: Callable[[], None] | None = None,
-    ) -> RunResult:
-        """Execute run/resume operations with shared lock + timeout/error handling."""
+        extra_sinks: list[Any] | None = None,
+    ) -> AsyncIterator[_ExecutionSession]:
+        """Create a shared execution session with lock, engine, config, and trace state."""
         if self._lock.locked():
             raise RuntimeError(
                 "Agent is already executing. "
@@ -339,47 +354,82 @@ class Agent:
         async with self._lock:
             self._running = True
             try:
-                start = time.monotonic()
-                effective_timeout = self._effective_timeout(timeout)
                 trace_collector = TraceCollector() if self._telemetry_enabled else None
-                extra_sinks = [trace_collector] if trace_collector else []
-                engine = self._build_engine(extra_sinks=extra_sinks)
-                runtime_config = self._resolved_config()
-                try:
-                    if prepare is not None:
-                        prepare()
-
-                    raw = await self._await_operation(
-                        operation(engine, runtime_config),
-                        effective_timeout,
-                    )
-                except AxisError as e:
-                    trace = trace_collector.get_events() if trace_collector else []
-                    duration_ms = (time.monotonic() - start) * 1000
-                    return self._build_failure_result(
-                        error=e,
-                        duration_ms=duration_ms,
-                        trace=trace,
-                    )
-                except asyncio.TimeoutError:
-                    trace = trace_collector.get_events() if trace_collector else []
-                    duration_ms = (time.monotonic() - start) * 1000
-                    return self._build_failure_result(
-                        error=self._build_timeout_error(effective_timeout),
-                        duration_ms=duration_ms,
-                        trace=trace,
-                    )
-
-                duration_ms = (time.monotonic() - start) * 1000
-                trace = trace_collector.get_events() if trace_collector else []
-                return self._build_result(
-                    raw,
-                    duration_ms,
-                    trace=trace,
-                    output_schema=output_schema,
+                sinks: list[Any] = [trace_collector] if trace_collector else []
+                if extra_sinks:
+                    sinks.extend(extra_sinks)
+                yield _ExecutionSession(
+                    timeout=self._effective_timeout(timeout),
+                    started_at=time.monotonic(),
+                    trace_collector=trace_collector,
+                    engine=self._build_engine(extra_sinks=sinks),
+                    runtime_config=self._resolved_config(),
                 )
             finally:
                 self._running = False
+
+    def _build_result_from_outcome(
+        self,
+        *,
+        execution: _ExecutionSession,
+        raw: dict[str, Any] | None = None,
+        error: AxisError | None = None,
+        output_schema: type[Any] | None = None,
+    ) -> RunResult:
+        """Map raw execution outcomes into the normalized RunResult contract."""
+        if raw is None:
+            if error is None:
+                error = AxisError(
+                    message="Run failed",
+                    error_class=ErrorClass.RUNTIME,
+                )
+            return self._build_failure_result(
+                error=error,
+                duration_ms=execution.duration_ms(),
+                trace=execution.trace(),
+            )
+
+        return self._build_result(
+            raw,
+            execution.duration_ms(),
+            trace=execution.trace(),
+            output_schema=output_schema,
+        )
+
+    async def _execute_guarded(
+        self,
+        *,
+        operation: ExecutionOperation,
+        timeout: float | None,
+        output_schema: type[Any] | None = None,
+        prepare: Callable[[], None] | None = None,
+    ) -> RunResult:
+        """Execute run/resume operations with shared lock + timeout/error handling."""
+        async with self._execution_session(timeout=timeout) as execution:
+            try:
+                if prepare is not None:
+                    prepare()
+
+                raw = await self._await_operation(
+                    operation(execution.engine, execution.runtime_config),
+                    execution.timeout,
+                )
+            except AxisError as error:
+                return self._build_result_from_outcome(
+                    execution=execution,
+                    error=error,
+                )
+            except asyncio.TimeoutError:
+                return self._build_result_from_outcome(
+                    execution=execution,
+                    error=self._build_timeout_error(execution.timeout),
+                )
+
+            return self._build_result_from_outcome(
+                execution=execution,
+                raw=raw,
+                output_schema=output_schema,
+            )
 
     async def session_async(
         self,
@@ -623,157 +673,125 @@ class Agent:
                 f"Argument 'input' must be str or list, got {type(input).__name__}"
             )
 
-        if self._lock.locked():
-            raise RuntimeError(
-                "Agent is already executing. "
-                "Create multiple Agent instances for concurrent execution."
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        structured_buffer: list[str] = []
+        last_structured_fingerprint: str | None = None
+        extra_sinks: list[Any] = []
+        if stream_telemetry:
+            extra_sinks.append(_StreamTelemetrySink(queue))
+
+        async with self._execution_session(
+            timeout=timeout,
+            extra_sinks=extra_sinks,
+        ) as execution:
+            input_text = input if isinstance(input, str) else str(input)
+
+            async def _on_token(token: str) -> None:
+                nonlocal last_structured_fingerprint
+                if token:
+                    if output_schema is not None:
+                        structured_buffer.append(token)
+                        partial = parse_stream_partial(
+                            "".join(structured_buffer),
+                            output_schema,
+                        )
+                        if partial is not None:
+                            fingerprint = _structured_payload_fingerprint(partial)
+                            if fingerprint != last_structured_fingerprint:
+                                last_structured_fingerprint = fingerprint
+                                await queue.put(
+                                    StreamEvent(
+                                        type="structured_partial",
+                                        timestamp=datetime.utcnow(),
+                                        data={
+                                            "schema": schema_name(output_schema),
+                                            "output": partial,
+                                        },
+                                    )
+                                )
+                    await queue.put(
+                        StreamEvent(
+                            type="model_token",
+                            timestamp=datetime.utcnow(),
+                            data={"token": token},
+                        )
+                    )
+
+            # Emit start event
+            yield StreamEvent(
+                type="run_started",
+                timestamp=datetime.utcnow(),
+                data={"agent_id": self._agent_id},
+                sequence=0,
             )
 
-        async with self._lock:
-            self._running = True
-            start = time.monotonic()
-            queue: asyncio.Queue[Any] = asyncio.Queue()
-            structured_buffer: list[str] = []
-            last_structured_fingerprint: str | None = None
-            try:
-                effective_timeout = self._effective_timeout(timeout)
-                trace_collector = TraceCollector() if self._telemetry_enabled else None
-                extra_sinks: list[Any] = [trace_collector] if trace_collector else []
-                if stream_telemetry:
-                    extra_sinks.append(_StreamTelemetrySink(queue))
-
-                engine = self._build_engine(extra_sinks=extra_sinks)
-                runtime_config = self._resolved_config()
-                input_text = input if isinstance(input, str) else str(input)
-
-                async def _on_token(token: str) -> None:
-                    nonlocal last_structured_fingerprint
-                    if token:
-                        if output_schema is not None:
-                            structured_buffer.append(token)
-                            partial = parse_stream_partial(
-                                "".join(structured_buffer),
-                                output_schema,
-                            )
-                            if partial is not None:
-                                fingerprint = _structured_payload_fingerprint(partial)
-                                if fingerprint != last_structured_fingerprint:
-                                    last_structured_fingerprint = fingerprint
-                                    await queue.put(
-                                        StreamEvent(
-                                            type="structured_partial",
-                                            timestamp=datetime.utcnow(),
-                                            data={
-                                                "schema": schema_name(output_schema),
-                                                "output": partial,
-                                            },
-                                        )
-                                    )
-                        await queue.put(
-                            StreamEvent(
-                                type="model_token",
-                                timestamp=datetime.utcnow(),
-                                data={"token": token},
-                            )
-                        )
-
-                # Emit start event
-                yield StreamEvent(
-                    type="run_started",
-                    timestamp=datetime.utcnow(),
-                    data={"agent_id": self._agent_id},
-                    sequence=0,
-                )
-
-                async def _run_engine() -> dict[str, Any]:
-                    try:
-                        execute_coro = engine.execute(
+            async def _run_engine() -> dict[str, Any]:
+                try:
+                    return await self._await_operation(
+                        execution.engine.execute(
                             input_text=input_text,
                             agent_id=self._agent_id,
                             budget=self._budget,
                             context=context,
                             attachments=attachments,
                             cancel_token=cancel_token,
-                            config=runtime_config,
+                            config=execution.runtime_config,
                             token_callback=_on_token,
-                        )
-                        if effective_timeout is None:
-                            return await execute_coro
-                        return await asyncio.wait_for(execute_coro, timeout=effective_timeout)
-                    finally:
-                        await queue.put(_STREAM_DONE)
-
-                task = asyncio.create_task(_run_engine())
-
-                while True:
-                    item = await queue.get()
-                    if item is _STREAM_DONE:
-                        break
-                    yield item
-
-                duration_ms = (time.monotonic() - start) * 1000
-                trace = trace_collector.get_events() if trace_collector else []
-                run_error: AxisError | None = None
-                raw: dict[str, Any] | None = None
-
-                try:
-                    raw = await task
-                except AxisError as e:
-                    run_error = e
-                except asyncio.TimeoutError:
-                    timeout_seconds = (
-                        effective_timeout if effective_timeout is not None else self._timeouts.total
+                        ),
+                        execution.timeout,
                     )
-                    run_error = AxisTimeoutError(
-                        message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
-                        details={"timeout_seconds": timeout_seconds},
-                    )
+                finally:
+                    await queue.put(_STREAM_DONE)
 
-                if raw is None:
-                    if run_error is None:
-                        run_error = AxisError(
-                            message="Run failed",
-                            error_class=ErrorClass.RUNTIME,
-                        )
-                    result = self._build_failure_result(
-                        error=run_error,
-                        duration_ms=duration_ms,
-                        trace=trace,
-                    )
-                else:
-                    result = self._build_result(
-                        raw,
-                        duration_ms,
-                        trace=trace,
-                        output_schema=output_schema,
-                    )
+            task = asyncio.create_task(_run_engine())
 
-                if output_schema is not None and result.success:
-                    yield StreamEvent(
-                        type="structured_final",
-                        timestamp=datetime.utcnow(),
-                        data={
-                            "schema": schema_name(output_schema),
-                            "output": result.output,
-                        },
-                    )
+            while True:
+                item = await queue.get()
+                if item is _STREAM_DONE:
+                    break
+                yield item
 
-                # Emit final event
-                event_type = "run_completed" if result.success else "run_failed"
+            run_error: AxisError | None = None
+            raw: dict[str, Any] | None = None
+
+            try:
+                raw = await task
+            except AxisError as error:
+                run_error = error
+            except asyncio.TimeoutError:
+                run_error = self._build_timeout_error(execution.timeout)
+
+            result = self._build_result_from_outcome(
+                execution=execution,
+                raw=raw,
+                error=run_error,
+                output_schema=output_schema,
+            )
+
+            if output_schema is not None and result.success:
                 yield StreamEvent(
-                    type=event_type,
+                    type="structured_final",
                     timestamp=datetime.utcnow(),
                     data={
-                        "success": result.success,
+                        "schema": schema_name(output_schema),
                         "output": result.output,
-                        "run_id": result.run_id,
-                        "stats": dataclasses.asdict(result.stats),
-                        "error": str(result.error) if result.error else None,
                     },
-                    sequence=1,
                 )
-            finally:
-                self._running = False
+
+            # Emit final event
+            event_type = "run_completed" if result.success else "run_failed"
+            yield StreamEvent(
+                type=event_type,
+                timestamp=datetime.utcnow(),
+                data={
+                    "success": result.success,
+                    "output": result.output,
+                    "run_id": result.run_id,
+                    "stats": dataclasses.asdict(result.stats),
+                    "error": str(result.error) if result.error else None,
+                },
+                sequence=1,
+            )
 
     # =========================================================================
     # stream — sync wrapper (8.6, AD-027)

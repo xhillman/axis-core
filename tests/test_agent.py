@@ -48,7 +48,7 @@ class MockModel:
         self.complete_calls.append({"messages": messages, "system": system})
         return ModelResponse(
             content=self._response_text,
-            tool_calls=[],
+            tool_calls=(),
             usage=UsageStats(input_tokens=10, output_tokens=5, total_tokens=15),
             cost_usd=0.001,
         )
@@ -77,13 +77,13 @@ class MockPlanner:
         return Plan(
             id="plan-1",
             goal="respond to user",
-            steps=[
+            steps=(
                 PlanStep(
                     id="step-terminal",
                     type=StepType.TERMINAL,
                     payload={"output": "mock response"},
                 ),
-            ],
+            ),
         )
 
 
@@ -98,13 +98,13 @@ class SlowPlanner:
         return Plan(
             id="plan-slow",
             goal="respond slowly",
-            steps=[
+            steps=(
                 PlanStep(
                     id="step-terminal",
                     type=StepType.TERMINAL,
                     payload={"output": "slow response"},
                 ),
-            ],
+            ),
         )
 
 
@@ -118,13 +118,13 @@ class JsonTerminalPlanner:
         return Plan(
             id="plan-json-terminal",
             goal="emit json terminal output",
-            steps=[
+            steps=(
                 PlanStep(
                     id="step-terminal",
                     type=StepType.TERMINAL,
                     payload={"output": self._output},
                 ),
-            ],
+            ),
         )
 
 
@@ -913,14 +913,14 @@ class TestStreamAsync:
                 return Plan(
                     id="plan-model",
                     goal="stream tokens",
-                    steps=[
+                    steps=(
                         PlanStep(id="model", type=StepType.MODEL, payload={}),
                         PlanStep(
                             id="terminal",
                             type=StepType.TERMINAL,
                             payload={"output": "done"},
                         ),
-                    ],
+                    ),
                 )
 
         model = MockModel(stream_chunks=["Hello", " ", "world"])
@@ -951,7 +951,7 @@ class TestStreamAsync:
                 return Plan(
                     id="plan-tool",
                     goal="call tool",
-                    steps=[
+                    steps=(
                         PlanStep(
                             id="tool-step",
                             type=StepType.TOOL,
@@ -972,7 +972,7 @@ class TestStreamAsync:
                             payload={"output": "done"},
                             dependencies=("tool-step",),
                         ),
-                    ],
+                    ),
                 )
 
         agent = Agent(tools=[secret_tool], model=MockModel(), planner=ToolPlanner(), memory=None)
@@ -1024,7 +1024,7 @@ class TestStreamAsync:
                 return Plan(
                     id="plan-stream-json",
                     goal="stream and emit structured output",
-                    steps=[
+                    steps=(
                         PlanStep(id="model", type=StepType.MODEL, payload={}),
                         PlanStep(
                             id="terminal",
@@ -1032,7 +1032,7 @@ class TestStreamAsync:
                             payload={"output": '{"answer":"ok"}'},
                             dependencies=("model",),
                         ),
-                    ],
+                    ),
                 )
 
         model = MockModel(
@@ -1060,6 +1060,7 @@ class TestStreamAsync:
         async for event in agent.stream_async("Hello", timeout=0.05):
             events.append(event)
         assert events[-1].type == "run_failed"
+        assert events[-1].data["error"] == "Run exceeded timeout of 0.050 seconds"
 
     @pytest.mark.asyncio
     async def test_stream_async_uses_default_total_timeout(self) -> None:
@@ -1073,6 +1074,30 @@ class TestStreamAsync:
         async for event in agent.stream_async("Hello"):
             events.append(event)
         assert events[-1].type == "run_failed"
+
+    @pytest.mark.asyncio
+    async def test_stream_async_returns_failure_for_pre_finalize_axis_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class FailingEngine:
+            async def execute(self, **kwargs: Any) -> dict[str, Any]:
+                del kwargs
+                raise ConfigError(message="stream failed before finalize")
+
+        agent = Agent(model=MockModel(), planner=MockPlanner(), memory=None)
+        monkeypatch.setattr(
+            agent,
+            "_build_engine",
+            lambda extra_sinks=None: FailingEngine(),
+        )
+
+        events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello"):
+            events.append(event)
+
+        assert events[-1].type == "run_failed"
+        assert "before finalize" in str(events[-1].data["error"])
 
 
 # ---------------------------------------------------------------------------
@@ -1099,14 +1124,14 @@ class TestStreamSync:
                 return Plan(
                     id="plan-model",
                     goal="stream tokens",
-                    steps=[
+                    steps=(
                         PlanStep(id="model", type=StepType.MODEL, payload={}),
                         PlanStep(
                             id="terminal",
                             type=StepType.TERMINAL,
                             payload={"output": "done"},
                         ),
-                    ],
+                    ),
                 )
 
         model = MockModel(stream_chunks=["Hello", " ", "sync"])
@@ -1138,7 +1163,7 @@ class TestTraceCollection:
                 return Plan(
                     id="plan-tool",
                     goal="call tool",
-                    steps=[
+                    steps=(
                         PlanStep(
                             id="tool-step",
                             type=StepType.TOOL,
@@ -1159,7 +1184,7 @@ class TestTraceCollection:
                             payload={"output": "done"},
                             dependencies=("tool-step",),
                         ),
-                    ],
+                    ),
                 )
 
         agent = Agent(tools=[secret_tool], model=MockModel(), planner=ToolPlanner(), memory=None)
@@ -1223,13 +1248,13 @@ class TestSingleExecution:
                 return Plan(
                     id="slow-plan",
                     goal="slow",
-                    steps=[
+                    steps=(
                         PlanStep(
                             id="term",
                             type=StepType.TERMINAL,
                             payload={"output": "done"},
                         ),
-                    ],
+                    ),
                 )
 
         agent = Agent(model=MockModel(), planner=SlowPlanner(), memory=None)
