@@ -45,6 +45,7 @@ For meta-process or prompt-document updates, route via `REPO_MAP.md` to `.agent/
 ## Testing Guidelines
 
 - Frameworks: `pytest` + `pytest-asyncio` (asyncio mode auto).
+- Run pytest via `./scripts/test.sh ...`; do not invoke bare `pytest` in this repo.
 - Mark tests with `@pytest.mark.unit`, `@pytest.mark.integration`, or `@pytest.mark.slow`.
 - Async tests should use `@pytest.mark.asyncio`.
 - Prefer absolute imports from `axis_core.*` in tests.

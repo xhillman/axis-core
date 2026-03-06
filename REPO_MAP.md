@@ -109,7 +109,7 @@ dev/
 
 ## Golden Paths
 
-**Run tests:** `pytest` (all) · `pytest -m "not slow"` (faster subset) · `pytest tests/engine/test_lifecycle.py` (single file)
+**Run tests:** `./scripts/test.sh` (all) · `./scripts/test.sh -m "not slow"` (faster subset) · `./scripts/test.sh tests/engine/test_lifecycle.py` (single file)
 
 **Add a new adapter:**
 

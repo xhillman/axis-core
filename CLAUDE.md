@@ -146,6 +146,7 @@ Built-in adapters are automatically registered via a lazy factory pattern:
 ## Testing Conventions
 
 - Tests live in top-level `/tests` directory, mirroring `axis_core/` structure
+- Run pytest via `./scripts/test.sh ...`; avoid bare `pytest` so the project `.venv` and plugins are used
 - Markers: `@pytest.mark.unit`, `@pytest.mark.integration`, `@pytest.mark.slow`
 - Use `@pytest.mark.asyncio` for async tests (asyncio_mode=auto in pytest.ini)
 - Pattern: `test_*.py` files with `Test*` classes
