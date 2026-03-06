@@ -22,6 +22,7 @@ import inspect
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -73,6 +74,15 @@ class Phase(Enum):
     ACT = "act"
     EVALUATE = "evaluate"
     FINALIZE = "finalize"
+
+
+@dataclass(frozen=True)
+class _CycleResumeState:
+    """Checkpointed cycle values that allow resume to skip earlier phases."""
+
+    observation: Observation | None = None
+    plan: Plan | None = None
+    execution: ExecutionResult | None = None
 
 
 class LifecycleEngine:
@@ -465,6 +475,97 @@ class LifecycleEngine:
 
         return ctx, next_phase
 
+    @staticmethod
+    def _require_resume_state(
+        value: Any | None,
+        *,
+        phase: Phase,
+        state_field: str,
+    ) -> Any:
+        """Require checkpoint state needed to resume from a given phase."""
+        if value is None:
+            raise ConfigError(
+                message=(
+                    "Checkpoint is incompatible with resume phase: "
+                    f"{state_field} is required for {phase.value}."
+                )
+            )
+        return value
+
+    def _prepare_cycle_resume_state(
+        self,
+        ctx: RunContext,
+        *,
+        start_phase: Phase,
+    ) -> _CycleResumeState:
+        """Materialize checkpointed cycle values needed before the first resumed phase."""
+        if start_phase == Phase.OBSERVE:
+            return _CycleResumeState()
+
+        observation = self._require_resume_state(
+            ctx.state.current_observation,
+            phase=start_phase,
+            state_field="current_observation",
+        )
+        if start_phase == Phase.PLAN:
+            return _CycleResumeState(observation=observation)
+
+        plan = self._require_resume_state(
+            ctx.state.current_plan,
+            phase=start_phase,
+            state_field="current_plan",
+        )
+        if start_phase == Phase.ACT:
+            return _CycleResumeState(observation=observation, plan=plan)
+
+        execution = self._require_resume_state(
+            ctx.state.current_execution,
+            phase=start_phase,
+            state_field="current_execution",
+        )
+        return _CycleResumeState(
+            observation=observation,
+            plan=plan,
+            execution=execution,
+        )
+
+    @staticmethod
+    def _budget_exhaustion_error(ctx: RunContext) -> BudgetError | None:
+        """Return a budget error when the run budget is exhausted."""
+        if not ctx.state.budget_state.is_exhausted(ctx.budget):
+            return None
+
+        resource = identify_exhausted_resource(ctx)
+        return BudgetError(
+            message=f"Budget exhausted: {resource}",
+            resource=resource,
+        )
+
+    @staticmethod
+    def _cycle_boundary_error(ctx: RunContext) -> Exception | None:
+        """Return cancellation or budget errors checked at cycle boundaries."""
+        if ctx.cancel_token and ctx.cancel_token.is_cancelled:
+            from axis_core.engine.phases.evaluate import _cancel_reason
+
+            return CancelledError(message=_cancel_reason(ctx.cancel_token))
+
+        return LifecycleEngine._budget_exhaustion_error(ctx)
+
+    def _prepare_resume_context(
+        self,
+        checkpoint: dict[str, Any],
+        *,
+        cancel_token: CancelToken | None = None,
+        config: Any | None = None,
+    ) -> tuple[RunContext, Phase]:
+        """Restore checkpoint context and apply runtime-only resume overrides."""
+        ctx, next_phase = self._restore_checkpoint(checkpoint)
+        if config is not None:
+            ctx.config = config
+        if cancel_token is not None:
+            ctx.cancel_token = cancel_token
+        return ctx, next_phase
+
     # =========================================================================
     # Main execution loop (7.8)
     # =========================================================================
@@ -488,10 +589,12 @@ class LifecycleEngine:
         termination_error: Exception | None = None
 
         try:
-            first_cycle = True
-            phase_cursor = start_phase
+            resume_state = self._prepare_cycle_resume_state(
+                ctx,
+                start_phase=start_phase,
+            )
 
-            while phase_cursor != Phase.FINALIZE:
+            while True:
                 cycle_start = time.monotonic()
                 self._update_wall_time(ctx, run_started_monotonic)
                 await self._emit(
@@ -500,39 +603,13 @@ class LifecycleEngine:
                     cycle=ctx.cycle_count,
                 )
 
-                # Check cancellation at cycle start (AD-028)
-                if ctx.cancel_token and ctx.cancel_token.is_cancelled:
-                    from axis_core.engine.phases.evaluate import _cancel_reason
-
-                    termination_error = CancelledError(
-                        message=_cancel_reason(ctx.cancel_token)
-                    )
-                    break
-
-                # Check budget before starting cycle
-                if ctx.state.budget_state.is_exhausted(ctx.budget):
-                    resource = identify_exhausted_resource(ctx)
-                    termination_error = BudgetError(
-                        message=f"Budget exhausted: {resource}",
-                        resource=resource,
-                    )
+                termination_error = self._cycle_boundary_error(ctx)
+                if termination_error is not None:
                     break
 
                 cycle_start_time = datetime.utcnow()
-                observation: Observation
-                plan: Plan
-                execution: ExecutionResult
-
-                if first_cycle and phase_cursor in (Phase.PLAN, Phase.ACT, Phase.EVALUATE):
-                    if ctx.state.current_observation is None:
-                        raise ConfigError(
-                            message=(
-                                "Checkpoint is incompatible with resume phase: "
-                                "current_observation is required."
-                            )
-                        )
-                    observation = ctx.state.current_observation
-                else:
+                observation = resume_state.observation
+                if observation is None:
                     observation = await self._runtime_policies.timeouts.run_with_budget(
                         Phase.OBSERVE.value,
                         lambda: self._observe(ctx),
@@ -547,24 +624,12 @@ class LifecycleEngine:
                         next_phase=Phase.PLAN,
                     )
 
-                if ctx.state.budget_state.is_exhausted(ctx.budget):
-                    resource = identify_exhausted_resource(ctx)
-                    termination_error = BudgetError(
-                        message=f"Budget exhausted: {resource}",
-                        resource=resource,
-                    )
+                termination_error = self._budget_exhaustion_error(ctx)
+                if termination_error is not None:
                     break
 
-                if first_cycle and phase_cursor in (Phase.ACT, Phase.EVALUATE):
-                    if ctx.state.current_plan is None:
-                        raise ConfigError(
-                            message=(
-                                "Checkpoint is incompatible with resume phase: "
-                                "current_plan is required."
-                            )
-                        )
-                    plan = ctx.state.current_plan
-                else:
+                plan = resume_state.plan
+                if plan is None:
                     plan = await self._runtime_policies.timeouts.run_with_budget(
                         Phase.PLAN.value,
                         lambda: self._plan(ctx, observation),
@@ -579,24 +644,12 @@ class LifecycleEngine:
                         next_phase=Phase.ACT,
                     )
 
-                if ctx.state.budget_state.is_exhausted(ctx.budget):
-                    resource = identify_exhausted_resource(ctx)
-                    termination_error = BudgetError(
-                        message=f"Budget exhausted: {resource}",
-                        resource=resource,
-                    )
+                termination_error = self._budget_exhaustion_error(ctx)
+                if termination_error is not None:
                     break
 
-                if first_cycle and phase_cursor == Phase.EVALUATE:
-                    if ctx.state.current_execution is None:
-                        raise ConfigError(
-                            message=(
-                                "Checkpoint is incompatible with resume phase: "
-                                "current_execution is required."
-                            )
-                        )
-                    execution = ctx.state.current_execution
-                else:
+                execution = resume_state.execution
+                if execution is None:
                     execution = await self._runtime_policies.timeouts.run_with_budget(
                         Phase.ACT.value,
                         lambda: self._act(ctx, plan),
@@ -611,12 +664,8 @@ class LifecycleEngine:
                         next_phase=Phase.EVALUATE,
                     )
 
-                if ctx.state.budget_state.is_exhausted(ctx.budget):
-                    resource = identify_exhausted_resource(ctx)
-                    termination_error = BudgetError(
-                        message=f"Budget exhausted: {resource}",
-                        resource=resource,
-                    )
+                termination_error = self._budget_exhaustion_error(ctx)
+                if termination_error is not None:
                     break
 
                 decision = await self._runtime_policies.timeouts.run_with_budget(
@@ -627,15 +676,12 @@ class LifecycleEngine:
                     update_wall_time=self._update_wall_time,
                     wall_time_budget_error=self._wall_time_budget_error,
                 )
-                if ctx.state.budget_state.is_exhausted(ctx.budget):
-                    resource = identify_exhausted_resource(ctx)
+                budget_error = self._budget_exhaustion_error(ctx)
+                if budget_error is not None:
                     decision = EvalDecision(
                         done=True,
-                        error=BudgetError(
-                            message=f"Budget exhausted: {resource}",
-                            resource=resource,
-                        ),
-                        reason=f"Budget exhausted: {resource}",
+                        error=budget_error,
+                        reason=budget_error.message,
                     )
 
                 cycle_end_time = datetime.utcnow()
@@ -680,8 +726,7 @@ class LifecycleEngine:
                 ctx.state.current_observation = None
                 ctx.state.current_plan = None
                 ctx.state.current_execution = None
-                phase_cursor = Phase.OBSERVE
-                first_cycle = False
+                resume_state = _CycleResumeState()
 
         except AxisError as e:
             termination_error = e
@@ -773,11 +818,11 @@ class LifecycleEngine:
         run_started_monotonic = time.monotonic()
         try:
             self._configure_runtime_policies(config)
-            ctx, next_phase = self._restore_checkpoint(checkpoint)
-            if config is not None:
-                ctx.config = config
-            if cancel_token is not None:
-                ctx.cancel_token = cancel_token
+            ctx, next_phase = self._prepare_resume_context(
+                checkpoint,
+                cancel_token=cancel_token,
+                config=config,
+            )
             return await self._execute_from_context(
                 ctx,
                 run_started_monotonic=run_started_monotonic,

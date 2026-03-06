@@ -3381,6 +3381,46 @@ class TestCheckpointResumeTask19:
         assert resumed_result["cycles_completed"] == 1
 
     @pytest.mark.asyncio
+    async def test_resume_from_act_checkpoint_reuses_checkpointed_plan_and_execution(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        checkpoints_by_phase: dict[str, dict[str, Any]] = {}
+
+        async def checkpoint_handler(checkpoint: dict[str, Any]) -> None:
+            checkpoints_by_phase[checkpoint["phase"]] = checkpoint
+
+        capture_engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+            checkpoint_handler=checkpoint_handler,
+        )
+
+        await capture_engine.execute(
+            input_text="checkpoint act resume",
+            agent_id="agent-task19",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        resumed_model = MockModelAdapter()
+        resumed_planner = MockPlanner()
+        resumed_engine = LifecycleEngine(
+            model=resumed_model,
+            planner=resumed_planner,
+        )
+        resumed_result = await resumed_engine.resume(
+            checkpoints_by_phase[Phase.ACT.value],
+            config=_runtime_config(),
+        )
+
+        assert resumed_result["success"] is True
+        assert resumed_result["output"] == "Task completed"
+        assert resumed_result["cycles_completed"] == 1
+        assert resumed_model.calls == []
+        assert resumed_planner.calls == []
+
+    @pytest.mark.asyncio
     async def test_resume_from_plan_checkpoint_preserves_step_retry_policy(
         self,
         mock_model: MockModelAdapter,

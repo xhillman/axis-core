@@ -798,6 +798,29 @@ class TestCheckpointResumeTask19:
         assert resumed.success is True
         assert resumed.run_id == first.run_id
 
+    @pytest.mark.asyncio
+    async def test_resume_async_accepts_legacy_checkpoint_without_next_phase(
+        self,
+        tmp_path: Any,
+    ) -> None:
+        agent = Agent(
+            model=MockModel(),
+            planner=MockPlanner(),
+            memory=None,
+            checkpoint=True,
+            checkpoint_dir=str(tmp_path),
+        )
+        first = await agent.run_async("legacy checkpoint next phase")
+        checkpoint_path = tmp_path / f"{first.run_id}.json"
+        checkpoint = json.loads(checkpoint_path.read_text())
+        checkpoint.pop("next_phase", None)
+
+        resumed = await agent.resume_async(checkpoint)
+
+        assert resumed.success is True
+        assert resumed.run_id == first.run_id
+        assert resumed.output == "mock response"
+
     def test_resume_sync_from_checkpoint_path(self, tmp_path: Any) -> None:
         agent = Agent(
             model=MockModel(),
