@@ -1,107 +1,91 @@
 #!/usr/bin/env python3
-"""Validate acceptance contracts for open parent tasks in a task list.
+"""Validate implementation contract files.
 
 This check is intentionally lightweight and markdown-structure-based.
-It enforces that each open parent task has a complete acceptance contract.
+It enforces that active contract docs include the sections required by the
+repository process.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
-
-OPEN_PARENT_RE = re.compile(r"^- \[ \] (?P<task_id>\d+\.0)\b")
-CONTRACT_HEADER_RE = re.compile(r"^### Task (?P<task_id>\d+\.\d+)$")
-
-REQUIRED_FIELDS = (
-    "- Behavior:",
-    "- Negative Cases:",
-    "- Non-Functional Constraints:",
-    "- Verification:",
-    "- Evidence Required:",
-    "- Out of Scope:",
+REQUIRED_HEADINGS = (
+    "## Status",
+    "## Source Finding",
+    "## Intent",
+    "## Problem",
+    "## Objective",
+    "## Dependencies",
+    "## Scope",
+    "## Out of Scope",
+    "## Invariants",
+    "## Affected Files",
+    "## Implementation Plan",
+    "## Verification",
+    "## Acceptance Criteria",
+    "## Evidence Required",
+    "## Notes for Future Sessions",
 )
 
 
-def find_open_parent_tasks(lines: list[str]) -> list[str]:
-    tasks: list[str] = []
-    for line in lines:
-        match = OPEN_PARENT_RE.match(line)
-        if match:
-            tasks.append(match.group("task_id"))
-    return tasks
+def iter_contract_files(contracts_dir: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in contracts_dir.glob("*.md")
+        if path.name != "README.md"
+    )
 
 
-def parse_acceptance_contracts(lines: list[str]) -> dict[str, list[str]]:
-    contracts: dict[str, list[str]] = {}
-    current_task: str | None = None
+def validate_contract_file(contract_file: Path) -> list[str]:
+    if not contract_file.exists():
+        return [f"Contract file not found: {contract_file}"]
 
-    for raw_line in lines:
-        line = raw_line.rstrip("\n")
-        header_match = CONTRACT_HEADER_RE.match(line.strip())
-        if header_match:
-            current_task = header_match.group("task_id")
-            contracts[current_task] = []
-            continue
-
-        if current_task is None:
-            continue
-
-        if line.startswith("## ") and not line.startswith("### "):
-            current_task = None
-            continue
-
-        contracts[current_task].append(line)
-
-    return contracts
-
-
-def validate(open_tasks: list[str], contracts: dict[str, list[str]]) -> list[str]:
+    text = contract_file.read_text(encoding="utf-8")
     failures: list[str] = []
+    for heading in REQUIRED_HEADINGS:
+        if heading not in text:
+            failures.append(
+                f"{contract_file}: missing required section {heading}",
+            )
+    return failures
 
-    for task_id in open_tasks:
-        if task_id not in contracts:
-            failures.append(f"Missing acceptance contract for open parent task {task_id}")
-            continue
 
-        contract_blob = "\n".join(contracts[task_id])
-        for field in REQUIRED_FIELDS:
-            if field not in contract_blob:
-                failures.append(
-                    f"Task {task_id} missing acceptance field: {field}",
-                )
+def validate_contracts_dir(contracts_dir: Path) -> list[str]:
+    if not contracts_dir.exists():
+        return [f"Contracts directory not found: {contracts_dir}"]
 
+    contract_files = iter_contract_files(contracts_dir)
+    if not contract_files:
+        return [f"No contract files found in: {contracts_dir}"]
+
+    failures: list[str] = []
+    for contract_file in contract_files:
+        failures.extend(validate_contract_file(contract_file))
     return failures
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate acceptance contracts for open parent tasks.",
+        description="Validate implementation contract files.",
     )
     parser.add_argument(
-        "--tasks-file",
-        default="dev/tasks-axis-core-prd.md",
-        help="Path to task list markdown file.",
+        "--contracts-dir",
+        default="dev/contracts",
+        help="Directory containing active implementation contracts.",
+    )
+    parser.add_argument(
+        "--contract-file",
+        help="Validate one specific implementation contract file.",
     )
     args = parser.parse_args()
 
-    task_file = Path(args.tasks_file)
-    if not task_file.exists():
-        print(f"Task file not found: {task_file}")
-        return 1
-
-    lines = task_file.read_text(encoding="utf-8").splitlines()
-
-    open_tasks = find_open_parent_tasks(lines)
-    if not open_tasks:
-        print("No open parent tasks found; acceptance contracts check passed.")
-        return 0
-
-    contracts = parse_acceptance_contracts(lines)
-    failures = validate(open_tasks, contracts)
+    if args.contract_file:
+        failures = validate_contract_file(Path(args.contract_file))
+    else:
+        failures = validate_contracts_dir(Path(args.contracts_dir))
 
     if failures:
         print("Acceptance contracts check failed:")

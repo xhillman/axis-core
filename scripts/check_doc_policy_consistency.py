@@ -77,9 +77,34 @@ PATH_CLAIMS: tuple[PathClaim, ...] = (
         target_path="scripts/check_doc_policy_consistency.py",
     ),
     PathClaim(
+        document_path="dev/process-tasks.md",
+        reference_text="python3 scripts/check_acceptance_contracts.py",
+        target_path="scripts/check_acceptance_contracts.py",
+    ),
+    PathClaim(
+        document_path="AGENTS.md",
+        reference_text="dev/contracts/README.md",
+        target_path="dev/contracts/README.md",
+    ),
+    PathClaim(
+        document_path="AGENTS.md",
+        reference_text="python3 scripts/check_acceptance_contracts.py",
+        target_path="scripts/check_acceptance_contracts.py",
+    ),
+    PathClaim(
         document_path="AGENTS.md",
         reference_text="python3 scripts/check_doc_policy_consistency.py",
         target_path="scripts/check_doc_policy_consistency.py",
+    ),
+    PathClaim(
+        document_path="CLAUDE.md",
+        reference_text="dev/contracts/README.md",
+        target_path="dev/contracts/README.md",
+    ),
+    PathClaim(
+        document_path="CLAUDE.md",
+        reference_text="python3 scripts/check_acceptance_contracts.py",
+        target_path="scripts/check_acceptance_contracts.py",
     ),
     PathClaim(
         document_path="CLAUDE.md",

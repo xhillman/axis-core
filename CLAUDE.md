@@ -207,25 +207,22 @@ Treat these as mandatory checks before marking work complete:
 ## Project Authority Map
 
 - Repo Router: `REPO_MAP.md` (entrypoint for minimal-context routing)
-- Task List: tasks-axis-core-prd.md (source of truth for task IDs, sub-tasks, file targets)
-- Architecture & Constraints: SPEC.md (ADRs, invariants, design rules)
-- Execution Process: process-tasks.md (canonical source for TDD, quality gates, completion, failure handling)
-- Assistant Memory: `dev/memory.md` (persistent user preferences + mistakes log)
-- Task Summaries: `dev/task-summaries.md` (one concise summary per completed parent task)
+- Active Contracts: `dev/contracts/README.md` + `dev/contracts/*.md` (source of truth for active implementation scope and acceptance)
+- Architecture & Constraints: `dev/SPEC.md` (ADRs, invariants, design rules)
+- Execution Process: `dev/process-tasks.md` (canonical source for TDD, quality gates, completion, failure handling)
 - Production Safety Gate: `dev/production-safety-gate.md` (required before production release)
-- Workflow Skills: `dev/skills/*/SKILL.md` (route, execute, gates, memory/summary, release safety)
-- Product Intent (only if needed): axis-core-prd.md
+- Workflow Skills: `dev/skills/*/SKILL.md` (route, execute, gates, release safety)
+- Product Intent (only if needed): `dev/axis-core-prd.md`
 - Execution Prompt Template: `dev/spec-driven.md` (behavioral guardrails only; references process doc for mechanics)
 
 ## Process Ownership (Avoid Drift)
 
 - Keep execution mechanics in `dev/process-tasks.md`.
 - Keep behavioral prompt constraints in `dev/spec-driven.md`.
+- Keep active implementation scope and acceptance boundaries in `dev/contracts/*.md`.
 - Keep routing rules in `REPO_MAP.md` and `.agent/maps/*.md`.
 - Update `REPO_MAP.md` and any affected `.agent/maps/*.md` in the same change whenever development makes router summaries or routing targets stale.
-- Keep persistent preferences/mistakes in `dev/memory.md` and update it as needed during execution.
-- Keep completed-task summaries in `dev/task-summaries.md` and append entries after parent completion.
-- Post the same concise parent-task summary in chat after completion.
-- Run acceptance checks before parent execution and production safety checks before production release.
+- Post a concise completion summary in chat after completion.
+- Run acceptance checks before parent execution (`python3 scripts/check_acceptance_contracts.py --contracts-dir dev/contracts`) and production safety checks before production release.
 - Do not duplicate detailed TDD/completion mechanics across multiple docs when a canonical source exists.
 - After policy-doc edits, run `python3 scripts/check_doc_policy_consistency.py`.

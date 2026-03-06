@@ -12,7 +12,7 @@
 - `.agent/maps/*.md` — minimal-context sub-maps
 - `AGENTS.md` — repository guidance for Codex-style agents
 - `CLAUDE.md` — repository guidance for Claude Code
-- `scripts/check_*.py` — lightweight acceptance/doc-policy/memory/safety validators
+- `scripts/check_*.py` — lightweight acceptance/doc-policy/production-safety validators
 
 ## Ownership Model
 
@@ -38,7 +38,7 @@ When these docs change, verify:
 4. `REPO_MAP.md` router entries still point to valid sub-maps
 5. Active contract docs in `dev/contracts/` match the current execution workflow
 6. Archived task/safety records remain clearly separated under `dev/archive/`
-7. Parent-task summary expectations in process docs still match agent guidance
+7. Completion-summary expectations in process docs still match agent guidance
 8. Acceptance and production-safety check commands are present and referenced
 
 ## Optional Verification Command

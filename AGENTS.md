@@ -118,16 +118,18 @@ Treat these as mandatory checks before marking work complete:
 ## Project Authority Map
 
 - Repo Router: `REPO_MAP.md` (entrypoint for minimal-context routing)
-- Execution Process: process-tasks.md (canonical source for TDD, quality gates, completion, failure handling)
+- Active Contracts: `dev/contracts/README.md` + `dev/contracts/*.md`
+- Execution Process: `dev/process-tasks.md` (canonical source for TDD, quality gates, completion, failure handling)
 - Production Safety Gate: `dev/production-safety-gate.md` (required before production release)
-- Product Intent (only if needed): axis-core-prd.md
+- Product Intent (only if needed): `dev/axis-core-prd.md`
 
 ## Process Ownership (Avoid Drift)
 
 - Keep execution mechanics in `dev/process-tasks.md` only.
 - Keep routing guidance in `REPO_MAP.md` and `.agent/maps/*.md`.
+- Keep active implementation scope and acceptance boundaries in `dev/contracts/*.md`.
 - Update `REPO_MAP.md` and any affected `.agent/maps/*.md` in the same change whenever development makes router summaries or routing targets stale.
-- Post task summary in chat after completion.
-- Run acceptance checks before parent execution and production safety checks before production release.
+- Post a concise completion summary in chat after completion.
+- Run acceptance checks before parent execution (`python3 scripts/check_acceptance_contracts.py --contracts-dir dev/contracts`) and production safety checks before production release.
 - After policy-doc edits, run `python3 scripts/check_doc_policy_consistency.py`.
 - When process policy changes, update `AGENTS.md`, `CLAUDE.md`, and related map docs in the same change.
