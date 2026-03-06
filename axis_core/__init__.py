@@ -22,8 +22,10 @@ from typing import Any
 
 __version__ = "0.12.1"
 
-# Lazy-loading registry: maps public name → (module_path, attribute_name)
-_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+# Public export registry: maps public name -> (module_path, attribute_name).
+# Most exports stay lazy; `config` and `tool` are eagerly rebound below to preserve
+# `from axis_core import config` / `from axis_core import tool` ergonomics.
+_EXPORTS: dict[str, tuple[str, str]] = {
     # Core
     "Agent": ("axis_core.agent", "Agent"),
     # Tool system
@@ -69,21 +71,37 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "CancelToken": ("axis_core.cancel", "CancelToken"),
 }
 
+_EAGER_EXPORTS = ("config", "tool")
+
 # Public API
-__all__ = ["__version__", *_LAZY_IMPORTS.keys()]
+__all__ = ["__version__", *_EXPORTS.keys()]
+
+
+def _load_export(name: str) -> Any:
+    module_path, attr_name = _EXPORTS[name]
+    module = importlib.import_module(module_path)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy loading of submodules to avoid circular imports and missing module errors."""
-    if name in _LAZY_IMPORTS:
-        module_path, attr_name = _LAZY_IMPORTS[name]
-        module = importlib.import_module(module_path)
-        return getattr(module, attr_name)
+    """Resolve public exports lazily on first attribute access."""
+    if name in _EXPORTS:
+        return _load_export(name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# Override module-level imports that conflict with exported names
-# This handles cases where submodule names conflict with exported objects
-from axis_core.config import config as config  # noqa: F401, E402
-from axis_core.tool import tool as tool  # noqa: F401, E402
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
+
+
+# `config` and `tool` share names with importable submodules. If those submodules are
+# imported directly, Python can otherwise bind the package attribute to the module object
+# instead of the intended public export. Rebinding them here keeps package-level imports
+# stable without making the rest of the package bootstrap eager.
+for _export_name in _EAGER_EXPORTS:
+    _load_export(_export_name)
+
+del _export_name
