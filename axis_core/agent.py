@@ -155,6 +155,27 @@ def _coerce_env_positive_int(value: str | None) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _coerce_env_non_negative_int(value: str | None) -> int | None:
+    """Coerce non-negative integer env-var values."""
+    if value is None:
+        return None
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _coerce_context_strategy(value: str | None) -> str | None:
+    """Validate context strategy value."""
+    if value is None:
+        return None
+    candidate = value.strip().lower()
+    if candidate in {"smart", "full", "minimal"}:
+        return candidate
+    return None
+
+
 def _resolve_telemetry_sinks() -> list[Any]:
     """Resolve telemetry sinks from environment variables.
 
@@ -586,6 +607,36 @@ class Agent:
 
     def _resolved_config(self) -> ResolvedConfig:
         """Build the resolved runtime config passed into the lifecycle engine."""
+        raw_context_strategy = os.getenv("AXIS_CONTEXT_STRATEGY")
+        context_strategy = _coerce_context_strategy(raw_context_strategy)
+        if raw_context_strategy is not None and context_strategy is None:
+            logger.warning(
+                "Invalid AXIS_CONTEXT_STRATEGY='%s'; falling back to 'smart'",
+                raw_context_strategy,
+            )
+            context_strategy = "smart"
+        if context_strategy is None:
+            context_strategy = "smart"
+
+        raw_max_cycle_context = os.getenv("AXIS_MAX_CYCLE_CONTEXT")
+        max_cycle_context = _coerce_env_non_negative_int(raw_max_cycle_context)
+        if raw_max_cycle_context is not None and max_cycle_context is None:
+            logger.warning(
+                "Invalid AXIS_MAX_CYCLE_CONTEXT='%s'; falling back to 5",
+                raw_max_cycle_context,
+            )
+            max_cycle_context = 5
+        if max_cycle_context is None:
+            max_cycle_context = 5
+
+        transcript_strict = _coerce_env_bool(
+            os.getenv("AXIS_TRANSCRIPT_STRICT"),
+            default=False,
+        )
+        max_tool_result_chars = _coerce_env_positive_int(
+            os.getenv("AXIS_MAX_TOOL_RESULT_CHARS")
+        )
+
         context_guard_enabled = _coerce_env_bool(
             os.getenv("AXIS_CONTEXT_GUARD_ENABLED"),
             default=False,
@@ -615,6 +666,10 @@ class Agent:
             rate_limits=self._rate_limits,
             retry=self._retry,
             cache=self._cache,
+            context_strategy=context_strategy,
+            max_cycle_context=max_cycle_context,
+            transcript_strict=transcript_strict,
+            max_tool_result_chars=max_tool_result_chars,
             context_window_guard_enabled=context_guard_enabled,
             context_window_tokens=context_window_tokens,
             context_window_warn_tokens=context_warn_tokens,

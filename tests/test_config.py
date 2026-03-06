@@ -517,6 +517,22 @@ class TestResolvedConfig:
         assert resolved.context_window_warn_tokens == 32000
         assert resolved.context_window_block_tokens == 16000
 
+    def test_act_runtime_resolution_defaults(self) -> None:
+        from axis_core.budget import Budget
+
+        resolved = ResolvedConfig(
+            model="test",
+            planner="auto",
+            memory=None,
+            budget=Budget(),
+            timeouts=Timeouts(),
+        )
+
+        assert resolved.context_strategy == "smart"
+        assert resolved.max_cycle_context == 5
+        assert resolved.transcript_strict is False
+        assert resolved.max_tool_result_chars is None
+
 
 # ---------------------------------------------------------------------------
 # Config singleton package-level export tests (Task 4.0)

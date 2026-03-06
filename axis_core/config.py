@@ -302,6 +302,10 @@ class ResolvedConfig:
         rate_limits: Rate limiting config (optional)
         retry: Retry policy (optional)
         cache: Cache config (optional)
+        context_strategy: Transcript context strategy for model calls
+        max_cycle_context: Max historical cycles used for smart context strategy
+        transcript_strict: Whether transcript normalization should be strict
+        max_tool_result_chars: Optional max chars for tool-result transcript items
         context_window_guard_enabled: Whether pre-model context guard is enabled
         context_window_tokens: Model context window budget in tokens (optional)
         context_window_warn_tokens: Remaining-token warning threshold
@@ -320,6 +324,10 @@ class ResolvedConfig:
     rate_limits: RateLimits | None = None
     retry: RetryPolicy | None = None
     cache: CacheConfig | None = None
+    context_strategy: str = "smart"
+    max_cycle_context: int = 5
+    transcript_strict: bool = False
+    max_tool_result_chars: int | None = None
     context_window_guard_enabled: bool = False
     context_window_tokens: int | None = None
     context_window_warn_tokens: int = 32000

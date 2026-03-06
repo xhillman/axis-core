@@ -8,6 +8,7 @@ Tests the complete flow:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -71,6 +72,15 @@ async def mock_search_tool(q: str) -> str:
     return f"Search results for: {q}"
 
 
+def _runtime_config(**overrides: Any) -> Any:
+    base = {
+        "context_strategy": "smart",
+        "max_cycle_context": 5,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
 @pytest.mark.asyncio
 async def test_multi_cycle_flow() -> None:
     """Test complete multi-cycle flow with model → tools → model."""
@@ -127,12 +137,9 @@ async def test_multi_cycle_flow() -> None:
 
 
 @pytest.mark.asyncio
-async def test_context_strategy_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that AXIS_CONTEXT_STRATEGY environment variable is respected."""
+async def test_context_strategy_runtime_config() -> None:
+    """Test that runtime config controls context strategy in act phase."""
     import axis_core.adapters.planners  # noqa: F401
-
-    # Set minimal strategy
-    monkeypatch.setenv("AXIS_CONTEXT_STRATEGY", "minimal")
 
     mock_model = IntegrationMockModel()
 
@@ -146,6 +153,7 @@ async def test_context_strategy_env_var(monkeypatch: pytest.MonkeyPatch) -> None
         input_text="Test input",
         agent_id="test-agent",
         budget=Budget(max_cycles=10),
+        config=_runtime_config(context_strategy="minimal"),
     )
 
     # Should still work with minimal context
@@ -161,12 +169,9 @@ async def test_context_strategy_env_var(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_max_cycle_context_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that AXIS_MAX_CYCLE_CONTEXT environment variable is respected."""
+async def test_max_cycle_context_runtime_config() -> None:
+    """Test that runtime config controls smart-context history depth."""
     import axis_core.adapters.planners  # noqa: F401
-
-    monkeypatch.setenv("AXIS_CONTEXT_STRATEGY", "smart")
-    monkeypatch.setenv("AXIS_MAX_CYCLE_CONTEXT", "2")
 
     # Create model that keeps requesting tools for many cycles
     class MultiCycleModel:
@@ -222,6 +227,7 @@ async def test_max_cycle_context_env_var(monkeypatch: pytest.MonkeyPatch) -> Non
         input_text="Test",
         agent_id="test-agent",
         budget=Budget(max_cycles=15),  # Need enough cycles for 5 tool requests + final response
+        config=_runtime_config(context_strategy="smart", max_cycle_context=2),
     )
 
     if not result["success"]:
@@ -237,14 +243,9 @@ async def test_max_cycle_context_env_var(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_invalid_max_cycle_context_env_var_falls_back(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Invalid AXIS_MAX_CYCLE_CONTEXT should not fail execution."""
+async def test_invalid_max_cycle_context_runtime_config_falls_back() -> None:
+    """Invalid runtime max_cycle_context should not fail execution."""
     import axis_core.adapters.planners  # noqa: F401
-
-    monkeypatch.setenv("AXIS_CONTEXT_STRATEGY", "smart")
-    monkeypatch.setenv("AXIS_MAX_CYCLE_CONTEXT", "not-an-int")
 
     mock_model = IntegrationMockModel()
     engine = LifecycleEngine(
@@ -257,6 +258,7 @@ async def test_invalid_max_cycle_context_env_var_falls_back(
         input_text="Test invalid max cycles",
         agent_id="test-agent",
         budget=Budget(max_cycles=10),
+        config=_runtime_config(context_strategy="smart", max_cycle_context="not-an-int"),
     )
 
     assert result["success"] is True

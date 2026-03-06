@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import json
 import logging
-import os
 import random
 import time
 from datetime import datetime
@@ -141,8 +140,21 @@ def _coerce_positive_int(value: Any) -> int | None:
     return None
 
 
+def _coerce_non_negative_int(value: Any) -> int | None:
+    """Coerce a value to non-negative int, returning None when unset/invalid."""
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed >= 0 else None
+    return None
+
+
 def _resolve_transcript_strict(ctx: RunContext, step: PlanStep) -> bool:
-    """Resolve strict transcript guard mode from step/config/env."""
+    """Resolve strict transcript guard mode from step/config/default."""
     if "transcript_strict" in step.payload:
         return _coerce_bool(step.payload.get("transcript_strict"), default=False)
 
@@ -150,8 +162,7 @@ def _resolve_transcript_strict(ctx: RunContext, step: PlanStep) -> bool:
     if config_value is not None:
         return _coerce_bool(config_value, default=False)
 
-    env_value = os.getenv("AXIS_TRANSCRIPT_STRICT")
-    return _coerce_bool(env_value, default=False)
+    return False
 
 
 def _resolve_max_tool_result_chars(ctx: RunContext, step: PlanStep) -> int | None:
@@ -164,7 +175,64 @@ def _resolve_max_tool_result_chars(ctx: RunContext, step: PlanStep) -> int | Non
     if configured is not None:
         return configured
 
-    return _coerce_positive_int(os.getenv("AXIS_MAX_TOOL_RESULT_CHARS"))
+    return None
+
+
+def _resolve_context_strategy(ctx: RunContext, step: PlanStep) -> str:
+    """Resolve transcript context strategy from step/config/default."""
+    source = "default"
+    raw_value: Any = None
+
+    if "context_strategy" in step.payload:
+        source = "step.payload"
+        raw_value = step.payload.get("context_strategy")
+    else:
+        config_value = getattr(getattr(ctx, "config", None), "context_strategy", None)
+        if config_value is not None:
+            source = "config.context_strategy"
+            raw_value = config_value
+
+    if isinstance(raw_value, str):
+        strategy = raw_value.strip().lower()
+        if strategy in {"smart", "full", "minimal"}:
+            return strategy
+
+    if raw_value is not None:
+        logger.warning(
+            "Invalid %s value for context strategy '%s'; falling back to 'smart'",
+            source,
+            raw_value,
+        )
+
+    return "smart"
+
+
+def _resolve_max_cycle_context(ctx: RunContext, step: PlanStep) -> int:
+    """Resolve max cycle history count from step/config/default."""
+    source = "default"
+    raw_value: Any = None
+
+    if "max_cycle_context" in step.payload:
+        source = "step.payload"
+        raw_value = step.payload.get("max_cycle_context")
+    else:
+        config_value = getattr(getattr(ctx, "config", None), "max_cycle_context", None)
+        if config_value is not None:
+            source = "config.max_cycle_context"
+            raw_value = config_value
+
+    parsed = _coerce_non_negative_int(raw_value)
+    if parsed is not None:
+        return parsed
+
+    if raw_value is not None:
+        logger.warning(
+            "Invalid %s value for max cycle context '%s'; falling back to 5",
+            source,
+            raw_value,
+        )
+
+    return 5
 
 
 def _resolve_tool_idempotency_key(
@@ -192,7 +260,7 @@ def _resolve_tool_idempotency_key(
 
 
 def _resolve_context_window_guard_enabled(ctx: RunContext, step: PlanStep) -> bool:
-    """Resolve context-window guard enablement from step/config/env."""
+    """Resolve context-window guard enablement from step/config/default."""
     if "context_window_guard_enabled" in step.payload:
         return _coerce_bool(
             step.payload.get("context_window_guard_enabled"),
@@ -207,8 +275,7 @@ def _resolve_context_window_guard_enabled(ctx: RunContext, step: PlanStep) -> bo
     if config_value is not None:
         return _coerce_bool(config_value, default=False)
 
-    env_value = os.getenv("AXIS_CONTEXT_GUARD_ENABLED")
-    return _coerce_bool(env_value, default=False)
+    return False
 
 
 def _resolve_context_window_tokens(ctx: RunContext, step: PlanStep) -> int | None:
@@ -221,7 +288,7 @@ def _resolve_context_window_tokens(ctx: RunContext, step: PlanStep) -> int | Non
     if configured is not None:
         return configured
 
-    return _coerce_positive_int(os.getenv("AXIS_CONTEXT_WINDOW_TOKENS"))
+    return None
 
 
 def _resolve_context_warn_tokens(ctx: RunContext, step: PlanStep) -> int:
@@ -238,8 +305,7 @@ def _resolve_context_warn_tokens(ctx: RunContext, step: PlanStep) -> int:
     if configured is not None:
         return configured
 
-    env_value = _coerce_positive_int(os.getenv("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
-    return env_value if env_value is not None else 32_000
+    return 32_000
 
 
 def _resolve_context_block_tokens(ctx: RunContext, step: PlanStep) -> int:
@@ -256,12 +322,11 @@ def _resolve_context_block_tokens(ctx: RunContext, step: PlanStep) -> int:
     if configured is not None:
         return configured
 
-    env_value = _coerce_positive_int(os.getenv("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
-    return env_value if env_value is not None else 16_000
+    return 16_000
 
 
 def _resolve_context_pruning_enabled(ctx: RunContext, step: PlanStep) -> bool:
-    """Resolve context pruning enablement from step/config/env."""
+    """Resolve context pruning enablement from step/config/default."""
     if "context_pruning_enabled" in step.payload:
         return _coerce_bool(step.payload.get("context_pruning_enabled"), default=False)
 
@@ -269,8 +334,7 @@ def _resolve_context_pruning_enabled(ctx: RunContext, step: PlanStep) -> bool:
     if config_value is not None:
         return _coerce_bool(config_value, default=False)
 
-    env_value = os.getenv("AXIS_CONTEXT_PRUNE_ENABLED")
-    return _coerce_bool(env_value, default=False)
+    return False
 
 
 def _record_retry_attempt(ctx: RunContext, step: PlanStep) -> None:
@@ -988,30 +1052,8 @@ async def _execute_model_step(
 
     # Build messages if not explicitly provided
     if "messages" not in step.payload:
-        # Get context strategy from environment or use default
-        strategy = os.getenv("AXIS_CONTEXT_STRATEGY", "smart")
-        if strategy not in {"smart", "full", "minimal"}:
-            logger.warning(
-                "Invalid AXIS_CONTEXT_STRATEGY='%s'; falling back to 'smart'",
-                strategy,
-            )
-            strategy = "smart"
-
-        raw_max_cycles = os.getenv("AXIS_MAX_CYCLE_CONTEXT", "5")
-        try:
-            max_cycles = int(raw_max_cycles)
-        except ValueError:
-            logger.warning(
-                "Invalid AXIS_MAX_CYCLE_CONTEXT='%s'; falling back to 5",
-                raw_max_cycles,
-            )
-            max_cycles = 5
-        if max_cycles < 0:
-            logger.warning(
-                "Negative AXIS_MAX_CYCLE_CONTEXT=%d; falling back to 5",
-                max_cycles,
-            )
-            max_cycles = 5
+        strategy = _resolve_context_strategy(ctx, step)
+        max_cycles = _resolve_max_cycle_context(ctx, step)
         messages = ctx.state.build_messages(ctx, strategy=strategy, max_cycles=max_cycles)
     else:
         messages = step.payload["messages"]

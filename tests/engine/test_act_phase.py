@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -122,6 +123,35 @@ def _planner_with_messages(messages: list[dict[str, Any]]) -> MockPlanner:
     )
 
 
+def _planner_with_model_payload(payload: dict[str, Any]) -> MockPlanner:
+    return MockPlanner(
+        plans=[
+            Plan(
+                id="plan-model",
+                goal="model step",
+                steps=(
+                    PlanStep(
+                        id="model-1",
+                        type=StepType.MODEL,
+                        payload=payload,
+                    ),
+                ),
+            ),
+            Plan(
+                id="plan-terminal",
+                goal="done",
+                steps=(
+                    PlanStep(
+                        id="terminal-1",
+                        type=StepType.TERMINAL,
+                        payload={"output": "done"},
+                    ),
+                ),
+            ),
+        ]
+    )
+
+
 def _runtime_config(**overrides: Any) -> Any:
     base = {
         "timeouts": None,
@@ -130,6 +160,10 @@ def _runtime_config(**overrides: Any) -> Any:
         "cache": None,
         "tool_policy": None,
         "confirmation_handler": None,
+        "context_strategy": "smart",
+        "max_cycle_context": 5,
+        "transcript_strict": False,
+        "max_tool_result_chars": None,
         "context_window_guard_enabled": True,
         "context_window_tokens": 100,
         "context_window_warn_tokens": 32,
@@ -226,6 +260,193 @@ class TestActPhaseContextWindowGuard:
         sent_messages = model.calls[0]["messages"]
         assert all(msg.get("role") != "tool" for msg in sent_messages)
         assert any(event.type == "context_window_pruned" for event in telemetry.events)
+
+
+class TestActPhaseRuntimeConfigResolution:
+    """Contract 07 tests for step/config/default resolution in act phase."""
+
+    @pytest.mark.asyncio
+    async def test_transcript_settings_step_override_beats_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: list[tuple[bool, int | None]] = []
+
+        def fake_normalize(
+            messages: list[dict[str, Any]],
+            *,
+            strict: bool,
+            max_tool_result_chars: int | None,
+        ) -> list[dict[str, Any]]:
+            captured.append((strict, max_tool_result_chars))
+            return messages
+
+        act_module = importlib.import_module("axis_core.engine.phases.act")
+        monkeypatch.setattr(act_module, "normalize_transcript_messages", fake_normalize)
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_model_payload(
+                {
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "transcript_strict": True,
+                    "max_tool_result_chars": 77,
+                }
+            ),
+        )
+        result = await engine.execute(
+            input_text="test",
+            agent_id="act-step-override",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(transcript_strict=False, max_tool_result_chars=42),
+        )
+
+        assert result["success"] is True
+        assert captured == [(True, 77)]
+
+    @pytest.mark.asyncio
+    async def test_transcript_settings_use_config_when_step_omits_them(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: list[tuple[bool, int | None]] = []
+
+        def fake_normalize(
+            messages: list[dict[str, Any]],
+            *,
+            strict: bool,
+            max_tool_result_chars: int | None,
+        ) -> list[dict[str, Any]]:
+            captured.append((strict, max_tool_result_chars))
+            return messages
+
+        act_module = importlib.import_module("axis_core.engine.phases.act")
+        monkeypatch.setattr(act_module, "normalize_transcript_messages", fake_normalize)
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_model_payload(
+                {
+                    "messages": [{"role": "user", "content": "hello"}],
+                }
+            ),
+        )
+        result = await engine.execute(
+            input_text="test",
+            agent_id="act-config-fallback",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(transcript_strict=True, max_tool_result_chars=42),
+        )
+
+        assert result["success"] is True
+        assert captured == [(True, 42)]
+
+    @pytest.mark.asyncio
+    async def test_transcript_settings_do_not_read_env_without_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: list[tuple[bool, int | None]] = []
+
+        def fake_normalize(
+            messages: list[dict[str, Any]],
+            *,
+            strict: bool,
+            max_tool_result_chars: int | None,
+        ) -> list[dict[str, Any]]:
+            captured.append((strict, max_tool_result_chars))
+            return messages
+
+        act_module = importlib.import_module("axis_core.engine.phases.act")
+        monkeypatch.setattr(act_module, "normalize_transcript_messages", fake_normalize)
+        monkeypatch.setenv("AXIS_TRANSCRIPT_STRICT", "true")
+        monkeypatch.setenv("AXIS_MAX_TOOL_RESULT_CHARS", "99")
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_model_payload(
+                {
+                    "messages": [{"role": "user", "content": "hello"}],
+                }
+            ),
+        )
+        result = await engine.execute(
+            input_text="test",
+            agent_id="act-no-env-fallback",
+            budget=Budget(max_cycles=2),
+            config=None,
+        )
+
+        assert result["success"] is True
+        assert captured == [(False, None)]
+
+    @pytest.mark.asyncio
+    async def test_context_message_building_uses_step_then_config_then_defaults(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured_calls: list[tuple[str, int]] = []
+
+        def fake_build_messages(
+            self: Any,
+            ctx: Any,
+            strategy: str = "smart",
+            max_cycles: int = 5,
+        ) -> list[dict[str, Any]]:
+            del self, ctx
+            captured_calls.append((strategy, max_cycles))
+            return [{"role": "user", "content": "patched"}]
+
+        monkeypatch.setattr("axis_core.context.RunState.build_messages", fake_build_messages)
+
+        # Step override should win over resolved config values.
+        step_engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_model_payload(
+                {
+                    "context_strategy": "minimal",
+                    "max_cycle_context": 1,
+                }
+            ),
+        )
+        step_result = await step_engine.execute(
+            input_text="test",
+            agent_id="act-step-context",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(context_strategy="full", max_cycle_context=9),
+        )
+        assert step_result["success"] is True
+        assert captured_calls[-1] == ("minimal", 1)
+
+        # Resolved config should be used when step omits override.
+        config_engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_model_payload({}),
+        )
+        config_result = await config_engine.execute(
+            input_text="test",
+            agent_id="act-config-context",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(context_strategy="full", max_cycle_context=7),
+        )
+        assert config_result["success"] is True
+        assert captured_calls[-1] == ("full", 7)
+
+        # Env should not be read by act; defaults apply when config is absent.
+        monkeypatch.setenv("AXIS_CONTEXT_STRATEGY", "minimal")
+        monkeypatch.setenv("AXIS_MAX_CYCLE_CONTEXT", "1")
+        default_engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_model_payload({}),
+        )
+        default_result = await default_engine.execute(
+            input_text="test",
+            agent_id="act-default-context",
+            budget=Budget(max_cycles=2),
+            config=None,
+        )
+        assert default_result["success"] is True
+        assert captured_calls[-1] == ("smart", 5)
 
 
 def _planner_with_tool(tool_name: str, *, idempotency_key: str | None) -> MockPlanner:
