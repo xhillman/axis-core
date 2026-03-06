@@ -309,12 +309,11 @@ async def load_session(memory: Any, session_id: str) -> Session | None:
     return None
 
 
-async def save_session(memory: Any, session: Session) -> Session:
-    """Persist a session using the memory adapter."""
-    if hasattr(memory, "store_session"):
-        return cast(Session, await memory.store_session(session))
-
-    existing = await load_session(memory, session.id)
+def prepare_session_for_persistence(
+    session: Session,
+    existing: Session | None,
+) -> Session:
+    """Apply shared optimistic-locking semantics before persisting a session."""
     if existing and existing.version != session.version:
         raise ConcurrencyError(
             message=(
@@ -327,6 +326,16 @@ async def save_session(memory: Any, session: Session) -> Session:
 
     session.version += 1
     session.updated_at = datetime.utcnow()
+    return session
+
+
+async def save_session(memory: Any, session: Session) -> Session:
+    """Persist a session using the memory adapter."""
+    if hasattr(memory, "store_session"):
+        return cast(Session, await memory.store_session(session))
+
+    existing = await load_session(memory, session.id)
+    prepare_session_for_persistence(session, existing)
     await memory.store(
         key=f"{SESSION_PREFIX}{session.id}",
         value=session.serialize(),
@@ -341,4 +350,5 @@ __all__ = [
     "Session",
     "SESSION_PREFIX",
     "generate_session_id",
+    "prepare_session_for_persistence",
 ]

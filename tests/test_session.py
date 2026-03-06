@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -11,7 +12,23 @@ from axis_core.agent import Agent
 from axis_core.errors import ConcurrencyError
 from axis_core.protocols.model import ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
-from axis_core.session import Message, Session
+from axis_core.session import Message, Session, prepare_session_for_persistence, save_session
+
+
+class _FallbackMemory:
+    def __init__(self) -> None:
+        self._store: dict[str, Any] = {}
+
+    async def retrieve(self, key: str) -> Any | None:
+        return self._store.get(key)
+
+    async def store(
+        self,
+        key: str,
+        value: Any,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self._store[key] = value
 
 
 def test_session_add_message_truncates_history() -> None:
@@ -39,6 +56,28 @@ def test_session_serialization_roundtrip() -> None:
     assert len(restored.history) == 1
     assert restored.history[0].role == "user"
     assert restored.history[0].content == "hello"
+
+
+def test_prepare_session_for_persistence_increments_version_and_timestamp() -> None:
+    original_updated_at = datetime.utcnow() - timedelta(minutes=5)
+    session = Session(id="session-prepare", updated_at=original_updated_at)
+
+    stored = prepare_session_for_persistence(session, existing=None)
+
+    assert stored is session
+    assert stored.version == 1
+    assert stored.updated_at > original_updated_at
+
+
+def test_prepare_session_for_persistence_conflict_raises() -> None:
+    session = Session(id="session-prepare", version=1)
+    existing = Session(id="session-prepare", version=2)
+
+    with pytest.raises(ConcurrencyError) as exc_info:
+        prepare_session_for_persistence(session, existing=existing)
+
+    assert exc_info.value.expected_version == 1
+    assert exc_info.value.actual_version == 2
 
 
 @pytest.mark.asyncio
@@ -115,6 +154,25 @@ async def test_session_version_conflict_raises() -> None:
     stale = Session(id="session-5", version=0)
     with pytest.raises(ConcurrencyError):
         await memory.store_session(stale)
+
+
+@pytest.mark.asyncio
+async def test_save_session_fallback_preserves_optimistic_locking_fields() -> None:
+    memory = _FallbackMemory()
+    original_updated_at = datetime.utcnow() - timedelta(minutes=5)
+    session = Session(id="session-fallback", updated_at=original_updated_at)
+
+    stored = await save_session(memory, session)
+
+    assert stored.version == 1
+    assert stored.updated_at > original_updated_at
+
+    stale = Session(id="session-fallback", version=0)
+    with pytest.raises(ConcurrencyError) as exc_info:
+        await save_session(memory, stale)
+
+    assert exc_info.value.expected_version == 0
+    assert exc_info.value.actual_version == 1
 
 
 @pytest.mark.asyncio

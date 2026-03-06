@@ -10,14 +10,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from typing import Any
 
 from redis.asyncio import Redis
 
-from axis_core.errors import ConcurrencyError
 from axis_core.protocols.memory import MemoryCapability, MemoryItem
-from axis_core.session import SESSION_PREFIX, Session
+from axis_core.session import SESSION_PREFIX, Session, prepare_session_for_persistence
 
 logger = logging.getLogger("axis_core.adapters.memory.redis")
 
@@ -284,17 +282,7 @@ class RedisMemory:
     async def store_session(self, session: Session) -> Session:
         """Store or update a session with optimistic locking."""
         existing = await self.retrieve_session(session.id)
-        if existing and existing.version != session.version:
-            raise ConcurrencyError(
-                message=(
-                    f"Session {session.id} was modified. "
-                    f"Expected version {session.version}, got {existing.version}"
-                ),
-                expected_version=session.version,
-                actual_version=existing.version,
-            )
-        session.version += 1
-        session.updated_at = datetime.utcnow()
+        prepare_session_for_persistence(session, existing)
         key = f"{SESSION_PREFIX}{session.id}"
         await self.store(key, session.serialize(), metadata={"type": "session"})
         return session

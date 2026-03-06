@@ -1,10 +1,14 @@
 """Tests for EphemeralMemory adapter."""
 
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from axis_core.adapters.memory.ephemeral import EphemeralMemory
+from axis_core.errors import ConcurrencyError
 from axis_core.protocols.memory import MemoryCapability, MemoryItem
+from axis_core.session import Session
 
 
 @pytest.mark.unit
@@ -213,3 +217,22 @@ class TestEphemeralMemory:
             assert item.expires_at is None
             assert item.namespace is None
             assert item.score is None  # Keyword search doesn't provide scores
+
+    @pytest.mark.asyncio
+    async def test_session_store_uses_shared_concurrency_semantics(self) -> None:
+        """Session persistence should advance version/timestamp and reject stale writes."""
+        memory = EphemeralMemory()
+        original_updated_at = datetime.utcnow() - timedelta(minutes=5)
+        session = Session(id="test-session-1", updated_at=original_updated_at)
+
+        stored = await memory.store_session(session)
+
+        assert stored.version == 1
+        assert stored.updated_at > original_updated_at
+
+        stale = Session(id="test-session-1", version=0)
+        with pytest.raises(ConcurrencyError) as exc_info:
+            await memory.store_session(stale)
+
+        assert exc_info.value.expected_version == 0
+        assert exc_info.value.actual_version == 1

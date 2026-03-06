@@ -4,12 +4,10 @@ This adapter provides a simple in-memory dictionary-based storage implementation
 All data is lost when the process terminates.
 """
 
-from datetime import datetime
 from typing import Any
 
-from axis_core.errors import ConcurrencyError
 from axis_core.protocols.memory import MemoryCapability, MemoryItem
-from axis_core.session import SESSION_PREFIX, Session
+from axis_core.session import SESSION_PREFIX, Session, prepare_session_for_persistence
 
 
 class EphemeralMemory:
@@ -184,17 +182,7 @@ class EphemeralMemory:
         """Store or update a session in memory."""
         key = f"{SESSION_PREFIX}{session.id}"
         existing = await self.retrieve_session(session.id)
-        if existing and existing.version != session.version:
-            raise ConcurrencyError(
-                message=(
-                    f"Session {session.id} was modified. "
-                    f"Expected version {session.version}, got {existing.version}"
-                ),
-                expected_version=session.version,
-                actual_version=existing.version,
-            )
-        session.version += 1
-        session.updated_at = datetime.utcnow()
+        prepare_session_for_persistence(session, existing)
         self._store[key] = {
             "value": session.serialize(),
             "metadata": {"type": "session"},

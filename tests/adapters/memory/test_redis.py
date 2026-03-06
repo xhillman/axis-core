@@ -1,6 +1,7 @@
 """Tests for RedisMemory adapter."""
 
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -263,6 +264,25 @@ class TestRedisMemory:
         assert retrieved is not None
         assert retrieved.id == "test-session-1"
         assert retrieved.version == 1
+
+    @pytest.mark.asyncio
+    async def test_session_store_uses_shared_concurrency_semantics(self) -> None:
+        """Session persistence should advance version/timestamp and reject stale writes."""
+        memory = _make_memory()
+        original_updated_at = datetime.utcnow() - timedelta(minutes=5)
+        session = Session(id="test-session-1", updated_at=original_updated_at)
+
+        stored = await memory.store_session(session)
+
+        assert stored.version == 1
+        assert stored.updated_at > original_updated_at
+
+        stale = Session(id="test-session-1", version=0)
+        with pytest.raises(ConcurrencyError) as exc_info:
+            await memory.store_session(stale)
+
+        assert exc_info.value.expected_version == 0
+        assert exc_info.value.actual_version == 1
 
     @pytest.mark.asyncio
     async def test_session_retrieve_nonexistent(self) -> None:
