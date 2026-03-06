@@ -15,20 +15,29 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import hashlib
-import importlib
 import json
 import logging
-import os
 import time
 import uuid
-import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any
 
+from axis_core._agent_checkpoint import (
+    load_checkpoint_payload,
+    persist_checkpoint,
+)
+from axis_core._agent_construction import build_agent_construction
+from axis_core._agent_runtime import (
+    build_failure_result,
+    build_run_result,
+    build_timeout_error,
+    config_fingerprint,
+    effective_timeout,
+    resolve_runtime_config,
+)
 from axis_core.attachments import AttachmentLike
-from axis_core.budget import Budget, BudgetState
+from axis_core.budget import Budget
 from axis_core.cancel import CancelToken
 from axis_core.config import (
     CacheConfig,
@@ -37,18 +46,16 @@ from axis_core.config import (
     RetryPolicy,
     Timeouts,
     ToolPolicy,
-    config,
 )
-from axis_core.context import RunState
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.engine.registry import memory_registry
 from axis_core.engine.resolver import resolve_adapter
 from axis_core.engine.trace_collector import TraceCollector
-from axis_core.errors import AxisError, ConfigError, ErrorClass
+from axis_core.errors import AxisError, ErrorClass
 from axis_core.errors import TimeoutError as AxisTimeoutError
-from axis_core.output_schema import coerce_to_output_schema, parse_stream_partial, schema_name
+from axis_core.output_schema import parse_stream_partial, schema_name
 from axis_core.protocols.telemetry import BufferMode, TraceEvent
-from axis_core.result import RunResult, RunStats, StreamEvent
+from axis_core.result import RunResult, StreamEvent
 from axis_core.session import Session, generate_session_id, load_session
 
 logger = logging.getLogger("axis_core.agent")
@@ -103,201 +110,6 @@ class _StreamTelemetrySink:
         pass
 
 
-T = TypeVar("T")
-
-
-def _coerce(
-    value: dict[str, Any] | T | None,
-    cls: type[T],
-    arg_name: str,
-    default: T | None = None,
-) -> T | None:
-    """Coerce a dict, instance, or None into the target type.
-
-    Args:
-        value: Value to coerce (dict, instance of cls, or None)
-        cls: Target dataclass type to construct from dict
-        arg_name: Argument name for error messages
-        default: Value to return when input is None
-    """
-    if value is None:
-        return default
-    if isinstance(value, cls):
-        return value
-    if isinstance(value, dict):
-        return cls(**value)
-    raise TypeError(
-        f"Argument '{arg_name}' must be {cls.__name__} or dict, "
-        f"got {type(value).__name__}"
-    )
-
-
-def _coerce_env_bool(value: str | None, *, default: bool = False) -> bool:
-    """Coerce boolean env-var style values."""
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def _coerce_env_positive_int(value: str | None) -> int | None:
-    """Coerce positive integer env-var values."""
-    if value is None:
-        return None
-    try:
-        parsed = int(value.strip())
-    except ValueError:
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _coerce_env_non_negative_int(value: str | None) -> int | None:
-    """Coerce non-negative integer env-var values."""
-    if value is None:
-        return None
-    try:
-        parsed = int(value.strip())
-    except ValueError:
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def _coerce_context_strategy(value: str | None) -> str | None:
-    """Validate context strategy value."""
-    if value is None:
-        return None
-    candidate = value.strip().lower()
-    if candidate in {"smart", "full", "minimal"}:
-        return candidate
-    return None
-
-
-def _resolve_telemetry_sinks() -> list[Any]:
-    """Resolve telemetry sinks from environment variables.
-
-    Reads AXIS_TELEMETRY_SINK env var and creates appropriate sink instances.
-
-    Supported values:
-        - "console": Creates ConsoleSink for stdout output
-        - "file": Creates FileSink for JSONL output
-        - "callback": Creates CallbackSink from AXIS_TELEMETRY_CALLBACK
-        - "none": Returns empty list (telemetry disabled)
-
-    Returns:
-        List of telemetry sink instances
-    """
-    sink_type = os.getenv("AXIS_TELEMETRY_SINK", "none").lower()
-    redact = os.getenv("AXIS_TELEMETRY_REDACT", "true").lower() == "true"
-
-    def _parse_buffer_mode(raw: str) -> BufferMode:
-        normalized = raw.strip().lower()
-        for mode in BufferMode:
-            if mode.value == normalized:
-                return mode
-        logger.warning(
-            "Unknown AXIS_TELEMETRY_BUFFER_MODE value '%s'. "
-            "Using 'batched'.",
-            raw,
-        )
-        return BufferMode.BATCHED
-
-    if sink_type == "none":
-        return []
-
-    if sink_type == "console":
-        # Import here to avoid circular imports
-        from axis_core.adapters.telemetry.console import ConsoleSink
-
-        # Check if compact mode is requested via env var
-        compact = os.getenv("AXIS_TELEMETRY_COMPACT", "false").lower() == "true"
-        return [ConsoleSink(compact=compact, redact=redact)]
-
-    if sink_type == "file":
-        from axis_core.adapters.telemetry.file import FileSink
-
-        file_path = os.getenv("AXIS_TELEMETRY_FILE", "./axis_trace.jsonl")
-        raw_batch_size = os.getenv("AXIS_TELEMETRY_BATCH_SIZE", "100")
-        buffer_mode = _parse_buffer_mode(
-            os.getenv("AXIS_TELEMETRY_BUFFER_MODE", "batched")
-        )
-        try:
-            batch_size = int(raw_batch_size)
-        except ValueError:
-            logger.warning(
-                "Invalid AXIS_TELEMETRY_BATCH_SIZE '%s'. Using 100.",
-                raw_batch_size,
-            )
-            batch_size = 100
-
-        return [
-            FileSink(
-                path=file_path,
-                batch_size=batch_size,
-                buffering=buffer_mode,
-                redact=redact,
-            )
-        ]
-
-    if sink_type == "callback":
-        from axis_core.adapters.telemetry.callback import CallbackSink
-
-        callback_ref = os.getenv("AXIS_TELEMETRY_CALLBACK", "").strip()
-        if not callback_ref:
-            logger.warning(
-                "AXIS_TELEMETRY_SINK=callback requires AXIS_TELEMETRY_CALLBACK "
-                "formatted as 'module:function'. Using no telemetry."
-            )
-            return []
-
-        if ":" not in callback_ref:
-            logger.warning(
-                "Invalid AXIS_TELEMETRY_CALLBACK '%s'. Expected 'module:function'. "
-                "Using no telemetry.",
-                callback_ref,
-            )
-            return []
-
-        module_path, attr_name = callback_ref.split(":", 1)
-        if not module_path or not attr_name:
-            logger.warning(
-                "Invalid AXIS_TELEMETRY_CALLBACK '%s'. Expected 'module:function'. "
-                "Using no telemetry.",
-                callback_ref,
-            )
-            return []
-
-        try:
-            module = importlib.import_module(module_path)
-            callback = getattr(module, attr_name)
-        except (ImportError, AttributeError):
-            logger.warning(
-                "Unable to load AXIS_TELEMETRY_CALLBACK '%s'. Using no telemetry.",
-                callback_ref,
-                exc_info=True,
-            )
-            return []
-
-        if not callable(callback):
-            logger.warning(
-                "AXIS_TELEMETRY_CALLBACK '%s' is not callable. Using no telemetry.",
-                callback_ref,
-            )
-            return []
-
-        return [CallbackSink(handler=callback, redact=redact)]
-
-    # Unknown sink type
-    logger.warning(
-        f"Unknown AXIS_TELEMETRY_SINK value: '{sink_type}'. "
-        f"Supported values: console, file, callback, none. Using no telemetry."
-    )
-    return []
-
-
 class Agent:
     """Primary API for executing AI agent tasks.
 
@@ -349,89 +161,49 @@ class Agent:
         checkpoint: bool = False,
         checkpoint_dir: str = "./checkpoints",
     ) -> None:
-        # ----- AD-034: Runtime type validation -----
-        if tools is not None and not isinstance(tools, list):
-            raise TypeError(
-                f"Argument 'tools' must be a list of callables, "
-                f"got {type(tools).__name__}"
-            )
-        if system is not None and not isinstance(system, str):
-            raise TypeError(
-                f"Argument 'system' must be str, got {type(system).__name__}"
-            )
-        if verbose is not None and not isinstance(verbose, bool):
-            raise TypeError(
-                f"Argument 'verbose' must be bool, got {type(verbose).__name__}"
-            )
-        if confirmation_handler is not None and not callable(confirmation_handler):
-            raise TypeError(
-                f"Argument 'confirmation_handler' must be callable or None, "
-                f"got {type(confirmation_handler).__name__}"
-            )
-        if not isinstance(checkpoint, bool):
-            raise TypeError(
-                f"Argument 'checkpoint' must be bool, got {type(checkpoint).__name__}"
-            )
-        if not isinstance(checkpoint_dir, str):
-            raise TypeError(
-                f"Argument 'checkpoint_dir' must be str, got {type(checkpoint_dir).__name__}"
-            )
+        construction = build_agent_construction(
+            tools=tools,
+            system=system,
+            persona=persona,
+            model=model,
+            fallback=fallback,
+            memory=memory,
+            planner=planner,
+            budget=budget,
+            timeouts=timeouts,
+            rate_limits=rate_limits,
+            retry=retry,
+            cache=cache,
+            tool_policy=tool_policy,
+            telemetry=telemetry,
+            verbose=verbose,
+            auth=auth,
+            confirmation_handler=confirmation_handler,
+            checkpoint=checkpoint,
+            checkpoint_dir=checkpoint_dir,
+            unset=_UNSET,
+        )
 
-        # ----- Store configuration -----
         self._agent_id = str(uuid.uuid4())
-        self._system = system
-        self._persona = persona
-        # Fall back to config defaults when not provided (config resolution order)
-        # Use sentinel to distinguish "not provided" from "explicitly None"
-        self._model = config.default_model if model is _UNSET else model
-        self._fallback: list[Any] = fallback or []
-        self._memory = config.default_memory if memory is _UNSET else memory
-        self._planner = config.default_planner if planner is _UNSET else planner
-        self._budget = _coerce(budget, Budget, "budget", default=Budget()) or Budget()
-        self._timeouts = _coerce(timeouts, Timeouts, "timeouts", default=Timeouts()) or Timeouts()
-        self._rate_limits = _coerce(rate_limits, RateLimits, "rate_limits")
-        self._retry = _coerce(retry, RetryPolicy, "retry")
-        self._cache = _coerce(cache, CacheConfig, "cache")
-        self._tool_policy = _coerce(tool_policy, ToolPolicy, "tool_policy")
-        self._verbose = verbose
-        self._confirmation_handler = confirmation_handler
-        self._checkpoint_enabled = checkpoint
-        self._checkpoint_dir = checkpoint_dir
-
-        if auth is not None:
-            warnings.warn(
-                "Argument 'auth' is deprecated and ignored. "
-                "Manage credentials inside tools (for example via environment variables).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        # Telemetry - resolve sinks from env vars when enabled
-        if isinstance(telemetry, bool):
-            self._telemetry_enabled = telemetry
-            # When telemetry=True, resolve sinks from AXIS_TELEMETRY_SINK env var
-            self._telemetry_sinks: list[Any] = (
-                _resolve_telemetry_sinks() if telemetry else []
-            )
-        elif isinstance(telemetry, list):
-            self._telemetry_enabled = True
-            self._telemetry_sinks = telemetry
-        else:
-            raise TypeError(
-                f"Argument 'telemetry' must be bool or list, "
-                f"got {type(telemetry).__name__}"
-            )
-
-        # Build tool registry
-        self._tools: dict[str, Any] = {}
-        if tools:
-            for t in tools:
-                if hasattr(t, "_axis_manifest"):
-                    self._tools[t._axis_manifest.name] = t
-                elif hasattr(t, "__name__"):
-                    self._tools[t.__name__] = t
-                else:
-                    self._tools[str(t)] = t
+        self._system = construction.system
+        self._persona = construction.persona
+        self._model = construction.model
+        self._fallback = construction.fallback
+        self._memory = construction.memory
+        self._planner = construction.planner
+        self._budget = construction.budget
+        self._timeouts = construction.timeouts
+        self._rate_limits = construction.rate_limits
+        self._retry = construction.retry
+        self._cache = construction.cache
+        self._tool_policy = construction.tool_policy
+        self._verbose = construction.verbose
+        self._confirmation_handler = construction.confirmation_handler
+        self._checkpoint_enabled = construction.checkpoint_enabled
+        self._checkpoint_dir = construction.checkpoint_dir
+        self._telemetry_enabled = construction.telemetry_enabled
+        self._telemetry_sinks = construction.telemetry_sinks
+        self._tools = construction.tools
 
         # AD-008: Single-execution constraint
         self._lock = asyncio.Lock()
@@ -461,63 +233,14 @@ class Agent:
             ),
         )
 
-    def _checkpoint_path(self, run_id: str) -> str:
-        """Build checkpoint file path for a run ID."""
-        safe_run_id = run_id.replace("/", "_")
-        return os.path.join(self._checkpoint_dir, f"{safe_run_id}.json")
-
-    @staticmethod
-    def _write_checkpoint_file(path: str, payload: dict[str, Any]) -> None:
-        """Atomically write checkpoint payload to disk."""
-        directory = os.path.dirname(path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-
-        tmp_path = f"{path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=True, sort_keys=True, indent=2)
-        os.replace(tmp_path, path)
-
     async def _persist_checkpoint(self, payload: dict[str, Any]) -> None:
         """Persist a checkpoint envelope to disk."""
-        context = payload.get("context")
-        if not isinstance(context, dict):
-            raise ConfigError(message="Checkpoint context is missing or corrupt.")
-
-        run_id = context.get("run_id")
-        if not isinstance(run_id, str) or not run_id:
-            raise ConfigError(message="Checkpoint context is missing run_id.")
-
-        path = self._checkpoint_path(run_id)
-        await asyncio.to_thread(self._write_checkpoint_file, path, payload)
+        await persist_checkpoint(self._checkpoint_dir, payload)
 
     @staticmethod
     def _load_checkpoint_payload(checkpoint: str | dict[str, Any]) -> dict[str, Any]:
         """Load a checkpoint envelope from dict payload or JSON file path."""
-        if isinstance(checkpoint, dict):
-            return checkpoint
-
-        try:
-            with open(checkpoint, encoding="utf-8") as f:
-                data = json.load(f)
-        except FileNotFoundError as e:
-            raise ConfigError(
-                message=f"Checkpoint file not found: {checkpoint}"
-            ) from e
-        except json.JSONDecodeError as e:
-            raise ConfigError(
-                message=f"Checkpoint file is not valid JSON: {checkpoint}",
-                cause=e,
-            ) from e
-        except OSError as e:
-            raise ConfigError(
-                message=f"Failed to read checkpoint file: {checkpoint}",
-                cause=e,
-            ) from e
-
-        if not isinstance(data, dict):
-            raise ConfigError(message="Checkpoint payload must be a JSON object.")
-        return data
+        return load_checkpoint_payload(checkpoint)
 
     def _build_result(
         self,
@@ -527,137 +250,28 @@ class Agent:
         output_schema: type[Any] | None = None,
     ) -> RunResult:
         """Convert lifecycle engine raw result dict into a RunResult."""
-        budget_state: BudgetState = raw.get("budget_state", BudgetState())
-        errors: list[Any] = raw.get("errors", [])
-
-        stats = RunStats(
-            cycles=raw.get("cycles_completed", 0),
-            tool_calls=budget_state.tool_calls,
-            model_calls=budget_state.model_calls,
-            input_tokens=budget_state.input_tokens,
-            output_tokens=budget_state.output_tokens,
-            total_tokens=budget_state.total_tokens,
-            cost_usd=budget_state.cost_usd,
-            duration_ms=duration_ms,
-        )
-
-        error = raw.get("error")
-        output = raw.get("output")
-        output_raw = raw.get("output_raw", "")
-        success = raw.get("success", False)
-
-        if output_schema is not None and success:
-            try:
-                output = coerce_to_output_schema(
-                    output=output,
-                    output_raw=output_raw,
-                    schema=output_schema,
-                )
-            except AxisError as schema_error:
-                success = False
-                error = schema_error
-                output = None
-
-        memory_error_str = raw.get("memory_error")
-        memory_error: AxisError | None = None
-        if memory_error_str:
-            from axis_core.errors import ErrorClass
-
-            memory_error = AxisError(
-                message=str(memory_error_str),
-                error_class=ErrorClass.RUNTIME,
-            )
-
-        return RunResult(
-            output=output,
-            output_raw=output_raw,
-            success=success,
-            error=error,
-            had_recoverable_errors=any(
-                getattr(e, "recovered", False) for e in errors
-            ),
-            stats=stats,
-            trace=trace or [],
-            state=raw.get("state", RunState()),
-            run_id=raw.get("run_id", ""),
-            memory_error=memory_error,
+        return build_run_result(
+            raw,
+            duration_ms,
+            trace=trace,
+            output_schema=output_schema,
         )
 
     def _get_config_fingerprint(self) -> str:
         """Generate fingerprint of current agent config (AD-044)."""
-        model_value = self._model
-        model_id = (
-            model_value
-            if isinstance(model_value, str)
-            else getattr(model_value, "model_id", None)
+        return config_fingerprint(
+            model=self._model,
+            tools=self._tools,
+            system=self._system,
         )
-        config_data = {
-            "tools": sorted(self._tools.keys()),
-            "system": self._system,
-            "model": model_id,
-        }
-        canonical = json.dumps(config_data, sort_keys=True)
-        return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
     def _effective_timeout(self, timeout: float | None) -> float | None:
         """Resolve runtime timeout: explicit override first, then configured total."""
-        if timeout is not None:
-            return timeout
-        return self._timeouts.total
+        return effective_timeout(timeout, self._timeouts.total)
 
     def _resolved_config(self) -> ResolvedConfig:
         """Build the resolved runtime config passed into the lifecycle engine."""
-        raw_context_strategy = os.getenv("AXIS_CONTEXT_STRATEGY")
-        context_strategy = _coerce_context_strategy(raw_context_strategy)
-        if raw_context_strategy is not None and context_strategy is None:
-            logger.warning(
-                "Invalid AXIS_CONTEXT_STRATEGY='%s'; falling back to 'smart'",
-                raw_context_strategy,
-            )
-            context_strategy = "smart"
-        if context_strategy is None:
-            context_strategy = "smart"
-
-        raw_max_cycle_context = os.getenv("AXIS_MAX_CYCLE_CONTEXT")
-        max_cycle_context = _coerce_env_non_negative_int(raw_max_cycle_context)
-        if raw_max_cycle_context is not None and max_cycle_context is None:
-            logger.warning(
-                "Invalid AXIS_MAX_CYCLE_CONTEXT='%s'; falling back to 5",
-                raw_max_cycle_context,
-            )
-            max_cycle_context = 5
-        if max_cycle_context is None:
-            max_cycle_context = 5
-
-        transcript_strict = _coerce_env_bool(
-            os.getenv("AXIS_TRANSCRIPT_STRICT"),
-            default=False,
-        )
-        max_tool_result_chars = _coerce_env_positive_int(
-            os.getenv("AXIS_MAX_TOOL_RESULT_CHARS")
-        )
-
-        context_guard_enabled = _coerce_env_bool(
-            os.getenv("AXIS_CONTEXT_GUARD_ENABLED"),
-            default=False,
-        )
-        context_window_tokens = _coerce_env_positive_int(
-            os.getenv("AXIS_CONTEXT_WINDOW_TOKENS")
-        )
-        context_warn_tokens = (
-            _coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
-            or 32_000
-        )
-        context_block_tokens = (
-            _coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
-            or 16_000
-        )
-        context_pruning_enabled = _coerce_env_bool(
-            os.getenv("AXIS_CONTEXT_PRUNE_ENABLED"),
-            default=False,
-        )
-
-        return ResolvedConfig(
+        return resolve_runtime_config(
             model=self._model,
             planner=self._planner,
             memory=self._memory,
@@ -666,15 +280,6 @@ class Agent:
             rate_limits=self._rate_limits,
             retry=self._retry,
             cache=self._cache,
-            context_strategy=context_strategy,
-            max_cycle_context=max_cycle_context,
-            transcript_strict=transcript_strict,
-            max_tool_result_chars=max_tool_result_chars,
-            context_window_guard_enabled=context_guard_enabled,
-            context_window_tokens=context_window_tokens,
-            context_window_warn_tokens=context_warn_tokens,
-            context_window_block_tokens=context_block_tokens,
-            context_pruning_enabled=context_pruning_enabled,
             tool_policy=self._tool_policy,
             confirmation_handler=self._confirmation_handler,
             telemetry_enabled=self._telemetry_enabled,
@@ -697,27 +302,7 @@ class Agent:
         trace: list[Any] | None = None,
     ) -> RunResult:
         """Build a failed RunResult when execution aborts before finalize."""
-        return RunResult(
-            output=None,
-            output_raw="",
-            success=False,
-            error=error,
-            had_recoverable_errors=False,
-            stats=RunStats(
-                cycles=0,
-                tool_calls=0,
-                model_calls=0,
-                input_tokens=0,
-                output_tokens=0,
-                total_tokens=0,
-                cost_usd=0.0,
-                duration_ms=duration_ms,
-            ),
-            trace=trace or [],
-            state=RunState(),
-            run_id="",
-            memory_error=None,
-        )
+        return build_failure_result(error, duration_ms, trace=trace)
 
     @staticmethod
     async def _await_operation(
@@ -731,10 +316,9 @@ class Agent:
 
     def _build_timeout_error(self, timeout: float | None) -> AxisTimeoutError:
         """Create a normalized timeout error payload."""
-        timeout_seconds = timeout if timeout is not None else self._timeouts.total
-        return AxisTimeoutError(
-            message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
-            details={"timeout_seconds": timeout_seconds},
+        return build_timeout_error(
+            timeout,
+            default_timeout=self._timeouts.total,
         )
 
     async def _execute_guarded(
