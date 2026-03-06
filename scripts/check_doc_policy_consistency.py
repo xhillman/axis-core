@@ -7,9 +7,9 @@ accidental drift when updating agent/process guidance documents.
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
 import sys
-
+from pathlib import Path
 
 REQUIRED_SNIPPETS: dict[str, list[str]] = {
     "dev/process-tasks.md": [
@@ -98,6 +98,56 @@ REQUIRED_SNIPPETS: dict[str, list[str]] = {
     ],
 }
 
+PYPROJECT_VERSION_RE = re.compile(r'^version = "(?P<version>[^"]+)"$', re.MULTILINE)
+BUILD_RELEASE_VERSION_RE = re.compile(
+    r"^- Current version: `(?P<version>[^`]+)`$",
+    re.MULTILINE,
+)
+
+
+def extract_pyproject_version(pyproject_text: str) -> str | None:
+    match = PYPROJECT_VERSION_RE.search(pyproject_text)
+    if match is None:
+        return None
+    return match.group("version")
+
+
+def extract_build_release_version(build_release_text: str) -> str | None:
+    match = BUILD_RELEASE_VERSION_RE.search(build_release_text)
+    if match is None:
+        return None
+    return match.group("version")
+
+
+def find_build_release_version_drift(root: Path) -> list[str]:
+    failures: list[str] = []
+
+    pyproject_path = root / "pyproject.toml"
+    build_release_path = root / ".agent/maps/build_release.md"
+
+    if not pyproject_path.exists():
+        return ["Missing file: pyproject.toml"]
+    if not build_release_path.exists():
+        return ["Missing file: .agent/maps/build_release.md"]
+
+    pyproject_version = extract_pyproject_version(pyproject_path.read_text(encoding="utf-8"))
+    if pyproject_version is None:
+        return ["Missing version in pyproject.toml"]
+
+    build_release_version = extract_build_release_version(
+        build_release_path.read_text(encoding="utf-8"),
+    )
+    if build_release_version is None:
+        return ["Missing current version in .agent/maps/build_release.md"]
+
+    if build_release_version != pyproject_version:
+        failures.append(
+            "Version drift: .agent/maps/build_release.md reports "
+            f"`{build_release_version}` but pyproject.toml reports `{pyproject_version}`",
+        )
+
+    return failures
+
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
@@ -115,6 +165,8 @@ def main() -> int:
                 failures.append(
                     f"Missing snippet in {relative_path}: {snippet!r}",
                 )
+
+    failures.extend(find_build_release_version_drift(root))
 
     if failures:
         print("Documentation policy consistency check failed:")

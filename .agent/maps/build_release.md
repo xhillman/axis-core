@@ -68,4 +68,4 @@ pip-audit -r requirements.lock
 
 - Version must be updated in TWO places: `pyproject.toml` and `axis_core/__init__.py` (bump script handles this)
 - `dist/` contains built artifacts — has its own `.gitignore`
-- Current version: `0.4.1`
+- Current version: `0.12.1`
