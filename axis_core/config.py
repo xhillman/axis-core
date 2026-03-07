@@ -454,8 +454,8 @@ def resolve_runtime_config(
 class Config:
     """Global configuration singleton.
 
-    Loads defaults from environment variables (via python-dotenv) and provides
-    programmatic override with reset() to restore env values.
+    Reads defaults from the current process environment and provides programmatic override with
+    reset() to restore env values.
 
     Resolution order: defaults → env → constructor → runtime
 
@@ -479,15 +479,7 @@ class Config:
     """
 
     def __init__(self) -> None:
-        """Initialize config from environment variables."""
-        # Try to load .env file (non-fatal if missing)
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv()
-        except ImportError:
-            pass  # python-dotenv not installed
-
+        """Initialize config from the current process environment."""
         # Load from environment with defaults
         self._env_default_model = os.getenv(
             "AXIS_DEFAULT_MODEL", "claude-sonnet-4-20250514"

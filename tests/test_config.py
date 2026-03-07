@@ -2,6 +2,8 @@
 
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,6 +67,30 @@ def _documented_env_vars(path: Path) -> set[str]:
         if match:
             documented.add(match.group(1))
     return documented
+
+
+def _assert_import_does_not_call_dotenv(import_statement: str) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = "\n".join(
+        [
+            "import sys",
+            "import types",
+            "dotenv = types.ModuleType('dotenv')",
+            "def load_dotenv(*args, **kwargs):",
+            "    raise AssertionError('load_dotenv should not be called during import')",
+            "dotenv.load_dotenv = load_dotenv",
+            "sys.modules['dotenv'] = dotenv",
+            import_statement,
+        ]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 class TestTimeouts:
@@ -466,16 +492,7 @@ class TestConfigSingleton:
         assert getattr(cfg, attr_name) is expected_value
 
     def test_config_defaults_without_env_overrides(self) -> None:
-        # Stub dotenv import so .env files do not affect this default-value smoke test.
-        class _DotenvStub:
-            @staticmethod
-            def load_dotenv() -> bool:
-                return False
-
-        with (
-            patch.dict("sys.modules", {"dotenv": _DotenvStub()}),
-            patch.dict(os.environ, {}, clear=True),
-        ):
+        with patch.dict(os.environ, {}, clear=True):
             cfg = Config()
 
         assert cfg.default_model == "claude-sonnet-4-20250514"
@@ -486,6 +503,9 @@ class TestConfigSingleton:
         assert cfg.telemetry is True
         assert cfg.verbose is False
         assert cfg.debug is False
+
+    def test_direct_config_import_does_not_load_dotenv(self) -> None:
+        _assert_import_does_not_call_dotenv("import axis_core.config")
 
 
 # ---------------------------------------------------------------------------

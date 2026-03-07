@@ -19,6 +19,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Removed implicit `.env` loading from package import so `import axis_core` and
+  `import axis_core.config` now read only the current process environment.
 - Tightened adapter resolver validation so invalid `model`/`planner`/`memory` objects now fail
   fast with category-specific configuration guidance instead of being accepted until later runtime
   use.

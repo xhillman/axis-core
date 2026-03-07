@@ -31,7 +31,7 @@ pip install axis-core[full]
 
 ## Environment Setup
 
-Create a `.env` file (or export vars in your shell):
+Export vars in your shell, or load a `.env` file before importing `axis_core`:
 
 ```bash
 ANTHROPIC_API_KEY=your-key
@@ -39,7 +39,7 @@ ANTHROPIC_API_KEY=your-key
 OPENAI_API_KEY=your-key
 ```
 
-axis-core will load `.env` automatically when `python-dotenv` is available.
+axis-core reads the current process environment only; it does not load `.env` files implicitly.
 
 ## First Agent
 

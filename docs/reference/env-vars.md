@@ -10,7 +10,7 @@ This table documents variables currently read by axis-core runtime code.
 | `OPENAI_API_KEY` | empty | Used by `OpenAIModel`/`OpenAIResponsesModel` when `api_key` is not passed. |
 | `OPENAI_BASE_URL` | SDK default | Optional OpenAI SDK endpoint override (for OpenRouter/openai-compatible gateways). |
 
-## Global Defaults (`axis_core.config.Config`, import time)
+## Global Defaults (`axis_core.config.Config`, current process environment)
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -68,6 +68,7 @@ construction or adapter setup.
 
 ## Notes
 
-- `.env` loading is attempted automatically when `python-dotenv` is installed.
+- `axis_core` does not load `.env` files implicitly. If you use a `.env` file, load it before
+  importing `axis_core` or export those variables in your shell.
 - `AXIS_TELEMETRY`, `AXIS_VERBOSE`, and `AXIS_DEBUG` are loaded into the global `config` singleton.
 - Transcript/context precedence is `step payload -> run-start ResolvedConfig -> built-in default`.

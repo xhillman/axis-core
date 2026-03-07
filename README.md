@@ -77,7 +77,8 @@ Useful non-interactive flags:
 
 Axis tracks env vars by ownership so behavior is predictable:
 
-- Import-time defaults (loaded by `axis_core.config.Config`): `AXIS_DEFAULT_MODEL`,
+- Config-owned defaults (read from the current process environment by `axis_core.config.Config`):
+  `AXIS_DEFAULT_MODEL`,
   `AXIS_DEFAULT_MEMORY`, `AXIS_DEFAULT_PLANNER`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   `AXIS_TELEMETRY`, `AXIS_VERBOSE`, `AXIS_DEBUG`
 - Run-start runtime config (resolved by `axis_core.config.resolve_runtime_settings()` into
@@ -91,6 +92,9 @@ Axis tracks env vars by ownership so behavior is predictable:
 
 See [docs/reference/env-vars.md](docs/reference/env-vars.md) and `.env.example` for the full
 current matrix.
+
+If you keep defaults in a `.env` file, load that file in your application startup before importing
+`axis_core`, or export the variables in your shell environment.
 
 ## CLI Runtime
 

@@ -100,7 +100,8 @@ def __dir__() -> list[str]:
 # `config` and `tool` share names with importable submodules. If those submodules are
 # imported directly, Python can otherwise bind the package attribute to the module object
 # instead of the intended public export. Rebinding them here keeps package-level imports
-# stable without making the rest of the package bootstrap eager.
+# stable without making the rest of the package bootstrap eager or introducing extra config
+# bootstrap side effects.
 for _export_name in _EAGER_EXPORTS:
     _load_export(_export_name)
 

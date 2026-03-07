@@ -68,6 +68,6 @@ Budget(
 ## Sharp Edges
 
 - `config` is a module-level singleton
-- `.env` is loaded via `python-dotenv` at import time
+- `Config` reads the current process environment only; `.env` loading must be explicit outside the package
 - `budget.py` stores data; enforcement lives in `evaluate.py`
 - `tests/test_lockfile.py` covers lockfile consistency
