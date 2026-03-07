@@ -310,6 +310,34 @@ class TestAnthropicModel:
             assert exc_info.value.reason == "invalid_request"
             assert exc_info.value.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_error_classification_preserves_nested_provider_type(self) -> None:
+        """Anthropic API status errors should keep nested provider type metadata."""
+        model = AnthropicModel(model_id="claude-sonnet-4-20250514", api_key="test_key")
+
+        from anthropic import APIStatusError
+
+        error = APIStatusError(
+            "Server overloaded",
+            response=Mock(status_code=503),
+            body={"error": {"type": "overloaded_error"}},
+        )
+
+        with patch.object(
+            model._client.messages,
+            "create",
+            new=AsyncMock(side_effect=error),
+        ):
+            from axis_core.errors import ModelError
+
+            with pytest.raises(ModelError) as exc_info:
+                await model.complete(messages=[{"role": "user", "content": "Test"}])
+
+            assert exc_info.value.recoverable is True
+            assert exc_info.value.reason == "service_unavailable"
+            assert exc_info.value.status_code == 503
+            assert exc_info.value.provider_code == "overloaded_error"
+
     def test_model_pricing_table(self) -> None:
         """Test that MODEL_PRICING table has expected models."""
         assert "claude-opus-4-20250514" in MODEL_PRICING

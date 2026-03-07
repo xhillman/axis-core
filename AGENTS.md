@@ -134,3 +134,7 @@ Treat these as mandatory checks before marking work complete:
 - Run acceptance checks before parent execution (`python3 scripts/check_acceptance_contracts.py --contracts-dir dev/contracts`) and production safety checks before production release.
 - After policy-doc edits, run `python3 scripts/check_doc_policy_consistency.py`.
 - When process policy changes, update `AGENTS.md`, `CLAUDE.md`, and related map docs in the same change.
+
+## Task Post-Mortem Policy
+
+After completing a task, provide a concise summary of the work done, using simple but complete language. Include reasoning for any significant design decisions or trade-offs made during implementation and practical implications for users or developers. Also provide a commit message that captures the essence of the change in a clear and concise manner.

@@ -404,6 +404,17 @@ class TestOpenAIModel:
                 400,
                 "context_length_exceeded",
             ),
+            (
+                lambda: __import__("openai").APIStatusError(
+                    "Server overloaded",
+                    response=Mock(status_code=503),
+                    body={"error": {"type": "server_error"}},
+                ),
+                "service_unavailable",
+                True,
+                503,
+                "server_error",
+            ),
         ],
     )
     async def test_error_classification_parity_between_chat_and_responses_backends(

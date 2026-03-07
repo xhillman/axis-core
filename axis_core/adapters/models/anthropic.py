@@ -145,52 +145,12 @@ class AnthropicModel:
         """Return the model identifier."""
         return self._model_id
 
-    @staticmethod
-    def _extract_status_code(error: Exception) -> int | None:
-        """Extract status code from Anthropic SDK exception objects."""
-        status_code = getattr(error, "status_code", None)
-        if isinstance(status_code, int):
-            return status_code
-
-        response = getattr(error, "response", None)
-        response_status = getattr(response, "status_code", None)
-        if isinstance(response_status, int):
-            return response_status
-
-        return None
-
-    @staticmethod
-    def _extract_provider_code(error: Exception) -> str | None:
-        """Extract provider error code from Anthropic exception payload."""
-        direct_code = getattr(error, "code", None)
-        if isinstance(direct_code, str) and direct_code:
-            return direct_code
-
-        body = getattr(error, "body", None)
-        if isinstance(body, dict):
-            top_code = body.get("code")
-            if isinstance(top_code, str) and top_code:
-                return top_code
-            nested = body.get("error")
-            if isinstance(nested, dict):
-                nested_code = nested.get("code")
-                if isinstance(nested_code, str) and nested_code:
-                    return nested_code
-                nested_type = nested.get("type")
-                if isinstance(nested_type, str) and nested_type:
-                    return nested_type
-
-        return None
-
     @classmethod
     def _map_anthropic_error(
         cls,
         error: Exception,
     ) -> tuple[str, bool, int | None, str | None]:
         """Normalize Anthropic SDK exceptions for fallback semantics."""
-        status_code = cls._extract_status_code(error)
-        provider_code = cls._extract_provider_code(error)
-
         api_connection_error = getattr(anthropic, "APIConnectionError", None)
         permission_denied_error = getattr(anthropic, "PermissionDeniedError", None)
         auth_types = (anthropic.AuthenticationError,) + (
@@ -199,25 +159,38 @@ class AnthropicModel:
         bad_request_types = (anthropic.BadRequestError,)
 
         if isinstance(error, anthropic.RateLimitError):
-            reason = "rate_limit"
+            explicit_reason = "rate_limit"
+            provider_error_reason = None
         elif isinstance(error, anthropic.APITimeoutError):
-            reason = "timeout"
+            explicit_reason = "timeout"
+            provider_error_reason = None
         elif api_connection_error is not None and isinstance(error, api_connection_error):
-            reason = "connection_error"
+            explicit_reason = "connection_error"
+            provider_error_reason = None
         elif isinstance(error, auth_types):
-            reason = "authentication"
+            explicit_reason = "authentication"
+            provider_error_reason = None
         elif isinstance(error, bad_request_types):
-            reason = "invalid_request"
+            explicit_reason = "invalid_request"
+            provider_error_reason = None
         elif isinstance(error, anthropic.APIError):
-            reason = ModelError.reason_from_status_code(status_code) or "provider_error"
+            explicit_reason = None
+            provider_error_reason = "provider_error"
         else:
-            reason = ModelError.reason_from_status_code(status_code) or "unknown"
+            explicit_reason = None
+            provider_error_reason = None
+
+        normalized = ModelError.normalize_provider_error(
+            error,
+            explicit_reason=explicit_reason,
+            provider_error_reason=provider_error_reason,
+        )
 
         return (
-            reason,
-            ModelError.is_reason_recoverable(reason),
-            status_code,
-            provider_code,
+            normalized.reason,
+            normalized.recoverable,
+            normalized.status_code,
+            normalized.provider_code,
         )
 
     @staticmethod

@@ -24,6 +24,16 @@ class ErrorClass(Enum):
     RUNTIME = "runtime"
 
 
+@dataclass(frozen=True)
+class NormalizedProviderError:
+    """Shared normalized metadata for provider-backed model failures."""
+
+    reason: str
+    recoverable: bool
+    status_code: int | None
+    provider_code: str | None
+
+
 @dataclass
 class AxisError(Exception):
     """Base exception for all axis-core errors.
@@ -183,6 +193,61 @@ class ModelError(AxisError):
         return None
 
     @classmethod
+    def normalize_provider_error(
+        cls,
+        e: Exception,
+        *,
+        explicit_reason: str | None = None,
+        provider_error_reason: str | None = None,
+    ) -> NormalizedProviderError:
+        """Normalize shared provider error metadata behind one boundary."""
+        status_code = cls._extract_status_code(e)
+        provider_code = cls._extract_provider_code(e)
+        reason = (
+            explicit_reason
+            or cls.reason_from_status_code(status_code)
+            or provider_error_reason
+            or "unknown"
+        )
+        return NormalizedProviderError(
+            reason=reason,
+            recoverable=cls.is_reason_recoverable(reason),
+            status_code=status_code,
+            provider_code=provider_code,
+        )
+
+    @classmethod
+    def build_provider_error(
+        cls,
+        e: Exception,
+        *,
+        model_id: str,
+        message: str,
+        explicit_reason: str | None = None,
+        provider_error_reason: str | None = None,
+        details: dict[str, object] | None = None,
+    ) -> "ModelError":
+        """Build a ModelError from shared normalized provider metadata."""
+        normalized = cls.normalize_provider_error(
+            e,
+            explicit_reason=explicit_reason,
+            provider_error_reason=provider_error_reason,
+        )
+        error_details: dict[str, object] = {"error_type": normalized.reason}
+        if details:
+            error_details.update(details)
+        return cls(
+            message=message,
+            model_id=model_id,
+            reason=normalized.reason,
+            recoverable=normalized.recoverable,
+            status_code=normalized.status_code,
+            provider_code=normalized.provider_code,
+            details=error_details,
+            cause=e,
+        )
+
+    @classmethod
     def from_exception(cls, e: Exception, model_id: str) -> "ModelError":
         """Create ModelError from an exception, classifying recoverability.
 
@@ -202,8 +267,6 @@ class ModelError(AxisError):
             ModelError with appropriate recoverability flag
         """
         exc_class_name = type(e).__name__
-        status_code = cls._extract_status_code(e)
-        provider_code = cls._extract_provider_code(e)
 
         recoverable_reason_by_name = {
             "RateLimitError": "rate_limit",
@@ -226,20 +289,15 @@ class ModelError(AxisError):
             "KeyError": "invalid_request",
         }
 
-        reason = cls.reason_from_status_code(status_code)
-        if reason is None:
-            reason = recoverable_reason_by_name.get(exc_class_name)
-        if reason is None:
-            reason = non_recoverable_reason_by_name.get(exc_class_name, "unknown")
+        explicit_reason = recoverable_reason_by_name.get(exc_class_name)
+        if explicit_reason is None:
+            explicit_reason = non_recoverable_reason_by_name.get(exc_class_name)
 
-        return cls(
-            message=f"Model error: {str(e)}",
+        return cls.build_provider_error(
+            e,
             model_id=model_id,
-            reason=reason,
-            recoverable=cls.is_reason_recoverable(reason),
-            status_code=status_code,
-            provider_code=provider_code,
-            cause=e,
+            message=f"Model error: {str(e)}",
+            explicit_reason=explicit_reason,
         )
 
 
