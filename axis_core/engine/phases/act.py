@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
-import random
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from axis_core.config import RetryPolicy, ToolPolicy
 from axis_core.context import (
     ContextWindowGuard,
     ExecutionResult,
@@ -20,7 +17,14 @@ from axis_core.context import (
     normalize_transcript_messages,
     prune_messages_for_context_window,
 )
+from axis_core.engine.phases.act_execution_utils import (
+    is_retryable_model_error,
+    record_retry_attempt,
+    resolve_retry_policy,
+    sleep_for_retry,
+)
 from axis_core.engine.phases.act_runtime_settings import ActRuntimeSettingsResolver
+from axis_core.engine.phases.act_tool_execution import ActToolExecutionService
 from axis_core.errors import (
     AxisError,
     ErrorClass,
@@ -31,211 +35,11 @@ from axis_core.errors import (
 from axis_core.protocols.model import ModelResponse, ToolCall, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
 from axis_core.redaction import redact_sensitive_data
-from axis_core.tool import (
-    Capability,
-    ToolCallRecord,
-    ToolContext,
-    build_idempotency_key,
-)
 
 if TYPE_CHECKING:
     from axis_core.engine.lifecycle import LifecycleEngine
 
 logger = logging.getLogger("axis_core.engine")
-
-
-def _resolve_retry_policy(
-    ctx: RunContext,
-    step: PlanStep,
-    tool_retry: RetryPolicy | None = None,
-) -> RetryPolicy:
-    """Resolve effective retry policy for a step."""
-    if step.retry_policy is not None:
-        return step.retry_policy
-    if tool_retry is not None:
-        return tool_retry
-
-    config_retry = getattr(getattr(ctx, "config", None), "retry", None)
-    if isinstance(config_retry, RetryPolicy):
-        return config_retry
-
-    return RetryPolicy(max_attempts=1, jitter=False, initial_delay=0.0, max_delay=0.0)
-
-
-def _matches_retry_filter(error: Exception, retry_policy: RetryPolicy) -> bool:
-    """Return True when retry_on filter allows retry for this error."""
-    if retry_policy.retry_on is None:
-        return True
-
-    filters = {entry.lower() for entry in retry_policy.retry_on}
-    error_name = type(error).__name__.lower()
-    return any(token in error_name for token in filters)
-
-
-def _is_retryable_tool_error(error: Exception, retry_policy: RetryPolicy) -> bool:
-    """Determine whether a tool failure should be retried."""
-    if not _matches_retry_filter(error, retry_policy):
-        return False
-
-    if isinstance(error, AxisError):
-        return error.recoverable
-
-    if isinstance(error, (TypeError, ValueError, KeyError)):
-        return False
-
-    return True
-
-
-def _is_retryable_model_error(error: ModelError, retry_policy: RetryPolicy) -> bool:
-    """Determine whether a model failure should be retried."""
-    if not ModelError.is_reason_recoverable(error.reason):
-        return False
-    return _matches_retry_filter(error.cause or error, retry_policy)
-
-
-def _retry_delay_seconds(retry_policy: RetryPolicy, attempt: int) -> float:
-    """Compute retry delay before the next attempt."""
-    if retry_policy.backoff == "fixed":
-        delay = retry_policy.initial_delay
-    elif retry_policy.backoff == "linear":
-        delay = retry_policy.initial_delay * attempt
-    else:
-        delay = retry_policy.initial_delay * (2 ** max(0, attempt - 1))
-
-    delay = min(delay, retry_policy.max_delay)
-    if retry_policy.jitter and delay > 0:
-        delay *= 0.5 + random.random()
-    return max(0.0, delay)
-
-
-async def _sleep_for_retry(retry_policy: RetryPolicy, attempt: int) -> None:
-    """Sleep based on retry policy for an attempt number."""
-    delay = _retry_delay_seconds(retry_policy, attempt)
-    if delay > 0:
-        await asyncio.sleep(delay)
-
-
-def _resolve_tool_idempotency_key(
-    ctx: RunContext,
-    step: PlanStep,
-    *,
-    tool_name: str,
-) -> str | None:
-    """Resolve explicit or generated idempotency key for a tool step."""
-    if "idempotency_key" in step.payload:
-        raw_key = step.payload.get("idempotency_key")
-        if raw_key is None:
-            return None
-        if isinstance(raw_key, str):
-            key = raw_key.strip()
-            return key if key else None
-        return str(raw_key)
-
-    return build_idempotency_key(
-        run_id=ctx.run_id,
-        cycle=ctx.cycle_count,
-        step_id=step.id,
-        tool_name=tool_name,
-    )
-
-
-def _record_retry_attempt(ctx: RunContext, step: PlanStep) -> None:
-    """Track retry attempts in run state (not persisted by design)."""
-    retry_state = ctx.state._retry_state.get(step.id, {"attempts": 0})
-    retry_state["attempts"] = int(retry_state.get("attempts", 0)) + 1
-    ctx.state._retry_state[step.id] = retry_state
-
-
-async def _confirm_destructive_tool(
-    ctx: RunContext,
-    *,
-    tool_name: str,
-    args: Any,
-    capabilities: tuple[Capability, ...] | None,
-) -> None:
-    """Require explicit approval before destructive tool execution."""
-    if Capability.DESTRUCTIVE not in (capabilities or ()):
-        return
-
-    config = getattr(ctx, "config", None)
-    confirmation_handler = getattr(config, "confirmation_handler", None)
-
-    if confirmation_handler is None:
-        raise ToolError(
-            message=(
-                f"Tool '{tool_name}' requires confirmation handler for "
-                "Capability.DESTRUCTIVE"
-            ),
-            tool_name=tool_name,
-            recoverable=False,
-        )
-
-    if not callable(confirmation_handler):
-        raise ToolError(
-            message=(
-                f"Confirmation handler for tool '{tool_name}' is not callable"
-            ),
-            tool_name=tool_name,
-            recoverable=False,
-        )
-
-    confirmation_args = args if isinstance(args, dict) else {}
-
-    try:
-        decision = confirmation_handler(tool_name, confirmation_args)
-        if inspect.isawaitable(decision):
-            decision = await cast(Any, decision)
-    except Exception as e:
-        raise ToolError(
-            message=f"Confirmation handler failed for tool '{tool_name}': {e}",
-            tool_name=tool_name,
-            cause=e,
-            recoverable=False,
-        ) from e
-
-    if not isinstance(decision, bool):
-        raise ToolError(
-            message=(
-                f"Confirmation handler for tool '{tool_name}' must return bool, "
-                f"got {type(decision).__name__}"
-            ),
-            tool_name=tool_name,
-            recoverable=False,
-        )
-
-    if not decision:
-        raise ToolError(
-            message=f"Tool '{tool_name}' execution rejected by confirmation handler",
-            tool_name=tool_name,
-            recoverable=False,
-        )
-
-
-def _enforce_tool_policy(ctx: RunContext, *, tool_name: str) -> None:
-    """Block tool execution when configured allow/deny policy rejects the tool."""
-    runtime_config = getattr(ctx, "config", None)
-    tool_policy = getattr(runtime_config, "tool_policy", None)
-    if tool_policy is None:
-        return
-    if not isinstance(tool_policy, ToolPolicy):
-        raise ToolError(
-            message=(
-                "Invalid runtime config: tool_policy must be ToolPolicy or None"
-            ),
-            tool_name=tool_name,
-            recoverable=False,
-        )
-
-    allowed, reason = tool_policy.evaluate(tool_name)
-    if allowed:
-        return
-
-    detail = f" ({reason})" if reason else ""
-    raise ToolError(
-        message=f"Tool '{tool_name}' blocked by tool policy{detail}",
-        tool_name=tool_name,
-        recoverable=False,
-    )
 
 
 async def act(engine: LifecycleEngine, ctx: RunContext, plan_obj: Plan) -> ExecutionResult:
@@ -354,215 +158,8 @@ async def _execute_tool_step(
     ctx: RunContext,
     step: PlanStep,
 ) -> Any:
-    """Execute a single tool step.
-
-    Args:
-        engine: The lifecycle engine instance
-        ctx: Current run context
-        step: Tool step to execute
-
-    Returns:
-        Tool execution result
-
-    Raises:
-        ToolError: If tool execution fails
-    """
-    from axis_core.engine.lifecycle import Phase
-
-    tool_name = step.payload.get("tool", "")
-    args = step.payload.get("args", {})
-
-    if tool_name not in engine.tools:
-        raise ToolError(
-            message=f"Tool '{tool_name}' not found",
-            tool_name=tool_name,
-        )
-
-    tool_fn = engine.tools[tool_name]
-    manifest = getattr(tool_fn, "_axis_manifest", None)
-    capabilities = cast(
-        tuple[Capability, ...] | None,
-        getattr(manifest, "capabilities", None),
-    )
-
-    _enforce_tool_policy(ctx, tool_name=tool_name)
-
-    await _confirm_destructive_tool(
-        ctx,
-        tool_name=tool_name,
-        args=args,
-        capabilities=capabilities,
-    )
-
-    retry_policy = _resolve_retry_policy(
-        ctx,
-        step,
-        tool_retry=getattr(manifest, "retry", None),
-    )
-    max_attempts = max(1, retry_policy.max_attempts)
-    idempotency_key = _resolve_tool_idempotency_key(ctx, step, tool_name=tool_name)
-
-    try:
-        tool_signature = inspect.signature(tool_fn)
-        supports_ctx = "ctx" in tool_signature.parameters
-        supports_idempotency_key = "idempotency_key" in tool_signature.parameters
-    except (TypeError, ValueError):
-        supports_ctx = False
-        supports_idempotency_key = False
-
-    await engine._emit(
-        "tool_called",
-        run_id=ctx.run_id,
-        phase=Phase.ACT.value,
-        cycle=ctx.cycle_count,
-        step_id=step.id,
-        data={
-            "tool": tool_name,
-            "args": args,
-            "idempotency_key": idempotency_key,
-        },
-    )
-
-    start = time.monotonic()
-    cache_key: str | None = None
-    tool_cache_ttl = getattr(manifest, "cache_ttl", None)
-    if (
-        engine.cache_enabled_for_tools()
-        and isinstance(tool_cache_ttl, int)
-        and tool_cache_ttl > 0
-    ):
-        cache_key = engine.compute_cache_key(
-            "tool",
-            {
-                "tool": tool_name,
-                "args": args,
-            },
-        )
-        cache_hit, cached_result = engine.cache_get(cache_key)
-        if cache_hit:
-            duration_ms = (time.monotonic() - start) * 1000
-            ctx.state.append_tool_call(ToolCallRecord(
-                tool_name=tool_name,
-                call_id=step.id,
-                args=dict(args),
-                result=cached_result,
-                error=None,
-                cached=True,
-                duration_ms=duration_ms,
-                timestamp=time.time(),
-            ))
-            await engine._emit(
-                "tool_returned",
-                run_id=ctx.run_id,
-                phase=Phase.ACT.value,
-                cycle=ctx.cycle_count,
-                step_id=step.id,
-                data={"tool": tool_name, "duration_ms": duration_ms, "cached": True},
-                duration_ms=duration_ms,
-            )
-            return cached_result
-
-    async def _invoke_tool_once(attempt: int) -> Any:
-        tool_kwargs = dict(args)
-        if "ctx" in tool_kwargs:
-            tool_kwargs.pop("ctx")
-        if (
-            supports_idempotency_key
-            and "idempotency_key" not in tool_kwargs
-            and idempotency_key is not None
-        ):
-            tool_kwargs["idempotency_key"] = idempotency_key
-
-        if supports_ctx:
-            tool_ctx = ToolContext(
-                run_id=ctx.run_id,
-                agent_id=ctx.agent_id,
-                cycle=ctx.cycle_count,
-                context=ctx.context,
-                budget=ctx.budget,
-                budget_state=ctx.state.budget_state,
-                idempotency_key=idempotency_key,
-                retry_attempt=attempt,
-            )
-            return await tool_fn(ctx=tool_ctx, **tool_kwargs)
-        return await tool_fn(**tool_kwargs)
-
-    timeout_seconds = step.payload.get("timeout", getattr(manifest, "timeout", None))
-    last_error: Exception | None = None
-    result: Any = None
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            await engine.acquire_tool_slot(ctx, tool_name=tool_name, step_id=step.id)
-            if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
-                result = await asyncio.wait_for(
-                    _invoke_tool_once(attempt),
-                    timeout=float(timeout_seconds),
-                )
-            else:
-                result = await _invoke_tool_once(attempt)
-            last_error = None
-            break
-        except Exception as e:
-            last_error = e
-            _record_retry_attempt(ctx, step)
-            if attempt >= max_attempts or not _is_retryable_tool_error(e, retry_policy):
-                break
-            await _sleep_for_retry(retry_policy, attempt)
-
-    if last_error is not None:
-        error_msg = str(redact_sensitive_data(
-            f"Tool '{tool_name}' failed: {last_error}"
-        ))
-        duration_ms = (time.monotonic() - start) * 1000
-        ctx.state.append_tool_call(ToolCallRecord(
-            tool_name=tool_name,
-            call_id=step.id,
-            args=dict(args),
-            result=None,
-            error=error_msg,
-            cached=False,
-            duration_ms=duration_ms,
-            timestamp=time.time(),
-        ))
-        raise ToolError(
-            message=error_msg,
-            tool_name=tool_name,
-            cause=last_error,
-            recoverable=_is_retryable_tool_error(last_error, retry_policy),
-        ) from last_error
-
-    duration_ms = (time.monotonic() - start) * 1000
-
-    # Track budget
-    ctx.state.budget_state.tool_calls += 1
-
-    # Record successful tool call for observability/checkpointing
-    ctx.state.append_tool_call(ToolCallRecord(
-        tool_name=tool_name,
-        call_id=step.id,
-        args=dict(args),
-        result=result,
-        error=None,
-        cached=False,
-        duration_ms=duration_ms,
-        timestamp=time.time(),
-    ))
-
-    if cache_key is not None and isinstance(tool_cache_ttl, int) and tool_cache_ttl > 0:
-        engine.cache_set(cache_key, result, ttl_seconds=tool_cache_ttl)
-
-    await engine._emit(
-        "tool_returned",
-        run_id=ctx.run_id,
-        phase=Phase.ACT.value,
-        cycle=ctx.cycle_count,
-        step_id=step.id,
-        data={"tool": tool_name, "duration_ms": duration_ms, "cached": False},
-        duration_ms=duration_ms,
-    )
-
-    return result
+    """Execute a single tool step via the dedicated tool execution service."""
+    return await ActToolExecutionService(engine, ctx, step).execute()
 
 
 async def try_models_with_fallback(
@@ -589,7 +186,7 @@ async def try_models_with_fallback(
     models_to_try = [engine.model] + engine.fallback
     errors: list[ModelError] = []
     effective_step = step or PlanStep(id="model-call", type=StepType.MODEL)
-    retry_policy = _resolve_retry_policy(ctx, effective_step)
+    retry_policy = resolve_retry_policy(ctx, effective_step)
     max_attempts = max(1, retry_policy.max_attempts)
 
     for idx, model in enumerate(models_to_try):
@@ -643,10 +240,10 @@ async def try_models_with_fallback(
                     )
                     raise model_error
 
-                _record_retry_attempt(ctx, effective_step)
+                record_retry_attempt(ctx, effective_step)
                 should_retry = (
                     attempt < max_attempts
-                    and _is_retryable_model_error(model_error, retry_policy)
+                    and is_retryable_model_error(model_error, retry_policy)
                 )
                 logger.info(
                     "Recoverable error from model %s (model #%d, retry %d/%d): %s",
@@ -657,7 +254,7 @@ async def try_models_with_fallback(
                     model_error.message,
                 )
                 if should_retry:
-                    await _sleep_for_retry(retry_policy, attempt)
+                    await sleep_for_retry(retry_policy, attempt)
                     continue
                 break
 

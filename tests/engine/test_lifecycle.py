@@ -3126,6 +3126,85 @@ class TestExecutionPoliciesTask17:
         assert cached_calls["count"] == 1
         assert uncached_calls["count"] == 2
 
+    @pytest.mark.asyncio
+    async def test_tool_cache_hit_records_cached_call_and_telemetry(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        from axis_core.tool import tool
+
+        cached_calls = {"count": 0}
+
+        @tool(cache_ttl=60)
+        def cached_tool(value: str) -> str:
+            cached_calls["count"] += 1
+            return f"cached:{value}"
+
+        class CachePlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="tool-cache-telemetry",
+                    goal="tool cache telemetry",
+                    steps=(
+                        PlanStep(
+                            id="cached-1",
+                            type=StepType.TOOL,
+                            payload={"tool": "cached_tool", "args": {"value": "x"}},
+                        ),
+                        PlanStep(
+                            id="cached-2",
+                            type=StepType.TOOL,
+                            payload={"tool": "cached_tool", "args": {"value": "x"}},
+                            dependencies=("cached-1",),
+                        ),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("cached-2",),
+                        ),
+                    ),
+                )
+
+        telemetry_sink = MockTelemetrySink()
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=CachePlanner(),
+            telemetry=[telemetry_sink],
+            tools={"cached_tool": cached_tool},
+        )
+
+        result = await engine.execute(
+            input_text="tool cache telemetry",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=_runtime_config(
+                cache=CacheConfig(
+                    enabled=True,
+                    model_responses=False,
+                    tool_results=True,
+                    ttl=60,
+                )
+            ),
+        )
+
+        assert result["success"] is True
+        assert cached_calls["count"] == 1
+
+        tool_calls = result["state"].tool_calls
+        assert len(tool_calls) == 2
+        assert [call.cached for call in tool_calls] == [False, True]
+        assert [call.result for call in tool_calls] == ["cached:x", "cached:x"]
+
+        returned_events = [
+            event
+            for event in telemetry_sink.events
+            if event.type == "tool_returned" and event.step_id in {"cached-1", "cached-2"}
+        ]
+        assert len(returned_events) == 2
+        assert [event.step_id for event in returned_events] == ["cached-1", "cached-2"]
+        assert [event.data["cached"] for event in returned_events] == [False, True]
+
 
 class TestDestructiveToolConfirmationTask18:
     """Task 18 tests for destructive tool confirmation flow."""
