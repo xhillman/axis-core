@@ -184,6 +184,9 @@ for event in agent.stream("Solve 42 * 137"):
 - `model`, `planner`, and `memory` config values accept either a registered adapter name or a
   protocol-conforming adapter instance; invalid objects now fail fast during resolver setup with a
   clear error.
+- `@tool` input schemas preserve `list[T]`, `dict[str, T]`, `TypedDict`, `Literal[...]`, and
+  nested Pydantic models inside typed containers; non-optional unions are still rejected to keep
+  schemas deterministic and provider-safe.
 
 ## Transcript Guards
 

@@ -13,6 +13,7 @@ This module tests all components of the tool system including:
 import asyncio
 import inspect
 import time
+from typing import Literal, NotRequired, TypedDict
 
 import pytest
 
@@ -189,6 +190,30 @@ class TestGenerateToolSchema:
         assert schema["properties"]["items"]["type"] == "array"
         assert "items" in schema["required"]
 
+    def test_typed_list_parameter(self):
+        """Schema generation should preserve typed list item schemas."""
+
+        def func(items: list[str]) -> list[str]:
+            return items
+
+        schema = generate_tool_schema(func)
+        assert schema["properties"]["items"] == {
+            "type": "array",
+            "items": {"type": "string"},
+        }
+
+    def test_typed_dict_parameter(self):
+        """Schema generation should preserve dict value schemas for string-keyed maps."""
+
+        def func(metadata: dict[str, int]) -> dict[str, int]:
+            return metadata
+
+        schema = generate_tool_schema(func)
+        assert schema["properties"]["metadata"] == {
+            "type": "object",
+            "additionalProperties": {"type": "integer"},
+        }
+
     def test_dict_parameter(self):
         """Schema generation should handle dict type."""
 
@@ -198,6 +223,38 @@ class TestGenerateToolSchema:
         schema = generate_tool_schema(func)
         assert schema["properties"]["data"]["type"] == "object"
         assert "data" in schema["required"]
+
+    def test_literal_parameter_uses_enum(self):
+        """Literal parameters should generate deterministic enum schemas."""
+
+        def func(mode: Literal["fast", "safe"]) -> str:
+            return mode
+
+        schema = generate_tool_schema(func)
+        assert schema["properties"]["mode"] == {
+            "type": "string",
+            "enum": ["fast", "safe"],
+        }
+
+    def test_typed_dict_class_parameter(self):
+        """TypedDict parameters should become explicit object schemas."""
+
+        class SearchFilters(TypedDict):
+            query: str
+            limit: NotRequired[int]
+
+        def func(filters: SearchFilters) -> str:
+            return filters["query"]
+
+        schema = generate_tool_schema(func)
+        assert schema["properties"]["filters"] == {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query"],
+        }
 
     def test_optional_parameter_not_required(self):
         """Optional parameters (T | None) should not be in required list."""
@@ -279,6 +336,26 @@ class TestGenerateToolSchema:
         except ImportError:
             pytest.skip("Pydantic not installed")
 
+    def test_typed_list_with_pydantic_model_items(self):
+        """Typed containers should preserve nested Pydantic item schemas."""
+        try:
+            from pydantic import BaseModel
+
+            class SearchInput(BaseModel):
+                query: str
+                limit: int
+
+            def func(items: list[SearchInput]) -> str:
+                return str(items)
+
+            schema = generate_tool_schema(func)
+            assert schema["properties"]["items"] == {
+                "type": "array",
+                "items": SearchInput.model_json_schema(),
+            }
+        except ImportError:
+            pytest.skip("Pydantic not installed")
+
     def test_unsupported_union_raises_type_error(self):
         """Union types with multiple non-None types should raise TypeError."""
 
@@ -286,6 +363,15 @@ class TestGenerateToolSchema:
             return str(value)
 
         with pytest.raises(TypeError, match="Unsupported Union type"):
+            generate_tool_schema(func)
+
+    def test_unsupported_dict_key_type_raises_type_error(self):
+        """Non-string dict keys should fail clearly."""
+
+        def func(lookup: dict[int, str]) -> str:
+            return str(lookup)
+
+        with pytest.raises(TypeError, match="string keys"):
             generate_tool_schema(func)
 
 

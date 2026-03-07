@@ -793,6 +793,52 @@ class TestOpenAIModel:
             "required": ["query", "filters"],
         }
 
+    def test_convert_tool_manifest_to_openai_preserves_typed_containers(self) -> None:
+        """OpenAI sanitization should preserve typed container schemas."""
+        from axis_core.tool import ToolManifest
+
+        manifest = ToolManifest(
+            name="search",
+            description="Search",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": {"type": "string", "default": "latest"},
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer",
+                            "examples": [1],
+                        },
+                    },
+                    "mode": {"type": "string", "enum": ["fast", "safe"]},
+                },
+                "required": ["queries", "metadata", "mode"],
+            },
+            output_schema={"type": "string"},
+            capabilities=(),
+        )
+
+        result = OpenAIModel._convert_tool_manifest_to_openai(manifest)
+        assert result["function"]["parameters"] == {
+            "type": "object",
+            "properties": {
+                "queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {"type": "integer"},
+                },
+                "mode": {"type": "string", "enum": ["fast", "safe"]},
+            },
+            "required": ["queries", "metadata", "mode"],
+        }
+
     def test_convert_tools_with_manifests(self) -> None:
         """Test _convert_tools_to_openai with ToolManifest objects."""
         from axis_core.tool import ToolManifest

@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file.
   final-output coercion/validation in core runtime.
 - Added schema-aware streaming events for `stream_async(..., output_schema=...)`:
   `structured_partial` (best effort) and `structured_final` (validated).
+- Expanded `@tool` input schema generation to preserve typed lists, string-keyed maps,
+  `TypedDict`, `Literal[...]`, and nested Pydantic models inside typed containers while still
+  rejecting unsupported non-optional unions with clear errors.
 
 ### Fixed
 
