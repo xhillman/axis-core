@@ -45,6 +45,9 @@ All notable changes to this project will be documented in this file.
 - Consolidated act-phase transcript/context env resolution into the run-level resolved config path
   so model-step settings now use a single precedence chain
   (`step payload -> resolved runtime config -> defaults`) without duplicate env parsing in Act.
+- Moved lifecycle checkpoint/resume validation and resume-state materialization into the checkpoint
+  helper layer, keeping `LifecycleEngine` focused on phase orchestration while rejecting
+  checkpoint `next_phase` values that are incompatible with the saved phase boundary.
 
 ## [0.12.1] - 2026-03-03
 

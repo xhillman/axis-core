@@ -22,7 +22,6 @@ import inspect
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -30,7 +29,11 @@ from typing import Any
 from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget
 from axis_core.cancel import CancelToken
-from axis_core.checkpoint import create_checkpoint, parse_checkpoint
+from axis_core.checkpoint import (
+    CheckpointResumeState,
+    create_checkpoint,
+    prepare_checkpoint_resume,
+)
 from axis_core.context import (
     CycleState,
     EvalDecision,
@@ -74,15 +77,6 @@ class Phase(Enum):
     ACT = "act"
     EVALUATE = "evaluate"
     FINALIZE = "finalize"
-
-
-@dataclass(frozen=True)
-class _CycleResumeState:
-    """Checkpointed cycle values that allow resume to skip earlier phases."""
-
-    observation: Observation | None = None
-    plan: Plan | None = None
-    execution: ExecutionResult | None = None
 
 
 class LifecycleEngine:
@@ -399,137 +393,6 @@ class LifecycleEngine:
             )
 
     @staticmethod
-    def _phase_after(phase: Phase) -> Phase | None:
-        """Return the next phase boundary after a completed phase."""
-        phase_sequence = {
-            Phase.INITIALIZE: Phase.OBSERVE,
-            Phase.OBSERVE: Phase.PLAN,
-            Phase.PLAN: Phase.ACT,
-            Phase.ACT: Phase.EVALUATE,
-            Phase.EVALUATE: Phase.OBSERVE,
-        }
-        return phase_sequence.get(phase)
-
-    @staticmethod
-    def _coerce_phase(raw_phase: str, *, field_name: str) -> Phase:
-        """Parse a checkpoint phase string into Phase enum."""
-        try:
-            return Phase(raw_phase)
-        except ValueError as e:
-            raise ConfigError(
-                message=f"Checkpoint {field_name} '{raw_phase}' is invalid."
-            ) from e
-
-    @staticmethod
-    def _validate_checkpoint_boundary_state(ctx: RunContext, phase: Phase) -> None:
-        """Validate that checkpoint state matches the declared phase boundary."""
-        if phase in (Phase.OBSERVE, Phase.PLAN, Phase.ACT, Phase.EVALUATE):
-            if ctx.state.current_observation is None:
-                raise ConfigError(
-                    message=(
-                        "Checkpoint is incompatible with phase boundary: "
-                        "current_observation is required."
-                    )
-                )
-        if phase in (Phase.PLAN, Phase.ACT, Phase.EVALUATE):
-            if ctx.state.current_plan is None:
-                raise ConfigError(
-                    message=(
-                        "Checkpoint is incompatible with phase boundary: "
-                        "current_plan is required."
-                    )
-                )
-        if phase in (Phase.ACT, Phase.EVALUATE) and ctx.state.current_execution is None:
-            raise ConfigError(
-                message=(
-                    "Checkpoint is incompatible with phase boundary: "
-                    "current_execution is required."
-                )
-            )
-
-    def _restore_checkpoint(
-        self,
-        checkpoint: dict[str, Any],
-    ) -> tuple[RunContext, Phase]:
-        """Parse and validate checkpoint payload for resume."""
-        ctx, phase_raw, next_phase_raw = parse_checkpoint(checkpoint)
-        phase = self._coerce_phase(phase_raw, field_name="phase")
-        self._validate_checkpoint_boundary_state(ctx, phase)
-
-        next_phase: Phase | None
-        if next_phase_raw is not None:
-            next_phase = self._coerce_phase(
-                next_phase_raw,
-                field_name="next_phase",
-            )
-        else:
-            next_phase = self._phase_after(phase)
-
-        if next_phase is None:
-            raise ConfigError(
-                message=(
-                    "Checkpoint phase boundary is not resumable. "
-                    "Only pre-finalize boundaries are supported."
-                )
-            )
-
-        return ctx, next_phase
-
-    @staticmethod
-    def _require_resume_state(
-        value: Any | None,
-        *,
-        phase: Phase,
-        state_field: str,
-    ) -> Any:
-        """Require checkpoint state needed to resume from a given phase."""
-        if value is None:
-            raise ConfigError(
-                message=(
-                    "Checkpoint is incompatible with resume phase: "
-                    f"{state_field} is required for {phase.value}."
-                )
-            )
-        return value
-
-    def _prepare_cycle_resume_state(
-        self,
-        ctx: RunContext,
-        *,
-        start_phase: Phase,
-    ) -> _CycleResumeState:
-        """Materialize checkpointed cycle values needed before the first resumed phase."""
-        if start_phase == Phase.OBSERVE:
-            return _CycleResumeState()
-
-        observation = self._require_resume_state(
-            ctx.state.current_observation,
-            phase=start_phase,
-            state_field="current_observation",
-        )
-        if start_phase == Phase.PLAN:
-            return _CycleResumeState(observation=observation)
-
-        plan = self._require_resume_state(
-            ctx.state.current_plan,
-            phase=start_phase,
-            state_field="current_plan",
-        )
-        if start_phase == Phase.ACT:
-            return _CycleResumeState(observation=observation, plan=plan)
-
-        execution = self._require_resume_state(
-            ctx.state.current_execution,
-            phase=start_phase,
-            state_field="current_execution",
-        )
-        return _CycleResumeState(
-            observation=observation,
-            plan=plan,
-            execution=execution,
-        )
-
-    @staticmethod
     def _budget_exhaustion_error(ctx: RunContext) -> BudgetError | None:
         """Return a budget error when the run budget is exhausted."""
         if not ctx.state.budget_state.is_exhausted(ctx.budget):
@@ -551,21 +414,6 @@ class LifecycleEngine:
 
         return LifecycleEngine._budget_exhaustion_error(ctx)
 
-    def _prepare_resume_context(
-        self,
-        checkpoint: dict[str, Any],
-        *,
-        cancel_token: CancelToken | None = None,
-        config: Any | None = None,
-    ) -> tuple[RunContext, Phase]:
-        """Restore checkpoint context and apply runtime-only resume overrides."""
-        ctx, next_phase = self._restore_checkpoint(checkpoint)
-        if config is not None:
-            ctx.config = config
-        if cancel_token is not None:
-            ctx.cancel_token = cancel_token
-        return ctx, next_phase
-
     # =========================================================================
     # Main execution loop (7.8)
     # =========================================================================
@@ -575,7 +423,7 @@ class LifecycleEngine:
         ctx: RunContext,
         *,
         run_started_monotonic: float,
-        start_phase: Phase,
+        resume_state: CheckpointResumeState | None = None,
     ) -> dict[str, Any]:
         """Continue lifecycle execution from a prepared RunContext."""
         self._update_wall_time(ctx, run_started_monotonic)
@@ -589,10 +437,7 @@ class LifecycleEngine:
         termination_error: Exception | None = None
 
         try:
-            resume_state = self._prepare_cycle_resume_state(
-                ctx,
-                start_phase=start_phase,
-            )
+            resume_state = resume_state or CheckpointResumeState()
 
             while True:
                 cycle_start = time.monotonic()
@@ -726,7 +571,7 @@ class LifecycleEngine:
                 ctx.state.current_observation = None
                 ctx.state.current_plan = None
                 ctx.state.current_execution = None
-                resume_state = _CycleResumeState()
+                resume_state = CheckpointResumeState()
 
         except AxisError as e:
             termination_error = e
@@ -800,7 +645,7 @@ class LifecycleEngine:
             return await self._execute_from_context(
                 ctx,
                 run_started_monotonic=run_started_monotonic,
-                start_phase=Phase.OBSERVE,
+                resume_state=CheckpointResumeState(),
             )
         finally:
             self._token_callback = None
@@ -818,15 +663,15 @@ class LifecycleEngine:
         run_started_monotonic = time.monotonic()
         try:
             self._configure_runtime_policies(config)
-            ctx, next_phase = self._prepare_resume_context(
+            prepared_resume = prepare_checkpoint_resume(
                 checkpoint,
                 cancel_token=cancel_token,
                 config=config,
             )
             return await self._execute_from_context(
-                ctx,
+                prepared_resume.context,
                 run_started_monotonic=run_started_monotonic,
-                start_phase=next_phase,
+                resume_state=prepared_resume.resume_state,
             )
         finally:
             self._token_callback = None

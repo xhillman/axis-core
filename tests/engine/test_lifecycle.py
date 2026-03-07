@@ -3656,3 +3656,36 @@ class TestCheckpointResumeTask19:
                 invalid_checkpoint,
                 config=_runtime_config(),
             )
+
+    @pytest.mark.asyncio
+    async def test_resume_rejects_incompatible_next_phase_for_checkpoint_boundary(
+        self,
+        mock_model: MockModelAdapter,
+    ) -> None:
+        checkpoints_by_phase: dict[str, dict[str, Any]] = {}
+
+        async def checkpoint_handler(checkpoint: dict[str, Any]) -> None:
+            checkpoints_by_phase[checkpoint["phase"]] = checkpoint
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=MockPlanner(),
+            checkpoint_handler=checkpoint_handler,
+        )
+
+        await engine.execute(
+            input_text="checkpoint invalid next phase",
+            agent_id="agent-task23",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(),
+        )
+
+        invalid_checkpoint = dict(checkpoints_by_phase[Phase.ACT.value])
+        invalid_checkpoint["next_phase"] = Phase.FINALIZE.value
+
+        resumed_engine = LifecycleEngine(model=mock_model, planner=MockPlanner())
+        with pytest.raises(ConfigError, match="incompatible with checkpoint phase"):
+            await resumed_engine.resume(
+                invalid_checkpoint,
+                config=_runtime_config(),
+            )
