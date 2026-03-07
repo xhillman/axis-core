@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from axis_core.adapters.models.catalog import ANTHROPIC_ALIAS_TARGETS
+from axis_core.adapters.models.pricing import ANTHROPIC_MODEL_PRICING
 from axis_core.protocols.model import ModelResponse
 
 # Test that import provides helpful error message if anthropic not installed
@@ -341,6 +342,7 @@ class TestAnthropicModel:
 
     def test_model_pricing_table(self) -> None:
         """Test that MODEL_PRICING table has expected models."""
+        assert MODEL_PRICING is ANTHROPIC_MODEL_PRICING
         assert "claude-opus-4-20250514" in MODEL_PRICING
         assert "claude-opus-4-6" in MODEL_PRICING
         assert "claude-sonnet-4-20250514" in MODEL_PRICING

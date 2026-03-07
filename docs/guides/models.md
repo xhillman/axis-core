@@ -100,3 +100,5 @@ Common adapter constructor options include:
 
 Do not hardcode provider prices in project docs. Provider pricing and limits change often.
 Link directly to provider pricing pages in user-facing materials.
+Maintainers should update estimate-cost metadata in `axis_core/adapters/models/pricing.py` and
+keep the provider source URL plus `as of` date beside the edited table.

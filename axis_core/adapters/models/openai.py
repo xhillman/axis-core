@@ -27,6 +27,7 @@ from axis_core.adapters.models.openai_error_utils import (
     build_openai_model_error,
     classify_openai_error,
 )
+from axis_core.adapters.models.pricing import OPENAI_MODEL_PRICING
 from axis_core.adapters.models.provider_helpers import (
     DEFAULT_SCHEMA_FIELDS_TO_STRIP,
     DEFAULT_TOOL_CALL_ID_INVALID_CHARS,
@@ -36,53 +37,7 @@ from axis_core.adapters.models.provider_helpers import (
 from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest
 
-# Pricing table for cost estimation (per million tokens)
-# Source: https://platform.openai.com/docs/pricing (standard pricing, as of 2026-02)
-MODEL_PRICING: dict[str, dict[str, float]] = {
-    # GPT-5 series
-    "gpt-5.2": {"input_per_mtok": 1.75, "output_per_mtok": 14.00},
-    "gpt-5.1": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5-mini": {"input_per_mtok": 0.25, "output_per_mtok": 2.00},
-    "gpt-5-nano": {"input_per_mtok": 0.05, "output_per_mtok": 0.40},
-    "gpt-5.2-chat-latest": {"input_per_mtok": 1.75, "output_per_mtok": 14.00},
-    "gpt-5.1-chat-latest": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5-chat-latest": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5.2-pro": {"input_per_mtok": 21.00, "output_per_mtok": 168.00},
-    "gpt-5-pro": {"input_per_mtok": 15.00, "output_per_mtok": 120.00},
-    # GPT-5 codex/search series (Responses API)
-    "gpt-5.2-codex": {"input_per_mtok": 1.75, "output_per_mtok": 14.00},
-    "gpt-5.1-codex-max": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5.1-codex": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5-codex": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5.1-codex-mini": {"input_per_mtok": 0.25, "output_per_mtok": 2.00},
-    "codex-mini-latest": {"input_per_mtok": 1.50, "output_per_mtok": 6.00},
-    "gpt-5-search": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-5-search-api": {"input_per_mtok": 1.25, "output_per_mtok": 10.00},
-    "gpt-4o-search-preview": {"input_per_mtok": 2.50, "output_per_mtok": 10.00},
-    "gpt-4o-mini-search-preview": {"input_per_mtok": 0.15, "output_per_mtok": 0.60},
-    # GPT-4.1 series
-    "gpt-4.1": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
-    "gpt-4.1-mini": {"input_per_mtok": 0.40, "output_per_mtok": 1.60},
-    "gpt-4.1-nano": {"input_per_mtok": 0.10, "output_per_mtok": 0.40},
-    # GPT-4o series
-    "gpt-4o": {"input_per_mtok": 2.50, "output_per_mtok": 10.00},
-    "gpt-4o-2024-05-13": {"input_per_mtok": 5.00, "output_per_mtok": 15.00},
-    "gpt-4o-mini": {"input_per_mtok": 0.15, "output_per_mtok": 0.60},
-    # O-series reasoning models
-    "o1": {"input_per_mtok": 15.00, "output_per_mtok": 60.00},
-    "o1-pro": {"input_per_mtok": 150.00, "output_per_mtok": 600.00},
-    "o1-mini": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
-    "o3": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
-    "o3-pro": {"input_per_mtok": 20.00, "output_per_mtok": 80.00},
-    "o3-mini": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
-    "o4-mini": {"input_per_mtok": 1.10, "output_per_mtok": 4.40},
-    # Deep research / computer use (Responses API)
-    "o3-deep-research": {"input_per_mtok": 10.00, "output_per_mtok": 40.00},
-    "o4-mini-deep-research": {"input_per_mtok": 2.00, "output_per_mtok": 8.00},
-    "computer-use-preview": {"input_per_mtok": 3.00, "output_per_mtok": 12.00},
-}
-
+MODEL_PRICING: dict[str, dict[str, float]] = OPENAI_MODEL_PRICING
 
 
 class OpenAIModel:

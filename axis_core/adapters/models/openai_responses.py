@@ -15,8 +15,8 @@ except ImportError as e:
         "Install with: pip install axis-core[openai]"
     ) from e
 
-from axis_core.adapters.models.openai import MODEL_PRICING
 from axis_core.adapters.models.openai_error_utils import build_openai_model_error
+from axis_core.adapters.models.pricing import OPENAI_MODEL_PRICING as MODEL_PRICING
 from axis_core.errors import ModelError
 from axis_core.protocols.model import ModelChunk, ModelResponse, NormalizedUsage, ToolCall
 from axis_core.tool import ToolManifest

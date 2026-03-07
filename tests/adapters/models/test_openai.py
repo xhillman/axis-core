@@ -8,6 +8,7 @@ from axis_core.adapters.models.catalog import (
     OPENAI_COMPLETION_TOKENS_MODEL_IDS,
     OPENAI_RESPONSES_API_MODEL_IDS,
 )
+from axis_core.adapters.models.pricing import OPENAI_MODEL_PRICING
 from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 
 # Test that import provides helpful error message if openai not installed
@@ -557,6 +558,7 @@ class TestOpenAIModel:
 
     def test_model_pricing_table(self) -> None:
         """Test that MODEL_PRICING table has expected models."""
+        assert MODEL_PRICING is OPENAI_MODEL_PRICING
         assert "gpt-5" in MODEL_PRICING
         assert "gpt-4o" in MODEL_PRICING
         assert "o1" in MODEL_PRICING
