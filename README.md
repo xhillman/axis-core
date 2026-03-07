@@ -187,6 +187,9 @@ for event in agent.stream("Solve 42 * 137"):
 - `@tool` input schemas preserve `list[T]`, `dict[str, T]`, `TypedDict`, `Literal[...]`, and
   nested Pydantic models inside typed containers; non-optional unions are still rejected to keep
   schemas deterministic and provider-safe.
+- `@tool` output metadata now reflects supported return annotations for manifest introspection.
+  `T | None` becomes `anyOf[T, null]`, and missing or unsupported return annotations widen to
+  `{}` instead of claiming a specific type. Tool return values are not runtime-validated yet.
 
 ## Transcript Guards
 

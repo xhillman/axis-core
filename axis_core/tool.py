@@ -65,7 +65,7 @@ class ToolManifest:
         name: Tool name (defaults to function name)
         description: Human-readable description (from docstring)
         input_schema: JSON schema for parameters
-        output_schema: JSON schema for return value
+        output_schema: Descriptive JSON schema for return value when known (`{}` = unconstrained)
         capabilities: Security capabilities the tool requires
         cache_ttl: Cache time-to-live in seconds (None = no caching)
         rate_limit: Rate limit string like "10/second" (None = no limit)
@@ -365,6 +365,42 @@ def generate_tool_schema(func: Callable[..., Any]) -> dict[str, Any]:
     }
 
 
+def _generate_tool_output_schema(func: Callable[..., Any]) -> dict[str, Any]:
+    """Infer descriptive output metadata from the function return annotation.
+
+    The output schema is advisory metadata only. If the return annotation is absent or cannot be
+    represented honestly with the supported JSON schema subset, this returns `{}` to indicate that
+    the tool output is unconstrained.
+    """
+    type_hints = get_type_hints(func, include_extras=True)
+    if "return" not in type_hints:
+        return {}
+
+    return_type = _unwrap_annotated_type(type_hints["return"])
+    if return_type is Any:
+        return {}
+
+    if _is_union_type(return_type):
+        union_members = tuple(_unwrap_annotated_type(arg) for arg in get_args(return_type))
+        non_none_members = tuple(member for member in union_members if member is not type(None))
+        if len(non_none_members) == 1 and len(non_none_members) != len(union_members):
+            try:
+                return {
+                    "anyOf": [
+                        _python_type_to_json_schema(non_none_members[0], path="return"),
+                        {"type": "null"},
+                    ]
+                }
+            except TypeError:
+                return {}
+        return {}
+
+    try:
+        return _python_type_to_json_schema(return_type, path="return")
+    except TypeError:
+        return {}
+
+
 def _python_type_to_json_schema(python_type: Any, *, path: str) -> dict[str, Any]:
     """Convert a Python type to JSON schema type.
 
@@ -614,8 +650,7 @@ def tool(
         tool_capabilities = tuple(capabilities) if capabilities is not None else ()
 
         input_schema = generate_tool_schema(fn)
-        # For now, use simple output schema - can be enhanced later
-        output_schema: dict[str, Any] = {"type": "string"}
+        output_schema = _generate_tool_output_schema(fn)
 
         manifest = ToolManifest(
             name=tool_name,

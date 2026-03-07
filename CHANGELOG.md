@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
 - Expanded `@tool` input schema generation to preserve typed lists, string-keyed maps,
   `TypedDict`, `Literal[...]`, and nested Pydantic models inside typed containers while still
   rejecting unsupported non-optional unions with clear errors.
+- `@tool` manifest output metadata now infers supported return annotations, represents
+  nullable returns as `anyOf[..., null]`, and falls back to `{}` for missing or unsupported
+  return annotations instead of hardcoding `{"type": "string"}`.
 
 ### Fixed
 

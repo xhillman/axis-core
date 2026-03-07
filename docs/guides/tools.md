@@ -17,6 +17,7 @@ def get_time(city: str) -> str:
 - Name defaults to function name.
 - Description defaults to docstring.
 - Input schema is inferred from type hints.
+- Output schema metadata is inferred from supported return annotations when possible.
 
 ## Decorator Options
 
@@ -57,6 +58,16 @@ Schema generation supports:
 - Pydantic models (`model_json_schema()`)
 
 Note: unions with multiple non-`None` types are not supported in tool params.
+
+Tool output metadata uses the same supported scalar/container mappings for return annotations, with
+two explicit limits:
+
+- `T | None` is represented as `{"anyOf": [<schema for T>, {"type": "null"}]}`.
+- Missing or unsupported return annotations widen to `{}` so the manifest does not claim a false
+  output type.
+
+`manifest.output_schema` is descriptive metadata only. Axis does not yet runtime-validate tool
+return values against it.
 
 ## Capabilities and Safety
 
@@ -118,6 +129,7 @@ Each tool wrapper carries metadata in `_axis_manifest`:
 manifest = get_time._axis_manifest
 print(manifest.name)
 print(manifest.input_schema)
+print(manifest.output_schema)
 ```
 
 ## Best Practices

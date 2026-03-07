@@ -415,6 +415,51 @@ class TestToolDecorator:
         assert manifest.description == "Greet a person by name."
         assert "name" in manifest.input_schema["properties"]
 
+    def test_manifest_infers_output_schema_from_return_annotation(self):
+        """Decorator should derive output schema from supported return annotations."""
+
+        @tool
+        def count_items(name: str) -> int:
+            """Count items by name."""
+            return len(name)
+
+        assert count_items._axis_manifest.output_schema == {"type": "integer"}
+
+    def test_manifest_supports_nullable_output_schema(self):
+        """Optional return annotations should remain honest in output metadata."""
+
+        @tool
+        def maybe_lookup(name: str) -> str | None:
+            """Return a value when present."""
+            return name if name else None
+
+        assert maybe_lookup._axis_manifest.output_schema == {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "null"},
+            ]
+        }
+
+    def test_manifest_output_schema_falls_back_to_unconstrained_when_missing(self):
+        """Missing return annotations should not claim a specific output type."""
+
+        @tool
+        def untyped_result(name: str):
+            """Return an untyped result."""
+            return {"name": name}
+
+        assert untyped_result._axis_manifest.output_schema == {}
+
+    def test_manifest_output_schema_falls_back_to_unconstrained_for_unsupported_union(self):
+        """Unsupported return unions should widen instead of failing decoration."""
+
+        @tool
+        def mixed_result(name: str) -> str | int:
+            """Return mixed output types."""
+            return name if name else 0
+
+        assert mixed_result._axis_manifest.output_schema == {}
+
     def test_override_name(self):
         """Decorator should accept name override."""
 
