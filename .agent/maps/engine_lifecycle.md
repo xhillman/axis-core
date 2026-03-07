@@ -7,6 +7,7 @@
 | File | Responsibility |
 |---|---|
 | `axis_core/engine/lifecycle.py` | `LifecycleEngine`, loop orchestration, checkpoint/resume coordination |
+| `axis_core/engine/cycle_runner.py` | Dedicated observe/plan/act/evaluate cycle orchestration |
 | `axis_core/engine/phases/initialize.py` | Create `RunContext`, validate config, emit telemetry |
 | `axis_core/engine/phases/observe.py` | Gather input, memory, and transcript context |
 | `axis_core/engine/phases/plan.py` | Planner invocation and plan validation |
@@ -31,7 +32,8 @@ Agent.run(prompt) / run_async(prompt)
 
 ## Ownership Boundaries
 
-- `lifecycle.py` owns the loop, phase dispatch, and checkpoint/resume coordination
+- `lifecycle.py` owns engine composition, public execute/resume entrypoints, and checkpoint/resume coordination
+- `cycle_runner.py` owns the steady-state observe/plan/act/evaluate loop and finalize handoff
 - `phases/*.py` own individual phase behavior
 - `act.py` is the heaviest phase and still carries most execution policy logic
 - `agent.py` owns public API surface, not engine internals
@@ -48,6 +50,6 @@ Agent.run(prompt) / run_async(prompt)
 ## Sharp Edges
 
 - `act.py` mixes tool execution and model execution and is still the largest lifecycle hotspot
-- `lifecycle.py` owns both loop control and checkpoint/resume mechanics
+- `lifecycle.py` and `cycle_runner.py` now split execution orchestration, so changes must preserve phase/checkpoint order across both files
 - `finalize()` persists memory in a non-fatal try/except path
 - Phase functions are standalone functions, not methods

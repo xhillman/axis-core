@@ -66,6 +66,7 @@ axis_core/
 │   ├── transcript.py    # Transcript repair / pruning helpers
 │   └── codec.py         # Context serialization helpers
 ├── engine/
+│   ├── cycle_runner.py  # Steady-state observe / plan / act / evaluate orchestration
 │   ├── lifecycle.py     # LifecycleEngine + orchestration helpers
 │   ├── phases/          # initialize / observe / plan / act / evaluate / finalize
 │   ├── registry.py      # Adapter registries + lazy factory helpers

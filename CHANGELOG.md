@@ -21,6 +21,9 @@ All notable changes to this project will be documented in this file.
   settings instead of scattered env parsing rules.
 - Moved telemetry-settings resolution ownership into `Agent.__init__` so explicit sink lists
   bypass env-derived defaults and construction helpers only instantiate from resolved settings.
+- Extracted the steady-state observe/plan/act/evaluate loop into a dedicated
+  `LifecycleCycleRunner`, keeping `LifecycleEngine` focused on runtime composition, checkpoint
+  setup, and public execute/resume entrypoints.
 
 ### Fixed
 

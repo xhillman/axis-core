@@ -35,12 +35,12 @@ from axis_core.checkpoint import (
     prepare_checkpoint_resume,
 )
 from axis_core.context import (
-    CycleState,
     EvalDecision,
     ExecutionResult,
     Observation,
     RunContext,
 )
+from axis_core.engine.cycle_runner import LifecycleCycleRunner
 from axis_core.engine.phases.act import act as _act_phase
 from axis_core.engine.phases.evaluate import evaluate as _evaluate_phase
 from axis_core.engine.phases.evaluate import identify_exhausted_resource
@@ -52,14 +52,9 @@ from axis_core.engine.registry import memory_registry, model_registry, planner_r
 from axis_core.engine.resolver import resolve_adapter
 from axis_core.engine.runtime_policy import LifecycleRuntimePolicyServices
 from axis_core.errors import (
-    AxisError,
     BudgetError,
     CancelledError,
     ConfigError,
-    ErrorClass,
-)
-from axis_core.errors import (
-    TimeoutError as AxisTimeoutError,
 )
 from axis_core.protocols.planner import Plan
 from axis_core.protocols.telemetry import TraceEvent
@@ -135,6 +130,22 @@ class LifecycleEngine:
         # Runtime execution policy state (Task 17.0)
         self._runtime_policies = LifecycleRuntimePolicyServices()
         self._tools_missing_manifest_warned: set[str] = set()
+        self._cycle_runner = LifecycleCycleRunner(
+            emit=self._emit,
+            runtime_policies=self._runtime_policies,
+            observe=self._observe,
+            plan=self._plan,
+            act=self._act,
+            evaluate=self._evaluate,
+            finalize=self._finalize,
+            persist_checkpoint=self._persist_checkpoint,
+            update_wall_time=self._update_wall_time,
+            wall_time_budget_error=self._wall_time_budget_error,
+            budget_exhaustion_error=self._budget_exhaustion_error,
+            cycle_boundary_error=self._cycle_boundary_error,
+            build_failed_result=self._build_failed_result,
+            cleanup_telemetry=self._cleanup_telemetry,
+        )
 
     # =========================================================================
     # Telemetry helpers
@@ -368,9 +379,8 @@ class LifecycleEngine:
     async def _persist_checkpoint(
         self,
         ctx: RunContext,
-        *,
-        phase: Phase,
-        next_phase: Phase | None,
+        phase: str,
+        next_phase: str | None,
     ) -> None:
         """Persist a checkpoint envelope if a handler is configured."""
         if self._checkpoint_handler is None:
@@ -378,8 +388,8 @@ class LifecycleEngine:
 
         checkpoint = create_checkpoint(
             ctx,
-            phase=phase.value,
-            next_phase=next_phase.value if next_phase else None,
+            phase=phase,
+            next_phase=next_phase,
         )
         try:
             result = self._checkpoint_handler(checkpoint)
@@ -388,7 +398,7 @@ class LifecycleEngine:
         except Exception:
             logger.warning(
                 "Checkpoint persistence failed at phase '%s'",
-                phase.value,
+                phase,
                 exc_info=True,
             )
 
@@ -414,10 +424,6 @@ class LifecycleEngine:
 
         return LifecycleEngine._budget_exhaustion_error(ctx)
 
-    # =========================================================================
-    # Main execution loop (7.8)
-    # =========================================================================
-
     async def _execute_from_context(
         self,
         ctx: RunContext,
@@ -425,191 +431,12 @@ class LifecycleEngine:
         run_started_monotonic: float,
         resume_state: CheckpointResumeState | None = None,
     ) -> dict[str, Any]:
-        """Continue lifecycle execution from a prepared RunContext."""
-        self._update_wall_time(ctx, run_started_monotonic)
-
-        await self._emit(
-            "run_started",
-            run_id=ctx.run_id,
-            data={"agent_id": ctx.agent_id},
+        """Delegate steady-state lifecycle execution to the cycle runner."""
+        return await self._cycle_runner.run(
+            ctx,
+            run_started_monotonic=run_started_monotonic,
+            resume_state=resume_state,
         )
-
-        termination_error: Exception | None = None
-
-        try:
-            resume_state = resume_state or CheckpointResumeState()
-
-            while True:
-                cycle_start = time.monotonic()
-                self._update_wall_time(ctx, run_started_monotonic)
-                await self._emit(
-                    "cycle_started",
-                    run_id=ctx.run_id,
-                    cycle=ctx.cycle_count,
-                )
-
-                termination_error = self._cycle_boundary_error(ctx)
-                if termination_error is not None:
-                    break
-
-                cycle_start_time = datetime.utcnow()
-                observation = resume_state.observation
-                if observation is None:
-                    observation = await self._runtime_policies.timeouts.run_with_budget(
-                        Phase.OBSERVE.value,
-                        lambda: self._observe(ctx),
-                        ctx=ctx,
-                        run_started_monotonic=run_started_monotonic,
-                        update_wall_time=self._update_wall_time,
-                        wall_time_budget_error=self._wall_time_budget_error,
-                    )
-                    await self._persist_checkpoint(
-                        ctx,
-                        phase=Phase.OBSERVE,
-                        next_phase=Phase.PLAN,
-                    )
-
-                termination_error = self._budget_exhaustion_error(ctx)
-                if termination_error is not None:
-                    break
-
-                plan = resume_state.plan
-                if plan is None:
-                    plan = await self._runtime_policies.timeouts.run_with_budget(
-                        Phase.PLAN.value,
-                        lambda: self._plan(ctx, observation),
-                        ctx=ctx,
-                        run_started_monotonic=run_started_monotonic,
-                        update_wall_time=self._update_wall_time,
-                        wall_time_budget_error=self._wall_time_budget_error,
-                    )
-                    await self._persist_checkpoint(
-                        ctx,
-                        phase=Phase.PLAN,
-                        next_phase=Phase.ACT,
-                    )
-
-                termination_error = self._budget_exhaustion_error(ctx)
-                if termination_error is not None:
-                    break
-
-                execution = resume_state.execution
-                if execution is None:
-                    execution = await self._runtime_policies.timeouts.run_with_budget(
-                        Phase.ACT.value,
-                        lambda: self._act(ctx, plan),
-                        ctx=ctx,
-                        run_started_monotonic=run_started_monotonic,
-                        update_wall_time=self._update_wall_time,
-                        wall_time_budget_error=self._wall_time_budget_error,
-                    )
-                    await self._persist_checkpoint(
-                        ctx,
-                        phase=Phase.ACT,
-                        next_phase=Phase.EVALUATE,
-                    )
-
-                termination_error = self._budget_exhaustion_error(ctx)
-                if termination_error is not None:
-                    break
-
-                decision = await self._runtime_policies.timeouts.run_with_budget(
-                    Phase.EVALUATE.value,
-                    lambda: self._evaluate(ctx, plan, execution),
-                    ctx=ctx,
-                    run_started_monotonic=run_started_monotonic,
-                    update_wall_time=self._update_wall_time,
-                    wall_time_budget_error=self._wall_time_budget_error,
-                )
-                budget_error = self._budget_exhaustion_error(ctx)
-                if budget_error is not None:
-                    decision = EvalDecision(
-                        done=True,
-                        error=budget_error,
-                        reason=budget_error.message,
-                    )
-
-                cycle_end_time = datetime.utcnow()
-
-                # Record completed cycle
-                cycle_state = CycleState(
-                    cycle_number=ctx.cycle_count,
-                    observation=observation,
-                    plan=plan,
-                    execution=execution,
-                    evaluation=decision,
-                    started_at=cycle_start_time,
-                    ended_at=cycle_end_time,
-                )
-                ctx.state.append_cycle(cycle_state)
-
-                # Increment cycle count and budget
-                ctx.cycle_count += 1
-                ctx.state.budget_state.cycles += 1
-
-                cycle_duration_ms = (time.monotonic() - cycle_start) * 1000
-                await self._emit(
-                    "cycle_completed",
-                    run_id=ctx.run_id,
-                    cycle=ctx.cycle_count - 1,
-                    duration_ms=cycle_duration_ms,
-                    data={"done": decision.done},
-                )
-
-                next_phase = Phase.FINALIZE if decision.done else Phase.OBSERVE
-                await self._persist_checkpoint(
-                    ctx,
-                    phase=Phase.EVALUATE,
-                    next_phase=next_phase,
-                )
-
-                if decision.done:
-                    termination_error = decision.error
-                    break
-
-                # Reset current-cycle state for next cycle after checkpoint capture.
-                ctx.state.current_observation = None
-                ctx.state.current_plan = None
-                ctx.state.current_execution = None
-                resume_state = CheckpointResumeState()
-
-        except AxisError as e:
-            termination_error = e
-        except Exception as e:
-            termination_error = AxisError(
-                message=f"Unexpected error: {e}",
-                error_class=ErrorClass.RUNTIME,
-                cause=e,
-            )
-
-        # Finalize (always runs)
-        self._update_wall_time(ctx, run_started_monotonic)
-        try:
-            result = await self._runtime_policies.timeouts.run_with_budget(
-                Phase.FINALIZE.value,
-                lambda: self._finalize(ctx, error=termination_error),
-                ctx=ctx,
-                run_started_monotonic=run_started_monotonic,
-                update_wall_time=self._update_wall_time,
-                wall_time_budget_error=self._wall_time_budget_error,
-            )
-        except (BudgetError, AxisTimeoutError) as e:
-            termination_error = e
-            result = self._build_failed_result(ctx, e)
-            await self._cleanup_telemetry()
-        self._update_wall_time(ctx, run_started_monotonic)
-
-        event_type = "run_completed" if result["success"] else "run_failed"
-        await self._emit(
-            event_type,
-            run_id=ctx.run_id,
-            data={
-                "success": result["success"],
-                "cycles": result["cycles_completed"],
-            },
-        )
-
-        return result
 
     async def execute(
         self,
@@ -639,8 +466,8 @@ class LifecycleEngine:
             self._update_wall_time(ctx, run_started_monotonic)
             await self._persist_checkpoint(
                 ctx,
-                phase=Phase.INITIALIZE,
-                next_phase=Phase.OBSERVE,
+                phase=Phase.INITIALIZE.value,
+                next_phase=Phase.OBSERVE.value,
             )
             return await self._execute_from_context(
                 ctx,

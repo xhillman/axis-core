@@ -1517,6 +1517,59 @@ class TestTelemetryEmission:
         assert "cycle_completed" in event_types
 
     @pytest.mark.asyncio
+    async def test_multi_cycle_run_and_cycle_events_keep_stable_order(
+        self,
+        mock_model: MockModelAdapter,
+        mock_telemetry: MockTelemetrySink,
+    ) -> None:
+        """Multi-cycle execution should preserve run/cycle telemetry ordering."""
+        continue_plan = Plan(
+            id="plan-1",
+            goal="Continue",
+            steps=(PlanStep(id="step-1", type=StepType.MODEL, payload={}),),
+        )
+        terminal_plan = Plan(
+            id="plan-2",
+            goal="Complete",
+            steps=(
+                PlanStep(
+                    id="terminal",
+                    type=StepType.TERMINAL,
+                    payload={"output": "Done"},
+                ),
+            ),
+        )
+        planner = MockPlanner(plans=[continue_plan, terminal_plan])
+
+        engine = LifecycleEngine(
+            model=mock_model,
+            planner=planner,
+            telemetry=[mock_telemetry],
+        )
+
+        result = await engine.execute(
+            input_text="Test",
+            agent_id="test-agent",
+            budget=Budget(max_cycles=10),
+        )
+
+        assert result["success"] is True
+        assert result["cycles_completed"] == 2
+        event_types = [
+            event.type
+            for event in mock_telemetry.events
+            if event.type in {"run_started", "cycle_started", "cycle_completed", "run_completed"}
+        ]
+        assert event_types == [
+            "run_started",
+            "cycle_started",
+            "cycle_completed",
+            "cycle_started",
+            "cycle_completed",
+            "run_completed",
+        ]
+
+    @pytest.mark.asyncio
     async def test_tool_called_payload_is_redacted_before_sink(
         self,
         mock_model: MockModelAdapter,
