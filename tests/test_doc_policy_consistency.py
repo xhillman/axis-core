@@ -98,3 +98,90 @@ def test_path_claim_drift_is_reported_for_missing_claim_text(tmp_path: Path) -> 
     assert failures == [
         "Missing metadata claim in REPO_MAP.md: 'axis_core/context/'",
     ]
+
+
+def test_ownership_claim_drift_is_reported_for_missing_summary_text(tmp_path: Path) -> None:
+    write_file(tmp_path / "AGENTS.md", "## Process Ownership\n")
+
+    failures = check_doc_policy_consistency.find_ownership_claim_drift(
+        tmp_path,
+        claims=(
+            check_doc_policy_consistency.OwnershipClaim(
+                document_path="AGENTS.md",
+                reference_text=(
+                    "- Keep behavioral prompt constraints in `dev/spec-driven.md` "
+                    "only.\n"
+                ),
+            ),
+        ),
+    )
+
+    assert failures == [
+        "Ownership drift in AGENTS.md: missing claim "
+        "'- Keep behavioral prompt constraints in `dev/spec-driven.md` only.\\n'",
+    ]
+
+
+def test_suite_metadata_drift_is_reported_for_missing_expected_paths(tmp_path: Path) -> None:
+    write_file(
+        tmp_path / "REPO_MAP.md",
+        "tests/                   # Mirrors runtime areas and includes doc-policy, acceptance, "
+        "and tooling checks\n",
+    )
+    write_file(tmp_path / "tests/test_doc_policy_consistency.py", "")
+
+    failures = check_doc_policy_consistency.find_suite_metadata_drift(
+        tmp_path,
+        claims=(
+            check_doc_policy_consistency.SuiteMetadataClaim(
+                document_path="REPO_MAP.md",
+                reference_text="doc-policy, acceptance, and tooling checks",
+                expected_paths=(
+                    "tests/test_doc_policy_consistency.py",
+                    "tests/test_acceptance_contracts.py",
+                    "tests/test_test_runner_script.py",
+                ),
+            ),
+        ),
+    )
+
+    assert failures == [
+        "Suite metadata drift in REPO_MAP.md: claim "
+        "'doc-policy, acceptance, and tooling checks' expects existing paths "
+        "['tests/test_acceptance_contracts.py', 'tests/test_test_runner_script.py']",
+    ]
+
+
+def test_suite_metadata_check_passes_when_expected_paths_exist(tmp_path: Path) -> None:
+    write_file(
+        tmp_path / ".agent/maps/testing_quality.md",
+        "├── test_doc_policy_consistency.py         # Doc-policy checker coverage\n"
+        "├── test_acceptance_contracts.py           # Contract-shape checker coverage\n"
+        "├── test_test_runner_script.py             # `./scripts/test.sh` wrapper behavior\n",
+    )
+    write_file(tmp_path / "tests/test_doc_policy_consistency.py", "")
+    write_file(tmp_path / "tests/test_acceptance_contracts.py", "")
+    write_file(tmp_path / "tests/test_test_runner_script.py", "")
+
+    failures = check_doc_policy_consistency.find_suite_metadata_drift(
+        tmp_path,
+        claims=(
+            check_doc_policy_consistency.SuiteMetadataClaim(
+                document_path=".agent/maps/testing_quality.md",
+                reference_text="test_doc_policy_consistency.py",
+                expected_paths=("tests/test_doc_policy_consistency.py",),
+            ),
+            check_doc_policy_consistency.SuiteMetadataClaim(
+                document_path=".agent/maps/testing_quality.md",
+                reference_text="test_acceptance_contracts.py",
+                expected_paths=("tests/test_acceptance_contracts.py",),
+            ),
+            check_doc_policy_consistency.SuiteMetadataClaim(
+                document_path=".agent/maps/testing_quality.md",
+                reference_text="test_test_runner_script.py",
+                expected_paths=("tests/test_test_runner_script.py",),
+            ),
+        ),
+    )
+
+    assert failures == []

@@ -4,6 +4,8 @@
 This checker stays intentionally small:
 - `REPO_MAP.md` router links must resolve
 - a curated set of metadata path claims must still exist
+- a curated set of ownership summaries must still name the canonical docs
+- a curated set of suite-metadata claims must still describe real coverage
 - the maintained version in `build_release.md` must match `pyproject.toml`
 """
 
@@ -28,6 +30,19 @@ class PathClaim:
     document_path: str
     reference_text: str
     target_path: str
+
+
+@dataclass(frozen=True)
+class OwnershipClaim:
+    document_path: str
+    reference_text: str
+
+
+@dataclass(frozen=True)
+class SuiteMetadataClaim:
+    document_path: str
+    reference_text: str
+    expected_paths: tuple[str, ...]
 
 
 PATH_CLAIMS: tuple[PathClaim, ...] = (
@@ -113,6 +128,113 @@ PATH_CLAIMS: tuple[PathClaim, ...] = (
     ),
 )
 
+OWNERSHIP_CLAIMS: tuple[OwnershipClaim, ...] = (
+    OwnershipClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="Keep detailed mechanics in `dev/process-tasks.md`",
+    ),
+    OwnershipClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="Keep prompt behavior constraints in `dev/spec-driven.md`",
+    ),
+    OwnershipClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="Keep active task scope and invariants in `dev/contracts/*.md`",
+    ),
+    OwnershipClaim(
+        document_path=".agent/maps/meta_process.md",
+        reference_text="Keep routing logic in `REPO_MAP.md`",
+    ),
+    OwnershipClaim(
+        document_path="AGENTS.md",
+        reference_text="Keep execution mechanics in `dev/process-tasks.md` only.",
+    ),
+    OwnershipClaim(
+        document_path="AGENTS.md",
+        reference_text="Keep behavioral prompt constraints in `dev/spec-driven.md` only.",
+    ),
+    OwnershipClaim(
+        document_path="AGENTS.md",
+        reference_text="Keep routing guidance in `REPO_MAP.md` and `.agent/maps/*.md`.",
+    ),
+    OwnershipClaim(
+        document_path="AGENTS.md",
+        reference_text=(
+            "Keep active implementation scope and acceptance boundaries in "
+            "`dev/contracts/*.md`."
+        ),
+    ),
+    OwnershipClaim(
+        document_path="CLAUDE.md",
+        reference_text="Keep execution mechanics in `dev/process-tasks.md`.",
+    ),
+    OwnershipClaim(
+        document_path="CLAUDE.md",
+        reference_text="Keep behavioral prompt constraints in `dev/spec-driven.md`.",
+    ),
+    OwnershipClaim(
+        document_path="CLAUDE.md",
+        reference_text=(
+            "Keep active implementation scope and acceptance boundaries in "
+            "`dev/contracts/*.md`."
+        ),
+    ),
+    OwnershipClaim(
+        document_path="CLAUDE.md",
+        reference_text="Keep routing rules in `REPO_MAP.md` and `.agent/maps/*.md`.",
+    ),
+)
+
+SUITE_METADATA_CLAIMS: tuple[SuiteMetadataClaim, ...] = (
+    SuiteMetadataClaim(
+        document_path="REPO_MAP.md",
+        reference_text="doc-policy, acceptance, and tooling checks",
+        expected_paths=(
+            "tests/test_doc_policy_consistency.py",
+            "tests/test_acceptance_contracts.py",
+            "tests/test_test_runner_script.py",
+        ),
+    ),
+    SuiteMetadataClaim(
+        document_path=".agent/maps/testing_quality.md",
+        reference_text="test_acceptance_contracts.py",
+        expected_paths=("tests/test_acceptance_contracts.py",),
+    ),
+    SuiteMetadataClaim(
+        document_path=".agent/maps/testing_quality.md",
+        reference_text="test_doc_policy_consistency.py",
+        expected_paths=("tests/test_doc_policy_consistency.py",),
+    ),
+    SuiteMetadataClaim(
+        document_path=".agent/maps/testing_quality.md",
+        reference_text="test_test_runner_script.py",
+        expected_paths=("tests/test_test_runner_script.py",),
+    ),
+    SuiteMetadataClaim(
+        document_path=".agent/maps/testing_quality.md",
+        reference_text="test_pricing.py",
+        expected_paths=("tests/adapters/models/test_pricing.py",),
+    ),
+    SuiteMetadataClaim(
+        document_path=".agent/maps/testing_quality.md",
+        reference_text="budget/                                # Budget normalization helpers",
+        expected_paths=("tests/budget/test_usage_normalization.py",),
+    ),
+    SuiteMetadataClaim(
+        document_path=".agent/maps/testing_quality.md",
+        reference_text="context/                               # Context-window guard behavior",
+        expected_paths=("tests/context/test_context_window_guard.py",),
+    ),
+    SuiteMetadataClaim(
+        document_path=".agent/maps/testing_quality.md",
+        reference_text=(
+            "tool/                                  # Tool-runtime helpers such as "
+            "idempotency"
+        ),
+        expected_paths=("tests/tool/test_idempotency.py",),
+    ),
+)
+
 
 def extract_pyproject_version(pyproject_text: str) -> str | None:
     match = PYPROJECT_VERSION_RE.search(pyproject_text)
@@ -185,6 +307,63 @@ def find_path_claim_drift(root: Path, claims: Iterable[PathClaim] = PATH_CLAIMS)
     return failures
 
 
+def find_ownership_claim_drift(
+    root: Path,
+    claims: Iterable[OwnershipClaim] = OWNERSHIP_CLAIMS,
+) -> list[str]:
+    failures: list[str] = []
+
+    for claim in claims:
+        file_path = root / claim.document_path
+        if not file_path.exists():
+            failures.append(f"Missing file: {claim.document_path}")
+            continue
+
+        text = file_path.read_text(encoding="utf-8")
+        if claim.reference_text not in text:
+            failures.append(
+                "Ownership drift in "
+                f"{claim.document_path}: missing claim {claim.reference_text!r}",
+            )
+
+    return failures
+
+
+def find_suite_metadata_drift(
+    root: Path,
+    claims: Iterable[SuiteMetadataClaim] = SUITE_METADATA_CLAIMS,
+) -> list[str]:
+    failures: list[str] = []
+
+    for claim in claims:
+        file_path = root / claim.document_path
+        if not file_path.exists():
+            failures.append(f"Missing file: {claim.document_path}")
+            continue
+
+        text = file_path.read_text(encoding="utf-8")
+        if claim.reference_text not in text:
+            failures.append(
+                "Missing suite metadata claim in "
+                f"{claim.document_path}: {claim.reference_text!r}",
+            )
+            continue
+
+        missing_paths = [
+            expected_path
+            for expected_path in claim.expected_paths
+            if not path_target_exists(root, expected_path)
+        ]
+        if missing_paths:
+            failures.append(
+                "Suite metadata drift in "
+                f"{claim.document_path}: claim {claim.reference_text!r} expects existing paths "
+                f"{missing_paths!r}",
+            )
+
+    return failures
+
+
 def find_build_release_version_drift(root: Path) -> list[str]:
     failures: list[str] = []
 
@@ -220,6 +399,8 @@ def main() -> int:
     failures = [
         *find_router_link_drift(root),
         *find_path_claim_drift(root),
+        *find_ownership_claim_drift(root),
+        *find_suite_metadata_drift(root),
         *find_build_release_version_drift(root),
     ]
 

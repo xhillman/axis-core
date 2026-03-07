@@ -127,6 +127,7 @@ Treat these as mandatory checks before marking work complete:
 ## Process Ownership (Avoid Drift)
 
 - Keep execution mechanics in `dev/process-tasks.md` only.
+- Keep behavioral prompt constraints in `dev/spec-driven.md` only.
 - Keep routing guidance in `REPO_MAP.md` and `.agent/maps/*.md`.
 - Keep active implementation scope and acceptance boundaries in `dev/contracts/*.md`.
 - Update `REPO_MAP.md` and any affected `.agent/maps/*.md` in the same change whenever development makes router summaries or routing targets stale.

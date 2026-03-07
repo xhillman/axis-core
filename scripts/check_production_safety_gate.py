@@ -7,11 +7,13 @@ import argparse
 import sys
 from pathlib import Path
 
-
 REQUIRED_CHECKLIST_ITEMS = (
     "Rollback plan defined and tested",
     "Data migration safety plan validated (forward and rollback)",
-    "Runtime protections configured (timeouts, retries, rate limits, circuit breakers where applicable)",
+    (
+        "Runtime protections configured (timeouts, retries, rate limits, circuit breakers "
+        "where applicable)"
+    ),
     "Observability coverage confirmed (logs, metrics, traces, alerts)",
     "Security review completed (secrets handling, authz/authn, dependency risk)",
     "Performance/load validation completed for expected traffic profile",

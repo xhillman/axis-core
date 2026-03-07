@@ -32,6 +32,7 @@ tests/
 │   ├── models/
 │   │   ├── test_anthropic.py
 │   │   ├── test_openai.py
+│   │   ├── test_pricing.py
 │   │   ├── test_openai_responses.py
 │   │   └── test_openai_responses_integration.py
 │   ├── memory/

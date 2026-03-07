@@ -8,7 +8,6 @@ import re
 import sys
 from pathlib import Path
 
-
 ALLOWED_STATUSES = {"Active", "Superseded", "Archived"}
 
 # Conservative patterns for likely secrets/tokens.
