@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file.
   return annotations instead of hardcoding `{"type": "string"}`.
 - Split tool input/output schema inference into the internal `axis_core._tool_schema` module
   while preserving the public `axis_core.tool.generate_tool_schema()` and `@tool` behavior.
+- Split tool decorator plumbing, metadata types, and runtime primitives into focused internal
+  modules while keeping `axis_core.tool` as the stable import surface for users.
 - Centralized `AXIS_TELEMETRY_*` sink parsing in `axis_core.config` via typed
   `TelemetrySettings` resolution so agent construction now instantiates sinks from normalized
   settings instead of scattered env parsing rules.

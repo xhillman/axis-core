@@ -11,6 +11,7 @@ This module tests all components of the tool system including:
 """
 
 import asyncio
+import importlib
 import inspect
 import time
 from typing import Literal, NotRequired, TypedDict
@@ -377,6 +378,14 @@ class TestGenerateToolSchema:
 
 class TestToolDecorator:
     """Tests for @tool decorator."""
+
+    def test_public_module_keeps_runtime_primitives_importable(self):
+        """Public tool module should remain the compatibility import surface."""
+        tool_module = importlib.import_module("axis_core.tool")
+
+        assert tool_module.ToolContext is ToolContext
+        assert tool_module.ToolCallRecord is ToolCallRecord
+        assert tool_module.RateLimiter is RateLimiter
 
     def test_decorator_without_parentheses(self):
         """@tool should work without parentheses."""
