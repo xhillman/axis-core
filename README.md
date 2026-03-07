@@ -46,8 +46,8 @@ Requires Python 3.10+.
 
 ## Development
 
-For local test runs, prefer the repo wrapper so pytest uses the project's `.venv` instead of any
-globally installed plugins:
+For local test runs, use the repo wrapper so pytest runs from the project's `.venv`, disables
+third-party plugin autoload, and explicitly loads the async and coverage plugins this repo uses:
 
 ```bash
 ./scripts/test.sh
@@ -330,7 +330,7 @@ await client.set("axis:last_run", {"ok": True}, namespace="axis")
 
 ```bash
 pip install -e ".[dev,anthropic,openai]"
-pytest
+./scripts/test.sh
 ruff check axis_core tests --fix
 mypy axis_core --strict
 ```

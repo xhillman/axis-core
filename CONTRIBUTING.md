@@ -11,12 +11,16 @@ pip install -e ".[dev]"
 pip install -e ".[anthropic,openai,redis,full]"
 ```
 
+Run tests through `./scripts/test.sh ...`, not bare `pytest`. The wrapper uses the project
+`.venv`, disables third-party pytest plugin autoload, and explicitly loads the repo's required
+plugins.
+
 ## Quality Gates
 
 Run these before opening a PR:
 
 ```bash
-pytest
+./scripts/test.sh
 ruff check axis_core tests --fix
 mypy axis_core --strict
 ```
@@ -24,8 +28,8 @@ mypy axis_core --strict
 Useful variants:
 
 ```bash
-pytest -m "not slow"
-pytest --cov=axis_core
+./scripts/test.sh -m "not slow"
+./scripts/test.sh --cov=axis_core
 ```
 
 ## Testing Policy (Public Contracts)
@@ -69,7 +73,7 @@ If dependencies change:
 ```bash
 uv pip compile pyproject.toml -o requirements.lock
 pip install -r requirements.lock
-pytest tests/test_lockfile.py
+./scripts/test.sh tests/test_lockfile.py
 ```
 
 ## Security and Secrets

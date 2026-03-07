@@ -22,6 +22,9 @@ All notable changes to this project will be documented in this file.
 - Tightened adapter resolver validation so invalid `model`/`planner`/`memory` objects now fail
   fast with category-specific configuration guidance instead of being accepted until later runtime
   use.
+- Hardened `./scripts/test.sh` and contributor guidance so local test runs disable third-party
+  pytest plugin autoload while explicitly loading the repo's required plugins from the project
+  virtualenv.
 - Checkpoint plan serialization now preserves `PlanStep.retry_policy` so resumed runs keep the
   same per-step retry semantics as uninterrupted runs.
 - Resume remains backward compatible with legacy checkpoints that do not include

@@ -10,4 +10,8 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     exit 1
 fi
 
-exec "$VENV_PYTHON" -m pytest "$@"
+# Keep local runs isolated from unrelated globally auto-loaded pytest plugins while still loading
+# the plugins this repo expects from the project virtualenv.
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+
+exec "$VENV_PYTHON" -m pytest -p pytest_asyncio.plugin -p pytest_cov "$@"
