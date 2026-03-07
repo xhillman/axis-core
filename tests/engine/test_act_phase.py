@@ -261,6 +261,55 @@ class TestActPhaseContextWindowGuard:
         assert all(msg.get("role") != "tool" for msg in sent_messages)
         assert any(event.type == "context_window_pruned" for event in telemetry.events)
 
+    @pytest.mark.asyncio
+    async def test_step_context_window_settings_override_disabled_config(self) -> None:
+        model = MockModelAdapter()
+        telemetry = MockTelemetrySink()
+        messages = [
+            {"role": "user", "content": "request"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "name": "lookup", "arguments": {"q": "x"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "x" * 800},
+            {"role": "user", "content": "follow-up"},
+        ]
+
+        engine = LifecycleEngine(
+            model=model,
+            planner=_planner_with_model_payload(
+                {
+                    "messages": messages,
+                    "context_window_guard_enabled": True,
+                    "context_window_tokens": 120,
+                    "context_window_warn_tokens": 40,
+                    "context_window_block_tokens": 20,
+                    "context_pruning_enabled": True,
+                }
+            ),
+            telemetry=[telemetry],
+        )
+
+        result = await engine.execute(
+            input_text="test",
+            agent_id="act-step-guard-override",
+            budget=Budget(max_cycles=3),
+            config=_runtime_config(
+                context_window_guard_enabled=False,
+                context_window_tokens=1_000,
+                context_window_warn_tokens=1,
+                context_window_block_tokens=1,
+                context_pruning_enabled=False,
+            ),
+        )
+
+        assert result["success"] is True
+        assert len(model.calls) == 1
+        sent_messages = model.calls[0]["messages"]
+        assert all(msg.get("role") != "tool" for msg in sent_messages)
+        assert any(event.type == "context_window_pruned" for event in telemetry.events)
+
 
 class TestActPhaseRuntimeConfigResolution:
     """Contract 07 tests for step/config/default resolution in act phase."""

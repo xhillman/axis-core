@@ -20,6 +20,7 @@ from axis_core.context import (
     normalize_transcript_messages,
     prune_messages_for_context_window,
 )
+from axis_core.engine.phases.act_runtime_settings import ActRuntimeSettingsResolver
 from axis_core.errors import (
     AxisError,
     ErrorClass,
@@ -114,127 +115,6 @@ async def _sleep_for_retry(retry_policy: RetryPolicy, attempt: int) -> None:
         await asyncio.sleep(delay)
 
 
-def _coerce_bool(value: Any, *, default: bool = False) -> bool:
-    """Coerce booleans from bool/string config values."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
-def _coerce_positive_int(value: Any) -> int | None:
-    """Coerce a value to positive int, returning None when unset/invalid."""
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, str):
-        try:
-            parsed = int(value.strip())
-        except ValueError:
-            return None
-        return parsed if parsed > 0 else None
-    return None
-
-
-def _coerce_non_negative_int(value: Any) -> int | None:
-    """Coerce a value to non-negative int, returning None when unset/invalid."""
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, str):
-        try:
-            parsed = int(value.strip())
-        except ValueError:
-            return None
-        return parsed if parsed >= 0 else None
-    return None
-
-
-def _resolve_transcript_strict(ctx: RunContext, step: PlanStep) -> bool:
-    """Resolve strict transcript guard mode from step/config/default."""
-    if "transcript_strict" in step.payload:
-        return _coerce_bool(step.payload.get("transcript_strict"), default=False)
-
-    config_value = getattr(getattr(ctx, "config", None), "transcript_strict", None)
-    if config_value is not None:
-        return _coerce_bool(config_value, default=False)
-
-    return False
-
-
-def _resolve_max_tool_result_chars(ctx: RunContext, step: PlanStep) -> int | None:
-    """Resolve optional max chars guard for persisted tool-result messages."""
-    if "max_tool_result_chars" in step.payload:
-        return _coerce_positive_int(step.payload.get("max_tool_result_chars"))
-
-    config_value = getattr(getattr(ctx, "config", None), "max_tool_result_chars", None)
-    configured = _coerce_positive_int(config_value)
-    if configured is not None:
-        return configured
-
-    return None
-
-
-def _resolve_context_strategy(ctx: RunContext, step: PlanStep) -> str:
-    """Resolve transcript context strategy from step/config/default."""
-    source = "default"
-    raw_value: Any = None
-
-    if "context_strategy" in step.payload:
-        source = "step.payload"
-        raw_value = step.payload.get("context_strategy")
-    else:
-        config_value = getattr(getattr(ctx, "config", None), "context_strategy", None)
-        if config_value is not None:
-            source = "config.context_strategy"
-            raw_value = config_value
-
-    if isinstance(raw_value, str):
-        strategy = raw_value.strip().lower()
-        if strategy in {"smart", "full", "minimal"}:
-            return strategy
-
-    if raw_value is not None:
-        logger.warning(
-            "Invalid %s value for context strategy '%s'; falling back to 'smart'",
-            source,
-            raw_value,
-        )
-
-    return "smart"
-
-
-def _resolve_max_cycle_context(ctx: RunContext, step: PlanStep) -> int:
-    """Resolve max cycle history count from step/config/default."""
-    source = "default"
-    raw_value: Any = None
-
-    if "max_cycle_context" in step.payload:
-        source = "step.payload"
-        raw_value = step.payload.get("max_cycle_context")
-    else:
-        config_value = getattr(getattr(ctx, "config", None), "max_cycle_context", None)
-        if config_value is not None:
-            source = "config.max_cycle_context"
-            raw_value = config_value
-
-    parsed = _coerce_non_negative_int(raw_value)
-    if parsed is not None:
-        return parsed
-
-    if raw_value is not None:
-        logger.warning(
-            "Invalid %s value for max cycle context '%s'; falling back to 5",
-            source,
-            raw_value,
-        )
-
-    return 5
-
-
 def _resolve_tool_idempotency_key(
     ctx: RunContext,
     step: PlanStep,
@@ -257,84 +137,6 @@ def _resolve_tool_idempotency_key(
         step_id=step.id,
         tool_name=tool_name,
     )
-
-
-def _resolve_context_window_guard_enabled(ctx: RunContext, step: PlanStep) -> bool:
-    """Resolve context-window guard enablement from step/config/default."""
-    if "context_window_guard_enabled" in step.payload:
-        return _coerce_bool(
-            step.payload.get("context_window_guard_enabled"),
-            default=False,
-        )
-
-    config_value = getattr(
-        getattr(ctx, "config", None),
-        "context_window_guard_enabled",
-        None,
-    )
-    if config_value is not None:
-        return _coerce_bool(config_value, default=False)
-
-    return False
-
-
-def _resolve_context_window_tokens(ctx: RunContext, step: PlanStep) -> int | None:
-    """Resolve configured model context-window token budget."""
-    if "context_window_tokens" in step.payload:
-        return _coerce_positive_int(step.payload.get("context_window_tokens"))
-
-    config_value = getattr(getattr(ctx, "config", None), "context_window_tokens", None)
-    configured = _coerce_positive_int(config_value)
-    if configured is not None:
-        return configured
-
-    return None
-
-
-def _resolve_context_warn_tokens(ctx: RunContext, step: PlanStep) -> int:
-    """Resolve remaining-token warn threshold for context-window guard."""
-    if "context_window_warn_tokens" in step.payload:
-        return _coerce_positive_int(step.payload.get("context_window_warn_tokens")) or 32_000
-
-    config_value = getattr(
-        getattr(ctx, "config", None),
-        "context_window_warn_tokens",
-        None,
-    )
-    configured = _coerce_positive_int(config_value)
-    if configured is not None:
-        return configured
-
-    return 32_000
-
-
-def _resolve_context_block_tokens(ctx: RunContext, step: PlanStep) -> int:
-    """Resolve remaining-token block threshold for context-window guard."""
-    if "context_window_block_tokens" in step.payload:
-        return _coerce_positive_int(step.payload.get("context_window_block_tokens")) or 16_000
-
-    config_value = getattr(
-        getattr(ctx, "config", None),
-        "context_window_block_tokens",
-        None,
-    )
-    configured = _coerce_positive_int(config_value)
-    if configured is not None:
-        return configured
-
-    return 16_000
-
-
-def _resolve_context_pruning_enabled(ctx: RunContext, step: PlanStep) -> bool:
-    """Resolve context pruning enablement from step/config/default."""
-    if "context_pruning_enabled" in step.payload:
-        return _coerce_bool(step.payload.get("context_pruning_enabled"), default=False)
-
-    config_value = getattr(getattr(ctx, "config", None), "context_pruning_enabled", None)
-    if config_value is not None:
-        return _coerce_bool(config_value, default=False)
-
-    return False
 
 
 def _record_retry_attempt(ctx: RunContext, step: PlanStep) -> None:
@@ -1050,22 +852,26 @@ async def _execute_model_step(
     """
     from axis_core.engine.lifecycle import Phase
 
+    settings = ActRuntimeSettingsResolver(ctx, step)
+
     # Build messages if not explicitly provided
     if "messages" not in step.payload:
-        strategy = _resolve_context_strategy(ctx, step)
-        max_cycles = _resolve_max_cycle_context(ctx, step)
-        messages = ctx.state.build_messages(ctx, strategy=strategy, max_cycles=max_cycles)
+        message_context = settings.message_context()
+        messages = ctx.state.build_messages(
+            ctx,
+            strategy=message_context.strategy,
+            max_cycles=message_context.max_cycle_context,
+        )
     else:
         messages = step.payload["messages"]
 
-    strict_transcript_guard = _resolve_transcript_strict(ctx, step)
-    max_tool_result_chars = _resolve_max_tool_result_chars(ctx, step)
+    transcript_settings = settings.transcript()
     if isinstance(messages, list):
         try:
             messages = normalize_transcript_messages(
                 messages,
-                strict=strict_transcript_guard,
-                max_tool_result_chars=max_tool_result_chars,
+                strict=transcript_settings.strict,
+                max_tool_result_chars=transcript_settings.max_tool_result_chars,
             )
         except ValueError as exc:
             raise ModelError(
@@ -1078,14 +884,12 @@ async def _execute_model_step(
 
     system = step.payload.get("system", engine.system)
 
-    if isinstance(messages, list) and _resolve_context_window_guard_enabled(ctx, step):
-        context_window_tokens = _resolve_context_window_tokens(ctx, step)
-        if context_window_tokens is not None:
-            warn_tokens = _resolve_context_warn_tokens(ctx, step)
-            block_tokens = _resolve_context_block_tokens(ctx, step)
+    context_window_settings = settings.context_window()
+    if isinstance(messages, list) and context_window_settings.guard_enabled:
+        if context_window_settings.tokens is not None:
             guard = ContextWindowGuard(
-                warn_threshold_tokens=warn_tokens,
-                block_threshold_tokens=block_tokens,
+                warn_threshold_tokens=context_window_settings.warn_tokens,
+                block_threshold_tokens=context_window_settings.block_tokens,
             )
 
             estimated_tokens = await _estimate_tokens_for_messages(
@@ -1093,9 +897,15 @@ async def _execute_model_step(
                 messages=messages,
                 system=system,
             )
-            prune_enabled = _resolve_context_pruning_enabled(ctx, step)
-            target_tokens = max(1, context_window_tokens - max(warn_tokens, block_tokens))
-            if prune_enabled and estimated_tokens > target_tokens:
+            target_tokens = max(
+                1,
+                context_window_settings.tokens
+                - max(
+                    context_window_settings.warn_tokens,
+                    context_window_settings.block_tokens,
+                ),
+            )
+            if context_window_settings.pruning_enabled and estimated_tokens > target_tokens:
                 pruned_messages, pruned_count = prune_messages_for_context_window(
                     messages,
                     target_tokens=target_tokens,
@@ -1124,7 +934,7 @@ async def _execute_model_step(
 
             assessment = guard.evaluate(
                 estimated_tokens=estimated_tokens,
-                context_window_tokens=context_window_tokens,
+                context_window_tokens=context_window_settings.tokens,
             )
             if assessment.should_warn:
                 await engine._emit(
@@ -1137,7 +947,7 @@ async def _execute_model_step(
                         "estimated_tokens": assessment.estimated_tokens,
                         "context_window_tokens": assessment.context_window_tokens,
                         "remaining_tokens": assessment.remaining_tokens,
-                        "warn_threshold_tokens": warn_tokens,
+                        "warn_threshold_tokens": context_window_settings.warn_tokens,
                     },
                 )
 
@@ -1147,7 +957,7 @@ async def _execute_model_step(
                         "Context window guard blocked model call: "
                         f"estimated_tokens={assessment.estimated_tokens}, "
                         f"remaining_tokens={assessment.remaining_tokens}, "
-                        f"block_threshold={block_tokens}, "
+                        f"block_threshold={context_window_settings.block_tokens}, "
                         f"context_window_tokens={assessment.context_window_tokens}"
                     ),
                     model_id=getattr(engine.model, "model_id", "unknown"),
