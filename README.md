@@ -93,8 +93,18 @@ Axis tracks env vars by ownership so behavior is predictable:
 See [docs/reference/env-vars.md](docs/reference/env-vars.md) and `.env.example` for the full
 current matrix.
 
-If you keep defaults in a `.env` file, load that file in your application startup before importing
-`axis_core`, or export the variables in your shell environment.
+If you keep defaults in a `.env` file, call `bootstrap_environment()` once during application
+startup before reading `config` values or creating agents:
+
+```python
+from axis_core import Agent, bootstrap_environment
+
+bootstrap_environment()
+agent = Agent(...)
+```
+
+`bootstrap_environment()` loads `.env` via `python-dotenv`, refreshes config-owned defaults from
+the current process environment, and safely returns `False` if `python-dotenv` is unavailable.
 
 ## CLI Runtime
 

@@ -16,6 +16,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from importlib import import_module
 from typing import Any
 
 from axis_core._scalar_parsing import (
@@ -480,6 +481,10 @@ class Config:
 
     def __init__(self) -> None:
         """Initialize config from the current process environment."""
+        self._refresh_from_environment()
+
+    def _refresh_from_environment(self) -> None:
+        """Reload stored defaults and current values from the current process environment."""
         # Load from environment with defaults
         self._env_default_model = os.getenv(
             "AXIS_DEFAULT_MODEL", "claude-sonnet-4-20250514"
@@ -501,15 +506,7 @@ class Config:
             default=False,
         )
 
-        # Current values (can be overridden programmatically)
-        self.default_model = self._env_default_model
-        self.default_planner = self._env_default_planner
-        self.default_memory = self._env_default_memory
-        self.anthropic_api_key = self._env_anthropic_api_key
-        self.openai_api_key = self._env_openai_api_key
-        self.telemetry = self._env_telemetry
-        self.verbose = self._env_verbose
-        self.debug = self._env_debug
+        self.reset()
 
     def reset(self) -> None:
         """Reset all values to environment defaults."""
@@ -521,6 +518,45 @@ class Config:
         self.telemetry = self._env_telemetry
         self.verbose = self._env_verbose
         self.debug = self._env_debug
+
+
+def bootstrap_environment(
+    *,
+    dotenv_path: os.PathLike[str] | str | None = None,
+    override: bool = False,
+) -> bool:
+    """Explicitly load `.env` defaults and refresh config-owned environment values.
+
+    Call this once during application startup before reading `config` values or creating
+    `Agent` instances when you want `.env`-backed defaults.
+
+    Returns:
+        True when `python-dotenv` reports that it loaded a file, otherwise False.
+    """
+    try:
+        dotenv_module = import_module("dotenv")
+    except ModuleNotFoundError:
+        logger.warning(
+            "python-dotenv is unavailable; axis_core.bootstrap_environment() skipped .env loading"
+        )
+        return False
+
+    load_dotenv = getattr(dotenv_module, "load_dotenv", None)
+    if not callable(load_dotenv):
+        logger.warning(
+            "python-dotenv does not expose load_dotenv(); "
+            "axis_core.bootstrap_environment() skipped .env loading"
+        )
+        return False
+
+    loaded = bool(
+        load_dotenv(
+            dotenv_path=os.fspath(dotenv_path) if dotenv_path is not None else None,
+            override=override,
+        )
+    )
+    config._refresh_from_environment()
+    return loaded
 
 
 def coerce_context_strategy(value: str | None) -> str | None:
@@ -553,5 +589,6 @@ __all__ = [
     "coerce_non_negative_int",
     "coerce_context_strategy",
     "Config",
+    "bootstrap_environment",
     "config",
 ]

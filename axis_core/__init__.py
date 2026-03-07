@@ -38,6 +38,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "BudgetState": ("axis_core.budget", "BudgetState"),
     # Configuration
     "config": ("axis_core.config", "config"),
+    "bootstrap_environment": ("axis_core.config", "bootstrap_environment"),
     "Timeouts": ("axis_core.config", "Timeouts"),
     "RetryPolicy": ("axis_core.config", "RetryPolicy"),
     "RateLimits": ("axis_core.config", "RateLimits"),

@@ -21,6 +21,8 @@ All notable changes to this project will be documented in this file.
 
 - Removed implicit `.env` loading from package import so `import axis_core` and
   `import axis_core.config` now read only the current process environment.
+- Added explicit `bootstrap_environment()` startup helper so applications can opt back into
+  `.env`-backed config defaults without reintroducing import-time side effects.
 - Tightened adapter resolver validation so invalid `model`/`planner`/`memory` objects now fail
   fast with category-specific configuration guidance instead of being accepted until later runtime
   use.

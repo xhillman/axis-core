@@ -17,6 +17,7 @@ from axis_core.config import (
     RetryPolicy,
     RuntimeSettings,
     Timeouts,
+    bootstrap_environment,
     deep_merge,
     resolve_runtime_config,
     resolve_runtime_settings,
@@ -508,6 +509,73 @@ class TestConfigSingleton:
         _assert_import_does_not_call_dotenv("import axis_core.config")
 
 
+class TestEnvironmentBootstrap:
+    """Tests for the explicit `.env` bootstrap helper."""
+
+    def test_bootstrap_environment_refreshes_config_defaults(self, tmp_path: Path) -> None:
+        from axis_core.config import config
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "AXIS_DEFAULT_MODEL=dotenv-model",
+                    "AXIS_DEFAULT_PLANNER=dotenv-planner",
+                    "",
+                ]
+            )
+        )
+
+        class FakeDotenv:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str | None, bool]] = []
+
+            def load_dotenv(self, dotenv_path: str | None = None, override: bool = False) -> bool:
+                self.calls.append((dotenv_path, override))
+                if dotenv_path is None:
+                    return False
+
+                for line in Path(dotenv_path).read_text().splitlines():
+                    if "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    if override or key not in os.environ:
+                        os.environ[key] = value
+                return True
+
+        fake_dotenv = FakeDotenv()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("axis_core.config.import_module", return_value=fake_dotenv):
+                first_loaded = bootstrap_environment(dotenv_path=env_file)
+                assert first_loaded is True
+                assert config.default_model == "dotenv-model"
+                assert config.default_planner == "dotenv-planner"
+
+                second_loaded = bootstrap_environment(dotenv_path=env_file)
+                assert second_loaded is True
+                assert config.default_model == "dotenv-model"
+                assert config.default_planner == "dotenv-planner"
+
+        assert fake_dotenv.calls == [(str(env_file), False), (str(env_file), False)]
+
+    def test_bootstrap_environment_is_safe_when_python_dotenv_missing(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from axis_core.config import config
+
+        config.default_model = "manual-override"
+
+        with patch("axis_core.config.import_module", side_effect=ModuleNotFoundError):
+            with caplog.at_level("WARNING", logger="axis_core.config"):
+                loaded = bootstrap_environment()
+
+        assert loaded is False
+        assert config.default_model == "manual-override"
+        assert "python-dotenv is unavailable" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # ResolvedConfig tests (9.5)
 # ---------------------------------------------------------------------------
@@ -703,6 +771,13 @@ class TestConfigPackageExport:
         from axis_core.config import config as direct_config
 
         assert pkg_config is direct_config
+
+    def test_package_export_bootstrap_helper(self) -> None:
+        """Package export should expose the explicit env bootstrap helper."""
+        from axis_core import bootstrap_environment as package_bootstrap
+        from axis_core.config import bootstrap_environment as direct_bootstrap
+
+        assert package_bootstrap is direct_bootstrap
 
 
 class TestEnvExampleContract:
