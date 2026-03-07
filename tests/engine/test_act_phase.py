@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -226,7 +226,7 @@ class TestActPhaseContextWindowGuard:
     async def test_guard_prunes_tool_results_before_blocking(self) -> None:
         model = MockModelAdapter()
         telemetry = MockTelemetrySink()
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "user", "content": "request"},
             {
                 "role": "assistant",
@@ -265,7 +265,7 @@ class TestActPhaseContextWindowGuard:
     async def test_step_context_window_settings_override_disabled_config(self) -> None:
         model = MockModelAdapter()
         telemetry = MockTelemetrySink()
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "user", "content": "request"},
             {
                 "role": "assistant",
@@ -330,7 +330,7 @@ class TestActPhaseRuntimeConfigResolution:
             captured.append((strict, max_tool_result_chars))
             return messages
 
-        act_module = importlib.import_module("axis_core.engine.phases.act")
+        act_module = importlib.import_module("axis_core.engine.phases.act_model_execution")
         monkeypatch.setattr(act_module, "normalize_transcript_messages", fake_normalize)
 
         engine = LifecycleEngine(
@@ -369,7 +369,7 @@ class TestActPhaseRuntimeConfigResolution:
             captured.append((strict, max_tool_result_chars))
             return messages
 
-        act_module = importlib.import_module("axis_core.engine.phases.act")
+        act_module = importlib.import_module("axis_core.engine.phases.act_model_execution")
         monkeypatch.setattr(act_module, "normalize_transcript_messages", fake_normalize)
 
         engine = LifecycleEngine(
@@ -406,7 +406,7 @@ class TestActPhaseRuntimeConfigResolution:
             captured.append((strict, max_tool_result_chars))
             return messages
 
-        act_module = importlib.import_module("axis_core.engine.phases.act")
+        act_module = importlib.import_module("axis_core.engine.phases.act_model_execution")
         monkeypatch.setattr(act_module, "normalize_transcript_messages", fake_normalize)
         monkeypatch.setenv("AXIS_TRANSCRIPT_STRICT", "true")
         monkeypatch.setenv("AXIS_MAX_TOOL_RESULT_CHARS", "99")
@@ -532,7 +532,7 @@ class TestActPhaseToolIdempotency:
 
     @pytest.mark.asyncio
     async def test_retry_dedupes_side_effect_with_idempotency_key(self) -> None:
-        calls = {"attempts": 0, "side_effects": 0, "keys": []}
+        calls: dict[str, Any] = {"attempts": 0, "side_effects": 0, "keys": []}
 
         @tool(
             retry=RetryPolicy(
@@ -554,7 +554,7 @@ class TestActPhaseToolIdempotency:
             result = await run_idempotent(ctx, side_effect)
             if calls["attempts"] == 1:
                 raise RuntimeError("transient failure after side effect")
-            return result
+            return cast(str, result)
 
         engine = LifecycleEngine(
             model=MockModelAdapter(),
@@ -576,7 +576,7 @@ class TestActPhaseToolIdempotency:
 
     @pytest.mark.asyncio
     async def test_retry_duplicates_side_effect_when_idempotency_disabled(self) -> None:
-        calls = {"attempts": 0, "side_effects": 0, "keys": []}
+        calls: dict[str, Any] = {"attempts": 0, "side_effects": 0, "keys": []}
 
         @tool(
             retry=RetryPolicy(
@@ -598,7 +598,7 @@ class TestActPhaseToolIdempotency:
             result = await run_idempotent(ctx, side_effect)
             if calls["attempts"] == 1:
                 raise RuntimeError("transient failure after side effect")
-            return result
+            return cast(str, result)
 
         engine = LifecycleEngine(
             model=MockModelAdapter(),

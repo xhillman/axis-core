@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from axis_core.budget import Budget
+from axis_core.config import CacheConfig
 from axis_core.context import (
     NormalizedInput,
     Observation,
@@ -195,6 +196,58 @@ class TestModelResponseStorage:
         assert messages[0]["role"] == "user"
         assert messages[0]["content"] == "Hello"
 
+    @pytest.mark.asyncio
+    async def test_act_phase_cache_hit_keeps_cached_response_in_state(self) -> None:
+        """A cached model response should still populate state for downstream phases."""
+        cached_response = ModelResponse(
+            content="cached response",
+            tool_calls=(
+                ToolCall(id="call_1", name="search", arguments={"q": "cached"}),
+            ),
+            usage=UsageStats(input_tokens=10, output_tokens=20, total_tokens=30),
+            cost_usd=0.01,
+        )
+        mock_model = MockModel(responses=[cached_response])
+
+        planner = MockPlanner(
+            plans=[
+                Plan(
+                    id="plan-model-cache",
+                    goal="Use cache",
+                    steps=(
+                        PlanStep(id="model-1", type=StepType.MODEL, payload={}),
+                        PlanStep(id="model-2", type=StepType.MODEL, payload={}),
+                    ),
+                ),
+            ]
+        )
+
+        engine = LifecycleEngine(model=mock_model, planner=planner)
+
+        result = await engine.execute(
+            input_text="test input",
+            agent_id="test-agent",
+            budget=Budget(),
+            config=type(
+                "Config",
+                (),
+                {
+                    "cache": CacheConfig(
+                        enabled=True,
+                        model_responses=True,
+                        tool_results=False,
+                        ttl=60,
+                    )
+                },
+            )(),
+        )
+
+        assert len(mock_model.calls) == 1
+        assert result["state"].last_model_response is not None
+        assert result["state"].last_model_response.content == "cached response"
+        assert result["state"].last_model_response.tool_calls is not None
+        assert result["state"].last_model_response.tool_calls[0].id == "call_1"
+
 
 # =============================================================================
 # Observe phase tests
@@ -290,10 +343,10 @@ class TestSequentialPlannerModelSteps:
             input=observation.input,
             context={},
             attachments=[],
-            config=None,  # type: ignore[arg-type]
+            config=None,
             budget=Budget(),
             state=RunState(),
-            trace=None,  # type: ignore[arg-type]
+            trace=None,
             started_at=datetime.utcnow(),
             cycle_count=0,
             cancel_token=None,
@@ -331,10 +384,10 @@ class TestSequentialPlannerModelSteps:
             input=observation.input,
             context={},
             attachments=[],
-            config=None,  # type: ignore[arg-type]
+            config=None,
             budget=Budget(),
             state=RunState(),
-            trace=None,  # type: ignore[arg-type]
+            trace=None,
             started_at=datetime.utcnow(),
             cycle_count=1,
             cancel_token=None,
