@@ -8,10 +8,16 @@
 tests/
 ├── test_agent.py                          # Agent public API and runtime behavior
 ├── test_cli.py                            # CLI surface
+├── test_config.py                         # Config/env resolution and bootstrap behavior
 ├── test_context.py                        # Context package public behavior
+├── test_acceptance_contracts.py           # Contract-shape checker coverage
 ├── test_doc_policy_consistency.py         # Doc-policy checker coverage
 ├── test_lockfile.py                       # requirements.lock validity
-├── test_tool.py                           # @tool decorator, schema + policy behavior
+├── test_test_runner_script.py             # `./scripts/test.sh` wrapper behavior
+├── test_tool.py                           # Public tool facade, schema + policy behavior
+├── test_attachments.py / test_budget.py / test_cancel.py
+├── test_errors.py / test_package_exports.py / test_redaction.py
+├── test_result.py / test_session.py
 ├── engine/
 │   ├── test_lifecycle.py                  # LifecycleEngine.execute()
 │   ├── test_act_phase.py                  # Act-phase policies / runtime config
@@ -42,17 +48,14 @@ tests/
 │       ├── test_console.py
 │       ├── test_file.py
 │       └── test_callback.py
-├── budget/
-│   └── test_usage_normalization.py
-├── context/
-│   └── test_context_window_guard.py
+├── budget/                                # Budget normalization helpers
+├── context/                               # Context-window guard behavior
 ├── protocols/
 │   ├── test_memory.py
 │   ├── test_model.py
 │   ├── test_planner.py
 │   └── test_telemetry.py
-└── tool/
-    └── test_idempotency.py
+└── tool/                                  # Tool-runtime helpers such as idempotency
 ```
 
 ## Commands
@@ -82,7 +85,7 @@ project environment.
 **Public-contract testing only.** Allowed surfaces:
 - `Agent.run()`, `run_async()`, `stream()`, `stream_async()`
 - `LifecycleEngine.execute()`
-- Lifecycle phase functions (`initialize`, `observe`, `plan`, `act`, `evaluate`, `finalize`)
+- Documented lifecycle extension points on `LifecycleEngine` (`_initialize`, `_observe`, `_plan`, `_act`, `_evaluate`, `_finalize`)
 - Adapter protocol methods (`complete`, `stream`, `store`, `retrieve`, `plan`)
 - `resolve_adapter()` and registry APIs
 
@@ -101,3 +104,4 @@ project environment.
 - **New protocol method** → add tests in `tests/protocols/test_{protocol}.py`
 - **Bug fix** → write a failing public-contract test first
 - **Config option change** → cover it in `tests/test_config.py`
+- **Doc/process checker change** → cover it in `tests/test_doc_policy_consistency.py` or `tests/test_acceptance_contracts.py`

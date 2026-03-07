@@ -6,14 +6,19 @@
 
 | File | Responsibility |
 |---|---|
-| `axis_core/engine/lifecycle.py` | `LifecycleEngine`, loop orchestration, checkpoint/resume coordination |
+| `axis_core/engine/lifecycle.py` | `LifecycleEngine`, engine composition, execute/resume entrypoints |
 | `axis_core/engine/cycle_runner.py` | Dedicated observe/plan/act/evaluate cycle orchestration |
+| `axis_core/checkpoint.py` | Checkpoint envelopes, boundary validation, resume-state materialization |
 | `axis_core/engine/phases/initialize.py` | Create `RunContext`, validate config, emit telemetry |
 | `axis_core/engine/phases/observe.py` | Gather input, memory, and transcript context |
 | `axis_core/engine/phases/plan.py` | Planner invocation and plan validation |
-| `axis_core/engine/phases/act.py` | Tool execution, model execution, fallback, retry/policy enforcement |
+| `axis_core/engine/phases/act.py` | Step orchestration, dependency skipping, error wrapping |
+| `axis_core/engine/phases/act_tool_execution.py` | Tool execution policy, confirmation, retry, caching, idempotency |
+| `axis_core/engine/phases/act_model_execution.py` | Model execution, transcript normalization, tool manifests, fallback/caching |
+| `axis_core/engine/phases/act_runtime_settings.py` | Step → config → default act-phase setting resolution |
 | `axis_core/engine/phases/evaluate.py` | Stop/continue decisions and budget checks |
 | `axis_core/engine/phases/finalize.py` | Persist memory, flush telemetry, build `RunResult` |
+| `axis_core/engine/runtime_policy.py` | Shared timeout, retry, rate-limit, and cache services |
 | `axis_core/engine/registry.py` | Registries, lazy-factory helpers, entry-point loading |
 | `axis_core/engine/resolver.py` | String/name → adapter resolution |
 | `axis_core/engine/trace_collector.py` | Buffered trace accumulation |
@@ -24,32 +29,41 @@
 ```text
 Agent.run(prompt) / run_async(prompt)
   → Agent._build_engine() → LifecycleEngine
-  → LifecycleEngine.execute()
-      → initialize → observe → plan → act → evaluate
-      → repeat loop until done
+  → LifecycleEngine.execute() / resume()
+      → initialize or `prepare_checkpoint_resume()`
+      → LifecycleCycleRunner.run()
+          → observe → plan → act → evaluate
+          → repeat loop until done
       → finalize
 ```
 
 ## Ownership Boundaries
 
-- `lifecycle.py` owns engine composition, public execute/resume entrypoints, and checkpoint/resume coordination
-- `cycle_runner.py` owns the steady-state observe/plan/act/evaluate loop and finalize handoff
+- `lifecycle.py` owns engine composition, public execute/resume entrypoints, and phase delegation
+- `cycle_runner.py` owns the steady-state observe/plan/act/evaluate loop and phase-boundary checkpoint persistence
+- `checkpoint.py` owns checkpoint envelope validation and resume-state materialization
 - `phases/*.py` own individual phase behavior
-- `act.py` is the heaviest phase and still carries most execution policy logic
+- `act.py` owns step orchestration only; tool/model execution policy now lives in dedicated act services
+- `act_tool_execution.py` owns tool policy, destructive confirmation, retry, caching, and idempotency
+- `act_model_execution.py` owns transcript normalization, context-window policy, tool-manifest packaging, model invocation, and fallback-related behavior
+- `act_runtime_settings.py` owns step payload → resolved config → default precedence for act-phase knobs
 - `agent.py` owns public API surface, not engine internals
+- `runtime_policy.py` owns shared timeout, rate-limit, retry, and cache helpers used across the loop
 - `registry.py` owns adapter factories and plugin discovery
 
 ## Common Change Patterns
 
-- **Phase enum change** → update lifecycle dispatch and telemetry/checkpoint references
-- **Plan/PlanStep change** → update `protocols/planner.py`, `plan.py`, and `act.py`
+- **Phase enum or checkpoint boundary change** → update `lifecycle.py`, `cycle_runner.py`, `checkpoint.py`, and telemetry/checkpoint references
+- **Plan/PlanStep change** → update `protocols/planner.py`, `plan.py`, `act.py`, and any affected act-phase service
 - **RunContext change** → review all six phase modules
 - **Budget constraint change** → update `evaluate.py` and `budget.py`
-- **Model-calling change** → update `act.py` (`try_models_with_fallback`, `_execute_model_step`) and regression tests around transcript/tool-manifest handling
+- **Tool execution policy change** → update `act_tool_execution.py`, relevant config/runtime settings, and tool/engine regression tests
+- **Model-calling change** → update `act_model_execution.py`, `act_runtime_settings.py` when needed, and regression tests around transcript/tool-manifest handling
 
 ## Sharp Edges
 
-- `act.py` mixes tool execution and model execution and is still the largest lifecycle hotspot
+- Resume correctness depends on `checkpoint.py`, `lifecycle.py`, and `cycle_runner.py` agreeing on phase boundaries and saved state
+- `act.py` is now a coordinator over dedicated services; avoid re-introducing tool/model policy logic there
 - `lifecycle.py` and `cycle_runner.py` now split execution orchestration, so changes must preserve phase/checkpoint order across both files
 - `finalize()` persists memory in a non-fatal try/except path
 - Phase functions are standalone functions, not methods

@@ -6,7 +6,7 @@
 
 | File | Responsibility |
 |---|---|
-| `axis_core/config.py` | Config singleton, dataclasses, env loading, runtime defaults |
+| `axis_core/config.py` | Config singleton, runtime/telemetry settings resolution, explicit environment bootstrap |
 | `axis_core/budget.py` | `Budget` limits and `BudgetState` tracking |
 | `.env.example` | Supported environment variables |
 | `pyproject.toml` | Package metadata, optional extras, ruff/mypy config |
@@ -16,17 +16,21 @@
 
 `defaults → env vars → constructor args → runtime args`
 
-Implemented via `deep_merge()` in `config.py`.
+`deep_merge()` remains the recursive merge helper; run-start settings are normalized through
+`resolve_runtime_config()` and `resolve_runtime_settings()` in `config.py`.
 
 ## Config Dataclasses
 
 ```text
 Config (singleton: axis_core.config.config)
 ├── ResolvedConfig
+├── RuntimeSettings
+├── TelemetrySettings
 ├── Timeouts
 ├── RetryPolicy
 ├── RateLimits
-└── CacheConfig
+├── CacheConfig
+└── ToolPolicy
 ```
 
 ## Environment Variables (key groups)
@@ -39,8 +43,13 @@ Config (singleton: axis_core.config.config)
 | `AXIS_RETRY_*` | retry ceilings/backoff | `config.py` → `RetryPolicy` |
 | `AXIS_RATE_*` | request rate limits | `config.py` → `RateLimits` |
 | `AXIS_CACHE_*` | cache TTL and sizing | `config.py` → `CacheConfig` |
+| `AXIS_CONTEXT_*` | transcript, context-window, and pruning runtime knobs | `resolve_runtime_settings()` in `config.py` |
+| `AXIS_TELEMETRY_*` | sink type, file/callback target, buffering, redact/compact flags | `resolve_telemetry_settings()` in `config.py` |
 | `AXIS_TELEMETRY`, `AXIS_VERBOSE`, `AXIS_DEBUG` | runtime toggles | `config.py` |
 | `*_API_KEY` | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Model adapters directly |
+
+`.env` loading is opt-in via `bootstrap_environment()`; importing `axis_core` does not load
+dotenv files implicitly.
 
 ## Budget System
 
@@ -63,11 +72,14 @@ Budget(
 - **New env var** → add to `.env.example`, load it in `config.py`, and update user-facing docs/guidance
 - **New budget limit** → update `Budget`, `BudgetState`, and evaluation checks
 - **New timeout** → update `Timeouts` plus the relevant phase/runtime call site
+- **Telemetry env or sink default change** → update `resolve_telemetry_settings()`, the consuming agent construction path, and telemetry docs/examples
+- **Bootstrap/default-loading change** → update `bootstrap_environment()`, config tests, and README env guidance
 - **Dependency change** → update `pyproject.toml` and regenerate `requirements.lock`
 
 ## Sharp Edges
 
 - `config` is a module-level singleton
-- `Config` reads the current process environment only; `.env` loading must be explicit outside the package
+- `Config` reads the current process environment only; `.env` loading must be explicit via `bootstrap_environment()`
+- Telemetry sink env parsing lives in `config.py`, even though sink implementations live under `adapters/telemetry/`
 - `budget.py` stores data; enforcement lives in `evaluate.py`
 - `tests/test_lockfile.py` covers lockfile consistency

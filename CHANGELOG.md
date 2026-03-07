@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Refreshed `REPO_MAP.md` and the routed map docs to match the post-refactor ownership
+  boundaries for tool internals, lifecycle/checkpoint orchestration, config/bootstrap, and
+  telemetry settings, and removed the stale full-suite count from the router.
 - Enforced `output_schema` for public `Agent.run*`, `Agent.stream*`, and `Session.run*` APIs with
   final-output coercion/validation in core runtime.
 - Added schema-aware streaming events for `stream_async(..., output_schema=...)`:

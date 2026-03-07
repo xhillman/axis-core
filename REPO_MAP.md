@@ -17,12 +17,12 @@
 | Fix a bug in `Agent.run()` / `run_async()` / `stream()` / `stream_async()` | [engine_lifecycle.md](.agent/maps/engine_lifecycle.md), [domain_core.md](.agent/maps/domain_core.md) |
 | Change protocols / adapter interfaces | [protocols_types.md](.agent/maps/protocols_types.md) |
 | Modify error handling / shared types | [protocols_types.md](.agent/maps/protocols_types.md) |
-| Modify context, state, session, checkpoint, output schema, CLI, or tool behavior | [domain_core.md](.agent/maps/domain_core.md) |
+| Modify context, state, session, checkpoint, output schema, CLI, or tool behavior | [domain_core.md](.agent/maps/domain_core.md), [engine_lifecycle.md](.agent/maps/engine_lifecycle.md) |
 | Change budget / config / environment loading | [configs_env.md](.agent/maps/configs_env.md) |
 | Add/fix tests or run quality gates | [testing_quality.md](.agent/maps/testing_quality.md) |
 | Change build, packaging, CI, or release process | [build_release.md](.agent/maps/build_release.md) |
 | Update process docs, contracts, repo routing, agent guidance, or doc-policy checkers (`AGENTS.md`, `CLAUDE.md`, `REPO_MAP.md`, `.agent/maps/*.md`, `dev/process-tasks.md`, `dev/spec-driven.md`, `dev/contracts/*`, `scripts/check_*`) | [meta_process.md](.agent/maps/meta_process.md) |
-| Add telemetry / observability features | [adapters.md](.agent/maps/adapters.md), [engine_lifecycle.md](.agent/maps/engine_lifecycle.md) |
+| Add telemetry / observability features | [adapters.md](.agent/maps/adapters.md), [engine_lifecycle.md](.agent/maps/engine_lifecycle.md), [configs_env.md](.agent/maps/configs_env.md) |
 | Add a new tool or modify tool system | [domain_core.md](.agent/maps/domain_core.md), [engine_lifecycle.md](.agent/maps/engine_lifecycle.md) |
 | Work on examples or docs that depend on adapter/runtime behavior | [adapters.md](.agent/maps/adapters.md), [domain_core.md](.agent/maps/domain_core.md) |
 
@@ -30,10 +30,12 @@
 
 ```text
 Public entrypoints (`agent.py`, `cli.py`)
+    ↓ normalize construction/runtime through
+Agent + tool helper layers (`_agent_*`, `tool.py`, `_tool_*`)
     ↓ build and drive
-Execution engine (`engine/lifecycle.py` + `engine/phases/*.py`)
+Execution engine (`engine/lifecycle.py`, `engine/cycle_runner.py`, `checkpoint.py`, `engine/phases/*.py`)
     ↓ reads/writes shared runtime state
-Context/state package (`context/`, `session.py`, `checkpoint.py`, `result.py`)
+Context/state package (`context/`, `session.py`, `result.py`)
     ↓ calls interfaces from
 Protocols (`protocols/*.py`)
     ↓ implemented by
@@ -48,14 +50,21 @@ Adapters (`adapters/models|memory|planners|telemetry`)
 axis_core/
 ├── __init__.py          # Lazy-loaded public exports
 ├── agent.py             # Primary public API surface
+├── _agent_checkpoint.py # Agent-level checkpoint file helpers
+├── _agent_construction.py # Agent construction normalization + sink instantiation
+├── _agent_runtime.py    # Shared run/stream runtime helpers
+├── _tool_decorator.py   # @tool decorator implementation
+├── _tool_runtime.py     # ToolContext, idempotency, rate limiting
+├── _tool_schema.py      # Tool input/output schema inference
+├── _tool_types.py       # Tool metadata types
 ├── cli.py               # CLI entrypoint / command handling
 ├── budget.py            # Budget limits and mutable usage tracking
-├── checkpoint.py        # Checkpoint serialization helpers
+├── checkpoint.py        # Checkpoint envelopes + resume preparation
 ├── config.py            # Config/env loading and runtime defaults
 ├── output_schema.py     # Output-schema normalization + validation helpers
 ├── result.py            # RunResult, StreamEvent, RunStats
 ├── session.py           # Multi-turn session model + optimistic locking
-├── tool.py              # @tool decorator, manifests, schemas, policies
+├── tool.py              # Public compatibility facade over `_tool_*`
 ├── attachments.py       # Image/PDF attachment helpers
 ├── cancel.py            # Cooperative cancellation token
 ├── errors.py            # Error hierarchy
@@ -68,9 +77,10 @@ axis_core/
 ├── engine/
 │   ├── cycle_runner.py  # Steady-state observe / plan / act / evaluate orchestration
 │   ├── lifecycle.py     # LifecycleEngine + orchestration helpers
-│   ├── phases/          # initialize / observe / plan / act / evaluate / finalize
+│   ├── phases/          # phase modules + split act-phase execution/settings helpers
 │   ├── registry.py      # Adapter registries + lazy factory helpers
 │   ├── resolver.py      # String/name → adapter resolution
+│   ├── runtime_policy.py
 │   └── trace_collector.py
 ├── protocols/
 │   ├── model.py
@@ -85,8 +95,7 @@ axis_core/
 ├── loadouts/__init__.py # Loadout package placeholder
 └── testing/__init__.py  # Shared testing package placeholder
 
-tests/                   # Mirrors runtime areas: adapters, engine, protocols, context, tool, budget
-                         # Current suite collects 831 items / 3 skipped
+tests/                   # Mirrors runtime areas and includes doc-policy, acceptance, and tooling checks
 examples/                # Simple tool, planner, and synaptic-session examples
 docs/                    # Getting-started and examples docs
 scripts/                 # Acceptance/doc-policy/memory/safety checkers + release scripts

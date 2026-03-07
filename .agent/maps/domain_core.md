@@ -7,13 +7,20 @@
 | File | Responsibility |
 |---|---|
 | `axis_core/agent.py` | `Agent` public API, sync/async entrypoints, engine construction |
+| `axis_core/_agent_construction.py` | Constructor normalization, config coercion, telemetry sink instantiation |
+| `axis_core/_agent_runtime.py` | Shared run/stream result handling, timeout/failure helpers |
+| `axis_core/_agent_checkpoint.py` | Agent-facing checkpoint persistence/loading helpers |
 | `axis_core/context/__init__.py` | Public context exports |
 | `axis_core/context/types.py` | `RunContext`, `RunState`, `CycleState`, phase result types |
 | `axis_core/context/transcript.py` | Transcript repair, pruning, context-window helpers |
 | `axis_core/context/codec.py` | Context serialization helpers |
 | `axis_core/session.py` | `Session`, `Message`, optimistic locking, persistence helpers |
-| `axis_core/tool.py` | `@tool`, manifests, schema generation, policy metadata |
-| `axis_core/checkpoint.py` | Checkpoint payload/model helpers |
+| `axis_core/tool.py` | Public tool API facade over the internal `_tool_*` modules |
+| `axis_core/_tool_decorator.py` | `@tool` metadata attachment and manifest creation |
+| `axis_core/_tool_schema.py` | Tool input/output schema inference |
+| `axis_core/_tool_runtime.py` | `ToolContext`, idempotency helpers, `RateLimiter` |
+| `axis_core/_tool_types.py` | `ToolManifest`, `Capability`, `ToolCallRecord` |
+| `axis_core/checkpoint.py` | Checkpoint envelopes, phase-boundary validation, resume-state preparation |
 | `axis_core/output_schema.py` | Output-schema normalization/validation |
 | `axis_core/cli.py` | CLI surface over the public API |
 | `axis_core/attachments.py` | `Image`, `PDF`, `Attachment` helpers |
@@ -29,8 +36,8 @@ Agent(
     memory="ephemeral",
     planner="sequential",
     budget=Budget(...),
-    system_prompt="...",
-    fallback_models=[...],
+    system="...",
+    fallback=[...],
     telemetry=[...],
 )
 ```
@@ -39,8 +46,9 @@ Sync entrypoints: `run()` and `stream()`
 
 Async entrypoints: `run_async()` and `stream_async()`
 
-**Internal flow:** `Agent._build_engine()` resolves adapters and runtime settings, creates a
-`LifecycleEngine`, then delegates execution.
+**Internal flow:** `Agent.__init__()` normalizes constructor inputs through
+`_agent_construction.py`, `run*`/`stream*` share execution helpers in `_agent_runtime.py`, and
+`_build_engine()` is the final `LifecycleEngine` assembly point.
 
 ## Tool System
 
@@ -54,6 +62,7 @@ def my_tool(query: str, limit: int = 10) -> str:
 - `ToolManifest` is generated from type hints + docstring
 - `ToolContext` supports dependency injection for tools that request it
 - `Capability` models destructive/privileged tool behavior
+- `axis_core/tool.py` is the stable import surface; implementation now lives in `_tool_*` modules
 
 ## Context & State
 
@@ -71,15 +80,17 @@ def my_tool(query: str, limit: int = 10) -> str:
 
 ## Common Change Patterns
 
-- **Agent constructor change** → update `agent.py`, `config.py`, and user-facing docs/examples
-- **Tool schema/policy change** → update `tool.py`, model adapter conversion paths, and tool tests
+- **Agent constructor/runtime change** → update `agent.py`, the relevant `_agent_*.py` helper, `config.py`, and user-facing docs/examples
+- **Tool schema/decorator/runtime change** → start at `tool.py`, then update the owning `_tool_*.py` module, model adapter conversion paths, and tool tests
 - **Session/message change** → update all memory adapters' session methods
+- **Checkpoint/resume payload change** → update `checkpoint.py`, `agent.py`, and lifecycle resume integration
 - **RunContext or transcript change** → update all lifecycle phases plus checkpoint/serialization paths
 - **CLI change** → update `axis_core/cli.py` and `tests/test_cli.py`
 
 ## Sharp Edges
 
-- `agent.py` is large and mixes public API with engine construction; keep public behavior stable
+- `agent.py` is still the public facade, but construction/runtime/checkpoint helpers now live in `_agent_*`; keep those boundaries aligned instead of re-inlining logic
+- `tool.py` is a facade; route implementation changes into the matching `_tool_*` module instead of growing the facade
 - `RunState` in `context/types.py` is append-only and exposes tuples over private lists
 - `session.py` optimistic locking raises `ConcurrencyError` on version mismatch
 - `attachments.py` uses eager loading at construction time
