@@ -19,6 +19,8 @@ All notable changes to this project will be documented in this file.
 - Centralized `AXIS_TELEMETRY_*` sink parsing in `axis_core.config` via typed
   `TelemetrySettings` resolution so agent construction now instantiates sinks from normalized
   settings instead of scattered env parsing rules.
+- Moved telemetry-settings resolution ownership into `Agent.__init__` so explicit sink lists
+  bypass env-derived defaults and construction helpers only instantiate from resolved settings.
 
 ### Fixed
 

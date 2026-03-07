@@ -44,9 +44,11 @@ from axis_core.config import (
     RateLimits,
     ResolvedConfig,
     RetryPolicy,
+    TelemetrySettings,
     Timeouts,
     ToolPolicy,
     resolve_runtime_config,
+    resolve_telemetry_settings,
 )
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.engine.registry import memory_registry
@@ -177,6 +179,10 @@ class Agent:
         checkpoint: bool = False,
         checkpoint_dir: str = "./checkpoints",
     ) -> None:
+        telemetry_settings: TelemetrySettings | None = None
+        if telemetry is True:
+            telemetry_settings = resolve_telemetry_settings()
+
         construction = build_agent_construction(
             tools=tools,
             system=system,
@@ -192,6 +198,7 @@ class Agent:
             cache=cache,
             tool_policy=tool_policy,
             telemetry=telemetry,
+            telemetry_settings=telemetry_settings,
             verbose=verbose,
             auth=auth,
             confirmation_handler=confirmation_handler,

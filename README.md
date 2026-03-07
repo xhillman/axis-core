@@ -82,8 +82,8 @@ Axis tracks env vars by ownership so behavior is predictable:
   `AXIS_DEFAULT_MEMORY`, `AXIS_DEFAULT_PLANNER`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   `AXIS_TELEMETRY`, `AXIS_VERBOSE`, `AXIS_DEBUG`
 - Run-start runtime config (resolved by `axis_core.config.resolve_runtime_settings()` and
-  `axis_core.config.resolve_telemetry_settings()` into typed runtime settings before agent
-  construction): `AXIS_TRANSCRIPT_STRICT`, `AXIS_MAX_TOOL_RESULT_CHARS`,
+  `axis_core.config.resolve_telemetry_settings()` into typed runtime settings that `Agent`
+  consumes before sink instantiation): `AXIS_TRANSCRIPT_STRICT`, `AXIS_MAX_TOOL_RESULT_CHARS`,
   `AXIS_CONTEXT_STRATEGY`, `AXIS_MAX_CYCLE_CONTEXT`, `AXIS_CONTEXT_GUARD_ENABLED`,
   `AXIS_CONTEXT_WINDOW_TOKENS`, `AXIS_CONTEXT_GUARD_WARN_TOKENS`,
   `AXIS_CONTEXT_GUARD_BLOCK_TOKENS`, `AXIS_CONTEXT_PRUNE_ENABLED`,

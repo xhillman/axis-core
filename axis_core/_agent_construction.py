@@ -16,7 +16,6 @@ from axis_core.config import (
     Timeouts,
     ToolPolicy,
     config,
-    resolve_telemetry_settings,
 )
 
 logger = logging.getLogger("axis_core.agent")
@@ -128,6 +127,7 @@ def build_agent_construction(
     cache: dict[str, Any] | CacheConfig | None,
     tool_policy: dict[str, Any] | ToolPolicy | None,
     telemetry: bool | list[Any],
+    telemetry_settings: TelemetrySettings | None,
     verbose: bool,
     auth: dict[str, dict[str, Any]] | None,
     confirmation_handler: ConfirmationHandler | None,
@@ -154,7 +154,10 @@ def build_agent_construction(
             stacklevel=3,
         )
 
-    telemetry_enabled, telemetry_sinks = resolve_telemetry(telemetry)
+    telemetry_enabled, telemetry_sinks = resolve_telemetry(
+        telemetry,
+        telemetry_settings=telemetry_settings,
+    )
 
     return AgentConstruction(
         system=system,
@@ -198,16 +201,20 @@ def build_tool_registry(tools: list[Callable[..., Any]] | None) -> dict[str, Any
     return registry
 
 
-def resolve_telemetry(telemetry: bool | list[Any]) -> tuple[bool, list[Any]]:
+def resolve_telemetry(
+    telemetry: bool | list[Any],
+    *,
+    telemetry_settings: TelemetrySettings | None,
+) -> tuple[bool, list[Any]]:
     """Resolve constructor telemetry settings into enabled state and sinks."""
     if isinstance(telemetry, bool):
-        return telemetry, resolve_telemetry_sinks() if telemetry else []
+        return telemetry, resolve_telemetry_sinks(telemetry_settings) if telemetry else []
     return True, telemetry
 
 
-def resolve_telemetry_sinks(settings: TelemetrySettings | None = None) -> list[Any]:
+def resolve_telemetry_sinks(settings: TelemetrySettings | None) -> list[Any]:
     """Instantiate telemetry sinks from typed settings."""
-    resolved = settings or resolve_telemetry_settings()
+    resolved = settings or TelemetrySettings()
 
     if resolved.sink_type == "none":
         return []

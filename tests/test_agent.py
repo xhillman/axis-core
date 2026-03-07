@@ -250,6 +250,55 @@ class TestAgentConstructor:
         )
         assert len(agent._telemetry_sinks) == 1
 
+    def test_construction_telemetry_true_uses_agent_resolved_settings(self) -> None:
+        """Test that Agent resolves telemetry settings before construction."""
+        import os
+        from unittest.mock import patch
+
+        import axis_core.agent as agent_module
+        from axis_core.config import TelemetrySettings
+        from axis_core.protocols.telemetry import BufferMode
+
+        resolved_settings = TelemetrySettings(
+            sink_type="none",
+            redact=True,
+            compact=False,
+            file_path="./axis_trace.jsonl",
+            callback_ref=None,
+            buffer_mode=BufferMode.BATCHED,
+            batch_size=100,
+        )
+
+        with patch.dict(os.environ, {"AXIS_TELEMETRY_SINK": "console"}):
+            with patch.object(
+                agent_module,
+                "resolve_telemetry_settings",
+                return_value=resolved_settings,
+            ) as mock_resolve:
+                agent = Agent(model=MockModel(), planner=MockPlanner(), telemetry=True)
+
+        assert agent._telemetry_sinks == []
+        assert agent._telemetry_enabled is True
+        mock_resolve.assert_called_once_with()
+
+    def test_construction_with_explicit_telemetry_sinks_skips_resolved_defaults(self) -> None:
+        """Test that explicit telemetry sinks bypass resolved telemetry defaults."""
+        from unittest.mock import patch
+
+        import axis_core.agent as agent_module
+
+        sink = MockTelemetrySink()
+        with patch.object(agent_module, "resolve_telemetry_settings") as mock_resolve:
+            agent = Agent(
+                model=MockModel(),
+                planner=MockPlanner(),
+                telemetry=[sink],
+            )
+
+        assert agent._telemetry_sinks == [sink]
+        assert agent._telemetry_enabled is True
+        mock_resolve.assert_not_called()
+
     def test_construction_telemetry_true(self) -> None:
         """Test that telemetry=True resolves sinks from AXIS_TELEMETRY_SINK env var."""
         import os
