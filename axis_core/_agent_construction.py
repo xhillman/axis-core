@@ -2,23 +2,22 @@ from __future__ import annotations
 
 import importlib
 import logging
-import os
 import warnings
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from axis_core._scalar_parsing import coerce_env_flag
 from axis_core.budget import Budget
 from axis_core.config import (
     CacheConfig,
     RateLimits,
     RetryPolicy,
+    TelemetrySettings,
     Timeouts,
     ToolPolicy,
     config,
+    resolve_telemetry_settings,
 )
-from axis_core.protocols.telemetry import BufferMode
 
 logger = logging.getLogger("axis_core.agent")
 
@@ -206,62 +205,34 @@ def resolve_telemetry(telemetry: bool | list[Any]) -> tuple[bool, list[Any]]:
     return True, telemetry
 
 
-def resolve_telemetry_sinks() -> list[Any]:
-    """Resolve telemetry sinks from environment variables."""
-    sink_type = os.getenv("AXIS_TELEMETRY_SINK", "none").lower()
-    redact = coerce_env_flag(os.getenv("AXIS_TELEMETRY_REDACT"), default=True)
+def resolve_telemetry_sinks(settings: TelemetrySettings | None = None) -> list[Any]:
+    """Instantiate telemetry sinks from typed settings."""
+    resolved = settings or resolve_telemetry_settings()
 
-    def parse_buffer_mode(raw: str) -> BufferMode:
-        normalized = raw.strip().lower()
-        for mode in BufferMode:
-            if mode.value == normalized:
-                return mode
-        logger.warning(
-            "Unknown AXIS_TELEMETRY_BUFFER_MODE value '%s'. "
-            "Using 'batched'.",
-            raw,
-        )
-        return BufferMode.BATCHED
-
-    if sink_type == "none":
+    if resolved.sink_type == "none":
         return []
 
-    if sink_type == "console":
+    if resolved.sink_type == "console":
         from axis_core.adapters.telemetry.console import ConsoleSink
 
-        compact = coerce_env_flag(os.getenv("AXIS_TELEMETRY_COMPACT"), default=False)
-        return [ConsoleSink(compact=compact, redact=redact)]
+        return [ConsoleSink(compact=resolved.compact, redact=resolved.redact)]
 
-    if sink_type == "file":
+    if resolved.sink_type == "file":
         from axis_core.adapters.telemetry.file import FileSink
-
-        file_path = os.getenv("AXIS_TELEMETRY_FILE", "./axis_trace.jsonl")
-        raw_batch_size = os.getenv("AXIS_TELEMETRY_BATCH_SIZE", "100")
-        buffer_mode = parse_buffer_mode(
-            os.getenv("AXIS_TELEMETRY_BUFFER_MODE", "batched")
-        )
-        try:
-            batch_size = int(raw_batch_size)
-        except ValueError:
-            logger.warning(
-                "Invalid AXIS_TELEMETRY_BATCH_SIZE '%s'. Using 100.",
-                raw_batch_size,
-            )
-            batch_size = 100
 
         return [
             FileSink(
-                path=file_path,
-                batch_size=batch_size,
-                buffering=buffer_mode,
-                redact=redact,
+                path=resolved.file_path,
+                batch_size=resolved.batch_size,
+                buffering=resolved.buffer_mode,
+                redact=resolved.redact,
             )
         ]
 
-    if sink_type == "callback":
+    if resolved.sink_type == "callback":
         from axis_core.adapters.telemetry.callback import CallbackSink
 
-        callback_ref = os.getenv("AXIS_TELEMETRY_CALLBACK", "").strip()
+        callback_ref = resolved.callback_ref
         if not callback_ref:
             logger.warning(
                 "AXIS_TELEMETRY_SINK=callback requires AXIS_TELEMETRY_CALLBACK "
@@ -304,11 +275,11 @@ def resolve_telemetry_sinks() -> list[Any]:
             )
             return []
 
-        return [CallbackSink(handler=callback, redact=redact)]
+        return [CallbackSink(handler=callback, redact=resolved.redact)]
 
     logger.warning(
         "Unknown AXIS_TELEMETRY_SINK value: '%s'. "
         "Supported values: console, file, callback, none. Using no telemetry.",
-        sink_type,
+        resolved.sink_type,
     )
     return []

@@ -16,12 +16,15 @@ from axis_core.config import (
     ResolvedConfig,
     RetryPolicy,
     RuntimeSettings,
+    TelemetrySettings,
     Timeouts,
     bootstrap_environment,
     deep_merge,
     resolve_runtime_config,
     resolve_runtime_settings,
+    resolve_telemetry_settings,
 )
+from axis_core.protocols.telemetry import BufferMode
 
 _CONFIG_OWNED_ENV_VARS = {
     "AXIS_DEFAULT_MODEL",
@@ -742,6 +745,69 @@ class TestRuntimeSettings:
         assert resolved.context_window_warn_tokens == 6000
         assert resolved.context_window_block_tokens == 3000
         assert resolved.context_pruning_enabled is True
+
+
+class TestTelemetrySettings:
+    """Tests for the telemetry runtime settings boundary."""
+
+    def test_defaults_without_env_overrides(self) -> None:
+        settings = resolve_telemetry_settings({})
+
+        assert settings == TelemetrySettings(
+            sink_type="none",
+            redact=True,
+            compact=False,
+            file_path="./axis_trace.jsonl",
+            callback_ref=None,
+            buffer_mode=BufferMode.BATCHED,
+            batch_size=100,
+        )
+
+    def test_reads_runtime_env_values(self) -> None:
+        settings = resolve_telemetry_settings(
+            {
+                "AXIS_TELEMETRY_SINK": "callback",
+                "AXIS_TELEMETRY_REDACT": "false",
+                "AXIS_TELEMETRY_COMPACT": "true",
+                "AXIS_TELEMETRY_FILE": "/tmp/trace.jsonl",
+                "AXIS_TELEMETRY_CALLBACK": "module_name:handler",
+                "AXIS_TELEMETRY_BUFFER_MODE": "phase",
+                "AXIS_TELEMETRY_BATCH_SIZE": "25",
+            }
+        )
+
+        assert settings == TelemetrySettings(
+            sink_type="callback",
+            redact=False,
+            compact=True,
+            file_path="/tmp/trace.jsonl",
+            callback_ref="module_name:handler",
+            buffer_mode=BufferMode.PHASE,
+            batch_size=25,
+        )
+
+    def test_invalid_values_fall_back_with_warnings(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level("WARNING", logger="axis_core.config"):
+            settings = resolve_telemetry_settings(
+                {
+                    "AXIS_TELEMETRY_SINK": "broken",
+                    "AXIS_TELEMETRY_CALLBACK": "not-a-ref",
+                    "AXIS_TELEMETRY_BUFFER_MODE": "unknown",
+                    "AXIS_TELEMETRY_BATCH_SIZE": "zero",
+                }
+            )
+
+        assert settings.sink_type == "none"
+        assert settings.callback_ref is None
+        assert settings.buffer_mode is BufferMode.BATCHED
+        assert settings.batch_size == 100
+        assert "Invalid AXIS_TELEMETRY_SINK='broken'" in caplog.text
+        assert "Invalid AXIS_TELEMETRY_CALLBACK='not-a-ref'" in caplog.text
+        assert "Invalid AXIS_TELEMETRY_BUFFER_MODE='unknown'" in caplog.text
+        assert "Invalid AXIS_TELEMETRY_BATCH_SIZE='zero'" in caplog.text
 
 
 # ---------------------------------------------------------------------------

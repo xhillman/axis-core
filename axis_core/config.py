@@ -26,6 +26,7 @@ from axis_core._scalar_parsing import (
     coerce_positive_int,
     parse_rate_limit,
 )
+from axis_core.protocols.telemetry import BufferMode
 
 logger = logging.getLogger("axis_core.config")
 
@@ -33,6 +34,10 @@ _DEFAULT_CONTEXT_STRATEGY = "smart"
 _DEFAULT_MAX_CYCLE_CONTEXT = 5
 _DEFAULT_CONTEXT_WARN_TOKENS = 32_000
 _DEFAULT_CONTEXT_BLOCK_TOKENS = 16_000
+_DEFAULT_TELEMETRY_SINK_TYPE = "none"
+_DEFAULT_TELEMETRY_FILE_PATH = "./axis_trace.jsonl"
+_DEFAULT_TELEMETRY_BATCH_SIZE = 100
+_SUPPORTED_TELEMETRY_SINK_TYPES = frozenset({"none", "console", "file", "callback"})
 
 
 @dataclass(frozen=True)
@@ -342,6 +347,19 @@ class RuntimeSettings:
     context_pruning_enabled: bool = False
 
 
+@dataclass(frozen=True)
+class TelemetrySettings:
+    """Typed telemetry sink settings resolved from environment variables."""
+
+    sink_type: str = _DEFAULT_TELEMETRY_SINK_TYPE
+    redact: bool = True
+    compact: bool = False
+    file_path: str = _DEFAULT_TELEMETRY_FILE_PATH
+    callback_ref: str | None = None
+    buffer_mode: BufferMode = BufferMode.BATCHED
+    batch_size: int = _DEFAULT_TELEMETRY_BATCH_SIZE
+
+
 def resolve_runtime_settings(
     environ: Mapping[str, str] | None = None,
 ) -> RuntimeSettings:
@@ -401,6 +419,117 @@ def resolve_runtime_settings(
             env.get("AXIS_CONTEXT_PRUNE_ENABLED"),
             default=False,
         ),
+    )
+
+
+def coerce_telemetry_sink_type(value: str | None) -> str | None:
+    """Validate supported telemetry sink identifiers."""
+    if value is None:
+        return None
+    candidate = value.strip().lower()
+    if candidate in _SUPPORTED_TELEMETRY_SINK_TYPES:
+        return candidate
+    return None
+
+
+def coerce_buffer_mode(value: str | None) -> BufferMode | None:
+    """Validate supported telemetry buffer modes."""
+    if value is None:
+        return None
+    candidate = value.strip().lower()
+    for mode in BufferMode:
+        if mode.value == candidate:
+            return mode
+    return None
+
+
+def coerce_callback_ref(value: str | None) -> str | None:
+    """Normalize callback refs to `module:function` or None."""
+    if value is None:
+        return None
+
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if ":" not in candidate:
+        return None
+
+    module_path, attr_name = candidate.split(":", 1)
+    if not module_path or not attr_name:
+        return None
+    return candidate
+
+
+def resolve_telemetry_settings(
+    environ: Mapping[str, str] | None = None,
+) -> TelemetrySettings:
+    """Resolve telemetry env vars into a typed settings object."""
+    env = os.environ if environ is None else environ
+
+    raw_sink_type = env.get("AXIS_TELEMETRY_SINK")
+    sink_type = coerce_telemetry_sink_type(raw_sink_type)
+    if raw_sink_type is not None and sink_type is None:
+        logger.warning(
+            "Invalid AXIS_TELEMETRY_SINK='%s'; falling back to '%s'",
+            raw_sink_type,
+            _DEFAULT_TELEMETRY_SINK_TYPE,
+        )
+        sink_type = _DEFAULT_TELEMETRY_SINK_TYPE
+    if sink_type is None:
+        sink_type = _DEFAULT_TELEMETRY_SINK_TYPE
+
+    raw_callback_ref = env.get("AXIS_TELEMETRY_CALLBACK")
+    callback_ref = coerce_callback_ref(raw_callback_ref)
+    if raw_callback_ref is not None and raw_callback_ref.strip() and callback_ref is None:
+        logger.warning(
+            "Invalid AXIS_TELEMETRY_CALLBACK='%s'; expected 'module:function'. "
+            "Ignoring callback target.",
+            raw_callback_ref,
+        )
+
+    raw_buffer_mode = env.get("AXIS_TELEMETRY_BUFFER_MODE")
+    buffer_mode = coerce_buffer_mode(raw_buffer_mode)
+    if raw_buffer_mode is not None and buffer_mode is None:
+        logger.warning(
+            "Invalid AXIS_TELEMETRY_BUFFER_MODE='%s'; falling back to '%s'",
+            raw_buffer_mode,
+            BufferMode.BATCHED.value,
+        )
+        buffer_mode = BufferMode.BATCHED
+    if buffer_mode is None:
+        buffer_mode = BufferMode.BATCHED
+
+    raw_batch_size = env.get("AXIS_TELEMETRY_BATCH_SIZE")
+    batch_size = coerce_positive_int(raw_batch_size)
+    if raw_batch_size is not None and batch_size is None:
+        logger.warning(
+            "Invalid AXIS_TELEMETRY_BATCH_SIZE='%s'; falling back to %s",
+            raw_batch_size,
+            _DEFAULT_TELEMETRY_BATCH_SIZE,
+        )
+        batch_size = _DEFAULT_TELEMETRY_BATCH_SIZE
+    if batch_size is None:
+        batch_size = _DEFAULT_TELEMETRY_BATCH_SIZE
+
+    raw_file_path = env.get("AXIS_TELEMETRY_FILE")
+    file_path = raw_file_path.strip() if raw_file_path is not None else ""
+    if raw_file_path is not None and not file_path:
+        logger.warning(
+            "Invalid AXIS_TELEMETRY_FILE='%s'; falling back to '%s'",
+            raw_file_path,
+            _DEFAULT_TELEMETRY_FILE_PATH,
+        )
+    if not file_path:
+        file_path = _DEFAULT_TELEMETRY_FILE_PATH
+
+    return TelemetrySettings(
+        sink_type=sink_type,
+        redact=coerce_env_flag(env.get("AXIS_TELEMETRY_REDACT"), default=True),
+        compact=coerce_env_flag(env.get("AXIS_TELEMETRY_COMPACT"), default=False),
+        file_path=file_path,
+        callback_ref=callback_ref,
+        buffer_mode=buffer_mode,
+        batch_size=batch_size,
     )
 
 
@@ -582,12 +711,17 @@ __all__ = [
     "deep_merge",
     "ResolvedConfig",
     "RuntimeSettings",
+    "TelemetrySettings",
     "resolve_runtime_settings",
+    "resolve_telemetry_settings",
     "resolve_runtime_config",
     "coerce_bool",
     "coerce_positive_int",
     "coerce_non_negative_int",
     "coerce_context_strategy",
+    "coerce_telemetry_sink_type",
+    "coerce_buffer_mode",
+    "coerce_callback_ref",
     "Config",
     "bootstrap_environment",
     "config",
