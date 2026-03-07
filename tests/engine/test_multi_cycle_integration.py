@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from axis_core.budget import Budget
+from axis_core.config import Timeouts, resolve_runtime_config
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.protocols.model import ModelChunk, ModelResponse, ToolCall, UsageStats
 
@@ -291,3 +292,48 @@ async def test_invalid_max_cycle_context_runtime_config_falls_back() -> None:
 
     assert result["success"] is True
     assert mock_model.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_resolved_runtime_config_boundary_applies_env_context_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run-start config resolution should carry env-owned context settings into act."""
+    import axis_core.adapters.planners  # noqa: F401
+
+    monkeypatch.setenv("AXIS_CONTEXT_STRATEGY", "minimal")
+
+    mock_model = IntegrationMockModel()
+    engine = LifecycleEngine(
+        model=mock_model,
+        planner="sequential",
+        tools={"search": mock_search_tool},
+    )
+
+    result = await engine.execute(
+        input_text="Test input",
+        agent_id="test-agent",
+        budget=Budget(max_cycles=10),
+        config=resolve_runtime_config(
+            model=mock_model,
+            planner="sequential",
+            memory=None,
+            budget=Budget(max_cycles=10),
+            timeouts=Timeouts(),
+            rate_limits=None,
+            retry=None,
+            cache=None,
+            tool_policy=None,
+            confirmation_handler=None,
+            telemetry_enabled=True,
+            verbose=False,
+        ),
+    )
+
+    assert result["success"] is True
+    assert mock_model.call_count >= 2
+
+    second_call = mock_model.calls[1]
+    messages = second_call["messages"]
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"

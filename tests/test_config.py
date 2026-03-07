@@ -13,8 +13,11 @@ from axis_core.config import (
     RateLimits,
     ResolvedConfig,
     RetryPolicy,
+    RuntimeSettings,
     Timeouts,
     deep_merge,
+    resolve_runtime_config,
+    resolve_runtime_settings,
 )
 
 _CONFIG_OWNED_ENV_VARS = {
@@ -532,6 +535,106 @@ class TestResolvedConfig:
         assert resolved.max_cycle_context == 5
         assert resolved.transcript_strict is False
         assert resolved.max_tool_result_chars is None
+
+
+class TestRuntimeSettings:
+    """Tests for the run-start runtime settings boundary."""
+
+    def test_defaults_without_env_overrides(self) -> None:
+        settings = resolve_runtime_settings({})
+
+        assert settings.context_strategy == "smart"
+        assert settings.max_cycle_context == 5
+        assert settings.transcript_strict is False
+        assert settings.max_tool_result_chars is None
+        assert settings.context_window_guard_enabled is False
+        assert settings.context_window_tokens is None
+        assert settings.context_window_warn_tokens == 32000
+        assert settings.context_window_block_tokens == 16000
+        assert settings.context_pruning_enabled is False
+
+    def test_reads_runtime_env_values(self) -> None:
+        settings = resolve_runtime_settings(
+            {
+                "AXIS_CONTEXT_STRATEGY": "minimal",
+                "AXIS_MAX_CYCLE_CONTEXT": "2",
+                "AXIS_TRANSCRIPT_STRICT": "true",
+                "AXIS_MAX_TOOL_RESULT_CHARS": "128",
+                "AXIS_CONTEXT_GUARD_ENABLED": "true",
+                "AXIS_CONTEXT_WINDOW_TOKENS": "64000",
+                "AXIS_CONTEXT_GUARD_WARN_TOKENS": "5000",
+                "AXIS_CONTEXT_GUARD_BLOCK_TOKENS": "2000",
+                "AXIS_CONTEXT_PRUNE_ENABLED": "true",
+            }
+        )
+
+        assert settings == RuntimeSettings(
+            context_strategy="minimal",
+            max_cycle_context=2,
+            transcript_strict=True,
+            max_tool_result_chars=128,
+            context_window_guard_enabled=True,
+            context_window_tokens=64000,
+            context_window_warn_tokens=5000,
+            context_window_block_tokens=2000,
+            context_pruning_enabled=True,
+        )
+
+    def test_invalid_context_values_fall_back_with_warnings(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level("WARNING", logger="axis_core.config"):
+            settings = resolve_runtime_settings(
+                {
+                    "AXIS_CONTEXT_STRATEGY": "broken",
+                    "AXIS_MAX_CYCLE_CONTEXT": "not-an-int",
+                }
+            )
+
+        assert settings.context_strategy == "smart"
+        assert settings.max_cycle_context == 5
+        assert "Invalid AXIS_CONTEXT_STRATEGY='broken'" in caplog.text
+        assert "Invalid AXIS_MAX_CYCLE_CONTEXT='not-an-int'" in caplog.text
+
+    def test_resolve_runtime_config_applies_runtime_settings(self) -> None:
+        from axis_core.budget import Budget
+
+        resolved = resolve_runtime_config(
+            model="test-model",
+            planner="auto",
+            memory=None,
+            budget=Budget(),
+            timeouts=Timeouts(),
+            rate_limits=None,
+            retry=None,
+            cache=None,
+            tool_policy=None,
+            confirmation_handler=None,
+            telemetry_enabled=True,
+            verbose=False,
+            runtime_settings=RuntimeSettings(
+                context_strategy="full",
+                max_cycle_context=3,
+                transcript_strict=True,
+                max_tool_result_chars=256,
+                context_window_guard_enabled=True,
+                context_window_tokens=120000,
+                context_window_warn_tokens=6000,
+                context_window_block_tokens=3000,
+                context_pruning_enabled=True,
+            ),
+        )
+
+        assert resolved.context_strategy == "full"
+        assert resolved.max_cycle_context == 3
+        assert resolved.transcript_strict is True
+        assert resolved.max_tool_result_chars == 256
+        assert resolved.context_window_guard_enabled is True
+        assert resolved.context_window_tokens == 120000
+        assert resolved.context_window_warn_tokens == 6000
+        assert resolved.context_window_block_tokens == 3000
+        assert resolved.context_pruning_enabled is True
 
 
 # ---------------------------------------------------------------------------

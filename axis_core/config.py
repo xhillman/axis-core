@@ -11,11 +11,19 @@ Architecture Decisions:
 from __future__ import annotations
 
 import fnmatch
+import logging
 import os
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger("axis_core.config")
+
+_DEFAULT_CONTEXT_STRATEGY = "smart"
+_DEFAULT_MAX_CYCLE_CONTEXT = 5
+_DEFAULT_CONTEXT_WARN_TOKENS = 32_000
+_DEFAULT_CONTEXT_BLOCK_TOKENS = 16_000
 
 
 @dataclass(frozen=True)
@@ -341,6 +349,126 @@ class ResolvedConfig:
     verbose: bool = False
 
 
+@dataclass(frozen=True)
+class RuntimeSettings:
+    """Runtime-owned settings resolved at run start before execution begins."""
+
+    context_strategy: str = _DEFAULT_CONTEXT_STRATEGY
+    max_cycle_context: int = _DEFAULT_MAX_CYCLE_CONTEXT
+    transcript_strict: bool = False
+    max_tool_result_chars: int | None = None
+    context_window_guard_enabled: bool = False
+    context_window_tokens: int | None = None
+    context_window_warn_tokens: int = _DEFAULT_CONTEXT_WARN_TOKENS
+    context_window_block_tokens: int = _DEFAULT_CONTEXT_BLOCK_TOKENS
+    context_pruning_enabled: bool = False
+
+
+def resolve_runtime_settings(
+    environ: Mapping[str, str] | None = None,
+) -> RuntimeSettings:
+    """Resolve runtime-owned env vars into a single run-start settings object."""
+    env = os.environ if environ is None else environ
+
+    raw_context_strategy = env.get("AXIS_CONTEXT_STRATEGY")
+    context_strategy = coerce_context_strategy(raw_context_strategy)
+    if raw_context_strategy is not None and context_strategy is None:
+        logger.warning(
+            "Invalid AXIS_CONTEXT_STRATEGY='%s'; falling back to '%s'",
+            raw_context_strategy,
+            _DEFAULT_CONTEXT_STRATEGY,
+        )
+        context_strategy = _DEFAULT_CONTEXT_STRATEGY
+    if context_strategy is None:
+        context_strategy = _DEFAULT_CONTEXT_STRATEGY
+
+    raw_max_cycle_context = env.get("AXIS_MAX_CYCLE_CONTEXT")
+    max_cycle_context = coerce_non_negative_int(raw_max_cycle_context)
+    if raw_max_cycle_context is not None and max_cycle_context is None:
+        logger.warning(
+            "Invalid AXIS_MAX_CYCLE_CONTEXT='%s'; falling back to %s",
+            raw_max_cycle_context,
+            _DEFAULT_MAX_CYCLE_CONTEXT,
+        )
+        max_cycle_context = _DEFAULT_MAX_CYCLE_CONTEXT
+    if max_cycle_context is None:
+        max_cycle_context = _DEFAULT_MAX_CYCLE_CONTEXT
+
+    return RuntimeSettings(
+        context_strategy=context_strategy,
+        max_cycle_context=max_cycle_context,
+        transcript_strict=coerce_bool(
+            env.get("AXIS_TRANSCRIPT_STRICT"),
+            default=False,
+        ),
+        max_tool_result_chars=coerce_positive_int(
+            env.get("AXIS_MAX_TOOL_RESULT_CHARS")
+        ),
+        context_window_guard_enabled=coerce_bool(
+            env.get("AXIS_CONTEXT_GUARD_ENABLED"),
+            default=False,
+        ),
+        context_window_tokens=coerce_positive_int(
+            env.get("AXIS_CONTEXT_WINDOW_TOKENS")
+        ),
+        context_window_warn_tokens=(
+            coerce_positive_int(env.get("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
+            or _DEFAULT_CONTEXT_WARN_TOKENS
+        ),
+        context_window_block_tokens=(
+            coerce_positive_int(env.get("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
+            or _DEFAULT_CONTEXT_BLOCK_TOKENS
+        ),
+        context_pruning_enabled=coerce_bool(
+            env.get("AXIS_CONTEXT_PRUNE_ENABLED"),
+            default=False,
+        ),
+    )
+
+
+def resolve_runtime_config(
+    *,
+    model: Any,
+    planner: Any,
+    memory: Any,
+    budget: Any,
+    timeouts: Timeouts,
+    rate_limits: RateLimits | None,
+    retry: RetryPolicy | None,
+    cache: CacheConfig | None,
+    tool_policy: ToolPolicy | None,
+    confirmation_handler: Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None,
+    telemetry_enabled: bool,
+    verbose: bool,
+    runtime_settings: RuntimeSettings | None = None,
+) -> ResolvedConfig:
+    """Build the run config using the config module as the env-resolution boundary."""
+    settings = runtime_settings or resolve_runtime_settings()
+    return ResolvedConfig(
+        model=model,
+        planner=planner,
+        memory=memory,
+        budget=budget,
+        timeouts=timeouts,
+        rate_limits=rate_limits,
+        retry=retry,
+        cache=cache,
+        context_strategy=settings.context_strategy,
+        max_cycle_context=settings.max_cycle_context,
+        transcript_strict=settings.transcript_strict,
+        max_tool_result_chars=settings.max_tool_result_chars,
+        context_window_guard_enabled=settings.context_window_guard_enabled,
+        context_window_tokens=settings.context_window_tokens,
+        context_window_warn_tokens=settings.context_window_warn_tokens,
+        context_window_block_tokens=settings.context_window_block_tokens,
+        context_pruning_enabled=settings.context_pruning_enabled,
+        tool_policy=tool_policy,
+        confirmation_handler=confirmation_handler,
+        telemetry_enabled=telemetry_enabled,
+        verbose=verbose,
+    )
+
+
 # ===========================================================================
 # Config singleton (9.1-9.2, 9.4, 9.6)
 # ===========================================================================
@@ -417,6 +545,56 @@ class Config:
         self.debug = self._env_debug
 
 
+def coerce_bool(value: str | bool | None, *, default: bool = False) -> bool:
+    """Coerce boolean config values from env-style strings or bools."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def coerce_positive_int(value: str | int | None) -> int | None:
+    """Coerce positive integer config values."""
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if value is None:
+        return None
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def coerce_non_negative_int(value: str | int | None) -> int | None:
+    """Coerce non-negative integer config values."""
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if value is None:
+        return None
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def coerce_context_strategy(value: str | None) -> str | None:
+    """Validate supported transcript context strategies."""
+    if value is None:
+        return None
+    candidate = value.strip().lower()
+    if candidate in {"smart", "full", "minimal"}:
+        return candidate
+    return None
+
+
 # Global config singleton instance
 config = Config()
 
@@ -429,6 +607,13 @@ __all__ = [
     "ToolPolicy",
     "deep_merge",
     "ResolvedConfig",
+    "RuntimeSettings",
+    "resolve_runtime_settings",
+    "resolve_runtime_config",
+    "coerce_bool",
+    "coerce_positive_int",
+    "coerce_non_negative_int",
+    "coerce_context_strategy",
     "Config",
     "config",
 ]

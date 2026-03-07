@@ -2,26 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
-import os
 from typing import Any
 
-from axis_core.budget import Budget, BudgetState
-from axis_core.config import (
-    CacheConfig,
-    RateLimits,
-    ResolvedConfig,
-    RetryPolicy,
-    Timeouts,
-    ToolPolicy,
-)
+from axis_core.budget import BudgetState
 from axis_core.context import RunState
 from axis_core.errors import AxisError, ErrorClass
 from axis_core.errors import TimeoutError as AxisTimeoutError
 from axis_core.output_schema import coerce_to_output_schema
 from axis_core.result import RunResult, RunStats
-
-logger = logging.getLogger("axis_core.agent")
 
 
 def build_run_result(
@@ -150,137 +138,3 @@ def build_timeout_error(
         message=f"Run exceeded timeout of {timeout_seconds:.3f} seconds",
         details={"timeout_seconds": timeout_seconds},
     )
-
-
-def resolve_runtime_config(
-    *,
-    model: Any,
-    planner: Any,
-    memory: Any,
-    budget: Budget,
-    timeouts: Timeouts,
-    rate_limits: RateLimits | None,
-    retry: RetryPolicy | None,
-    cache: CacheConfig | None,
-    tool_policy: ToolPolicy | None,
-    confirmation_handler: Any,
-    telemetry_enabled: bool,
-    verbose: bool,
-) -> ResolvedConfig:
-    """Build the runtime config passed into the lifecycle engine."""
-    raw_context_strategy = os.getenv("AXIS_CONTEXT_STRATEGY")
-    context_strategy = coerce_context_strategy(raw_context_strategy)
-    if raw_context_strategy is not None and context_strategy is None:
-        logger.warning(
-            "Invalid AXIS_CONTEXT_STRATEGY='%s'; falling back to 'smart'",
-            raw_context_strategy,
-        )
-        context_strategy = "smart"
-    if context_strategy is None:
-        context_strategy = "smart"
-
-    raw_max_cycle_context = os.getenv("AXIS_MAX_CYCLE_CONTEXT")
-    max_cycle_context = coerce_env_non_negative_int(raw_max_cycle_context)
-    if raw_max_cycle_context is not None and max_cycle_context is None:
-        logger.warning(
-            "Invalid AXIS_MAX_CYCLE_CONTEXT='%s'; falling back to 5",
-            raw_max_cycle_context,
-        )
-        max_cycle_context = 5
-    if max_cycle_context is None:
-        max_cycle_context = 5
-
-    transcript_strict = coerce_env_bool(
-        os.getenv("AXIS_TRANSCRIPT_STRICT"),
-        default=False,
-    )
-    max_tool_result_chars = coerce_env_positive_int(
-        os.getenv("AXIS_MAX_TOOL_RESULT_CHARS")
-    )
-    context_guard_enabled = coerce_env_bool(
-        os.getenv("AXIS_CONTEXT_GUARD_ENABLED"),
-        default=False,
-    )
-    context_window_tokens = coerce_env_positive_int(
-        os.getenv("AXIS_CONTEXT_WINDOW_TOKENS")
-    )
-    context_warn_tokens = (
-        coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_WARN_TOKENS"))
-        or 32_000
-    )
-    context_block_tokens = (
-        coerce_env_positive_int(os.getenv("AXIS_CONTEXT_GUARD_BLOCK_TOKENS"))
-        or 16_000
-    )
-    context_pruning_enabled = coerce_env_bool(
-        os.getenv("AXIS_CONTEXT_PRUNE_ENABLED"),
-        default=False,
-    )
-
-    return ResolvedConfig(
-        model=model,
-        planner=planner,
-        memory=memory,
-        budget=budget,
-        timeouts=timeouts,
-        rate_limits=rate_limits,
-        retry=retry,
-        cache=cache,
-        context_strategy=context_strategy,
-        max_cycle_context=max_cycle_context,
-        transcript_strict=transcript_strict,
-        max_tool_result_chars=max_tool_result_chars,
-        context_window_guard_enabled=context_guard_enabled,
-        context_window_tokens=context_window_tokens,
-        context_window_warn_tokens=context_warn_tokens,
-        context_window_block_tokens=context_block_tokens,
-        context_pruning_enabled=context_pruning_enabled,
-        tool_policy=tool_policy,
-        confirmation_handler=confirmation_handler,
-        telemetry_enabled=telemetry_enabled,
-        verbose=verbose,
-    )
-
-
-def coerce_env_bool(value: str | None, *, default: bool = False) -> bool:
-    """Coerce boolean env-var style values."""
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def coerce_env_positive_int(value: str | None) -> int | None:
-    """Coerce positive integer env-var values."""
-    if value is None:
-        return None
-    try:
-        parsed = int(value.strip())
-    except ValueError:
-        return None
-    return parsed if parsed > 0 else None
-
-
-def coerce_env_non_negative_int(value: str | None) -> int | None:
-    """Coerce non-negative integer env-var values."""
-    if value is None:
-        return None
-    try:
-        parsed = int(value.strip())
-    except ValueError:
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def coerce_context_strategy(value: str | None) -> str | None:
-    """Validate context strategy values read from the environment."""
-    if value is None:
-        return None
-    candidate = value.strip().lower()
-    if candidate in {"smart", "full", "minimal"}:
-        return candidate
-    return None

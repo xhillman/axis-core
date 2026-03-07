@@ -35,7 +35,6 @@ from axis_core._agent_runtime import (
     build_timeout_error,
     config_fingerprint,
     effective_timeout,
-    resolve_runtime_config,
 )
 from axis_core.attachments import AttachmentLike
 from axis_core.budget import Budget
@@ -47,6 +46,7 @@ from axis_core.config import (
     RetryPolicy,
     Timeouts,
     ToolPolicy,
+    resolve_runtime_config,
 )
 from axis_core.engine.lifecycle import LifecycleEngine
 from axis_core.engine.registry import memory_registry

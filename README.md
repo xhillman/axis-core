@@ -77,11 +77,16 @@ Useful non-interactive flags:
 
 Axis tracks env vars by ownership so behavior is predictable:
 
-- `Config`-owned (loaded by `axis_core.config.Config`): `AXIS_DEFAULT_MODEL`,
+- Import-time defaults (loaded by `axis_core.config.Config`): `AXIS_DEFAULT_MODEL`,
   `AXIS_DEFAULT_MEMORY`, `AXIS_DEFAULT_PLANNER`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
   `AXIS_TELEMETRY`, `AXIS_VERBOSE`, `AXIS_DEBUG`
-- Runtime-owned (resolved at run start by `Agent` runtime config): transcript/context controls,
-  telemetry sink controls, `AXIS_PERSIST_SENSITIVE_TOOL_DATA`, and `AXIS_SYNAPTIC_PATH`
+- Run-start runtime config (resolved by `axis_core.config.resolve_runtime_settings()` into
+  `ResolvedConfig`): `AXIS_TRANSCRIPT_STRICT`, `AXIS_MAX_TOOL_RESULT_CHARS`,
+  `AXIS_CONTEXT_STRATEGY`, `AXIS_MAX_CYCLE_CONTEXT`, `AXIS_CONTEXT_GUARD_ENABLED`,
+  `AXIS_CONTEXT_WINDOW_TOKENS`, `AXIS_CONTEXT_GUARD_WARN_TOKENS`,
+  `AXIS_CONTEXT_GUARD_BLOCK_TOKENS`, `AXIS_CONTEXT_PRUNE_ENABLED`
+- Constructor-time helper env reads: telemetry sink controls, `AXIS_PERSIST_SENSITIVE_TOOL_DATA`,
+  and `AXIS_SYNAPTIC_PATH`
 - Provider-SDK-owned passthrough: `OPENAI_BASE_URL`
 
 See [docs/reference/env-vars.md](docs/reference/env-vars.md) and `.env.example` for the full
@@ -202,7 +207,7 @@ Optional controls:
   decisions.
 
 Runtime precedence for model-step transcript/context settings is:
-`step payload override -> resolved runtime config -> built-in default`.
+`step payload override -> run-start resolved runtime config -> built-in default`.
 
 ## Tool Idempotency
 

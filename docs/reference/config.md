@@ -1,6 +1,7 @@
 # Config API Reference
 
-This page covers typed configuration objects and the global `config` singleton.
+This page covers typed configuration objects, the import-time `config` singleton, and the
+run-start runtime settings boundary.
 
 ## `Timeouts`
 
@@ -64,6 +65,14 @@ See also `axis_core.budget`:
 
 `ResolvedConfig` is the fully materialized run config passed into runtime execution.
 
+## `RuntimeSettings`
+
+`RuntimeSettings` captures run-start transcript/context settings resolved from environment values.
+
+Use `resolve_runtime_settings()` to read the runtime-owned env vars once at run start, then
+`resolve_runtime_config(...)` to merge those settings into the `ResolvedConfig` object carried
+through execution.
+
 ## Global `config` Singleton
 
 `axis_core.config.config` fields:
@@ -86,6 +95,12 @@ Methods:
 Runtime uses this order:
 
 - library defaults
-- environment-derived config singleton values
+- import-time environment-derived `config` singleton values
 - constructor arguments
-- per-call runtime overrides
+- run-start runtime settings resolved by `axis_core.config.resolve_runtime_settings()`
+
+For model-step transcript/context behavior specifically, precedence is:
+
+- step payload override
+- run-start `ResolvedConfig` values
+- built-in defaults

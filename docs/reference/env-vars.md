@@ -10,7 +10,7 @@ This table documents variables currently read by axis-core runtime code.
 | `OPENAI_API_KEY` | empty | Used by `OpenAIModel`/`OpenAIResponsesModel` when `api_key` is not passed. |
 | `OPENAI_BASE_URL` | SDK default | Optional OpenAI SDK endpoint override (for OpenRouter/openai-compatible gateways). |
 
-## Global Defaults (`axis_core.config`)
+## Global Defaults (`axis_core.config.Config`, import time)
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -21,25 +21,9 @@ This table documents variables currently read by axis-core runtime code.
 | `AXIS_VERBOSE` | `false` | Default verbose flag in global config. |
 | `AXIS_DEBUG` | `false` | Default debug flag in global config. |
 
-## Telemetry Sink Selection
+## Run-Start Runtime Boundary (`axis_core.config.resolve_runtime_settings`)
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `AXIS_TELEMETRY_SINK` | `none` | Sink type: `none`, `console`, `file`, `callback`. |
-| `AXIS_TELEMETRY_REDACT` | `true` | Redact sensitive values in telemetry output. |
-| `AXIS_TELEMETRY_COMPACT` | `false` | Compact output mode for console sink. |
-| `AXIS_TELEMETRY_FILE` | `./axis_trace.jsonl` | File path for file sink output. |
-| `AXIS_TELEMETRY_BATCH_SIZE` | `100` | Batch size for buffered file sink writes. |
-| `AXIS_TELEMETRY_BUFFER_MODE` | `batched` | Buffer mode: `immediate`, `batched`, `phase`, `end`. |
-| `AXIS_TELEMETRY_CALLBACK` | empty | Callback ref in `module:function` form for callback sink. |
-
-## Privacy / Persistence Controls
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `AXIS_PERSIST_SENSITIVE_TOOL_DATA` | `false` | Include raw sensitive tool args/results in persisted run state (debug use only). |
-
-## Context Assembly Controls
+These values are resolved once at run start and carried into execution via `ResolvedConfig`.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -53,7 +37,30 @@ This table documents variables currently read by axis-core runtime code.
 | `AXIS_CONTEXT_GUARD_BLOCK_TOKENS` | `16000` | Hard-block threshold for low remaining tokens. |
 | `AXIS_CONTEXT_PRUNE_ENABLED` | `false` | Enable tool-result-first pruning before block decisions. |
 
-## Memory Adapter Paths
+## Constructor-Time Helper Env Reads
+
+These env vars are not part of `ResolvedConfig`; they are consumed by narrower helpers during
+construction or adapter setup.
+
+### Telemetry Sink Selection
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AXIS_TELEMETRY_SINK` | `none` | Sink type: `none`, `console`, `file`, `callback`. |
+| `AXIS_TELEMETRY_REDACT` | `true` | Redact sensitive values in telemetry output. |
+| `AXIS_TELEMETRY_COMPACT` | `false` | Compact output mode for console sink. |
+| `AXIS_TELEMETRY_FILE` | `./axis_trace.jsonl` | File path for file sink output. |
+| `AXIS_TELEMETRY_BATCH_SIZE` | `100` | Batch size for buffered file sink writes. |
+| `AXIS_TELEMETRY_BUFFER_MODE` | `batched` | Buffer mode: `immediate`, `batched`, `phase`, `end`. |
+| `AXIS_TELEMETRY_CALLBACK` | empty | Callback ref in `module:function` form for callback sink. |
+
+### Privacy / Persistence Controls
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AXIS_PERSIST_SENSITIVE_TOOL_DATA` | `false` | Include raw sensitive tool args/results in persisted run state (debug use only). |
+
+### Memory Adapter Paths
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -63,3 +70,4 @@ This table documents variables currently read by axis-core runtime code.
 
 - `.env` loading is attempted automatically when `python-dotenv` is installed.
 - `AXIS_TELEMETRY`, `AXIS_VERBOSE`, and `AXIS_DEBUG` are loaded into the global `config` singleton.
+- Transcript/context precedence is `step payload -> run-start ResolvedConfig -> built-in default`.
