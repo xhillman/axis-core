@@ -11,7 +11,7 @@ import pytest
 from axis_core.agent import Agent
 from axis_core.budget import Budget
 from axis_core.config import Timeouts
-from axis_core.errors import BudgetError, ConfigError
+from axis_core.errors import BudgetError, ConfigError, ModelError
 from axis_core.errors import TimeoutError as AxisTimeoutError
 from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 from axis_core.protocols.planner import Plan, PlanStep, StepType
@@ -1002,6 +1002,73 @@ class TestStreamAsync:
             if event.is_token and event.token:
                 tokens.append(event.token)
         assert "".join(tokens) == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_stream_uses_fallback_model_after_recoverable_stream_error(self) -> None:
+        class ModelPlanner:
+            async def plan(self, observation: Any, ctx: Any) -> Plan:
+                return Plan(
+                    id="plan-model",
+                    goal="stream tokens with fallback",
+                    steps=(
+                        PlanStep(id="model", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                        ),
+                    ),
+                )
+
+        class RecoverableFailingStreamModel(MockModel):
+            @property
+            def model_id(self) -> str:
+                return "primary-model"
+
+            async def stream(
+                self,
+                messages: list[dict[str, Any]],
+                system: str | None = None,
+                tools: list[dict[str, Any]] | None = None,
+            ) -> Any:
+                del messages, system, tools
+                if False:
+                    yield None
+                raise ModelError(
+                    message="temporary provider outage",
+                    model_id=self.model_id,
+                    reason="service_unavailable",
+                    recoverable=True,
+                )
+
+        class FallbackStreamModel(MockModel):
+            @property
+            def model_id(self) -> str:
+                return "fallback-model"
+
+        agent = Agent(
+            model=RecoverableFailingStreamModel(),
+            fallback=[FallbackStreamModel(stream_chunks=["fallback", " ", "stream"])],
+            planner=ModelPlanner(),
+            memory=None,
+        )
+
+        tokens: list[str] = []
+        telemetry_events: list[StreamEvent] = []
+        async for event in agent.stream_async("Hello", stream_telemetry=True):
+            if event.is_token and event.token:
+                tokens.append(event.token)
+            if event.type == "telemetry":
+                telemetry_events.append(event)
+
+        assert "".join(tokens) == "fallback stream"
+        fallback_event = next(
+            event
+            for event in telemetry_events
+            if event.data.get("event", {}).get("type") == "model_fallback"
+        )
+        assert fallback_event.data["event"]["data"]["from_model"] == "primary-model"
+        assert fallback_event.data["event"]["data"]["to_model"] == "fallback-model"
 
     @pytest.mark.asyncio
     async def test_stream_telemetry_opt_in(self) -> None:
