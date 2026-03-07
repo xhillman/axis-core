@@ -10,6 +10,12 @@ from pathlib import Path
 
 import pytest
 
+from axis_core.adapters.models.catalog import (
+    ANTHROPIC_ALIAS_TARGETS,
+    ANTHROPIC_MODEL_CATALOG,
+    OPENAI_MODEL_CATALOG,
+    iter_registered_model_targets,
+)
 from axis_core.engine.registry import (
     AdapterRegistry,
     MemoryRegistry,
@@ -153,6 +159,19 @@ print(json.dumps({
         for model in expected_models:
             assert model in registered, f"Expected model {model} to be registered"
 
+    def test_catalog_registered_names_match_registry(self) -> None:
+        """Built-in registry names should be derived from the shared provider catalogs."""
+        from axis_core.engine.registry import model_registry
+
+        registered = set(model_registry.list())
+        expected = {
+            name
+            for catalog in (ANTHROPIC_MODEL_CATALOG, OPENAI_MODEL_CATALOG)
+            for name, _target in iter_registered_model_targets(catalog)
+        }
+
+        assert expected.issubset(registered)
+
     def test_string_resolution_creates_anthropic_instance(self) -> None:
         """Resolving a Claude model string should create AnthropicModel instance."""
         from axis_core.engine.registry import model_registry
@@ -230,6 +249,21 @@ print(json.dumps({
 
         assert isinstance(opus, AnthropicModel)
         assert opus.model_id == "claude-opus-4-6"
+
+    def test_catalog_aliases_resolve_to_catalog_targets(self) -> None:
+        """Anthropic aliases should resolve to the target model recorded in the catalog."""
+        from axis_core.engine.registry import model_registry
+        from axis_core.engine.resolver import resolve_adapter
+
+        try:
+            from axis_core.adapters.models import AnthropicModel
+        except ImportError:
+            pytest.skip("Anthropic package not installed")
+
+        for alias, target in ANTHROPIC_ALIAS_TARGETS.items():
+            resolved = resolve_adapter(alias, model_registry, api_key="test")
+            assert isinstance(resolved, AnthropicModel)
+            assert resolved.model_id == target
 
     def test_openai_responses_models_registered(self) -> None:
         """Responses API model IDs should be available in built-in model registry."""

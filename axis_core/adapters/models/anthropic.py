@@ -18,6 +18,7 @@ except ImportError as e:
         "Install with: pip install axis-core[anthropic]"
     ) from e
 
+from axis_core.adapters.models.catalog import ANTHROPIC_ALIAS_TARGETS
 from axis_core.adapters.models.provider_helpers import (
     DEFAULT_SCHEMA_FIELDS_TO_STRIP,
     DEFAULT_TOOL_CALL_ID_INVALID_CHARS,
@@ -30,54 +31,45 @@ from axis_core.tool import ToolManifest
 
 # Pricing table for cost estimation (per million tokens)
 # Source: https://docs.anthropic.com/en/docs/about-claude/models/all-models (as of 2026-02)
-MODEL_PRICING: dict[str, dict[str, float]] = {
-  # Exact API model names
-  "claude-opus-4-20250514": {
-    "input_per_mtok": 15.00,
-    "output_per_mtok": 75.00
-  },
-  "claude-opus-4-1-20250805": {
-    "input_per_mtok": 15.00,
-    "output_per_mtok": 75.00
-  },
-  "claude-opus-4-5-20251101": {
-    "input_per_mtok": 5.00,
-    "output_per_mtok": 25.00
-  },
-  "claude-opus-4-6": {
-    "input_per_mtok": 5.00,
-    "output_per_mtok": 25.00
-  },
-  "claude-sonnet-4-20250514": {
-    "input_per_mtok": 3.00,
-    "output_per_mtok": 15.00
-  },
-  "claude-sonnet-4-5-20250929": {
-    "input_per_mtok": 3.00,
-    "output_per_mtok": 15.00
-  },
-  "claude-haiku-4-5-20251001": {
-    "input_per_mtok": 1.00,
-    "output_per_mtok": 5.00
-  },
-  "claude-3-haiku-20240307": {
-    "input_per_mtok": 0.25,
-    "output_per_mtok": 1.25
-  },
-  # Convenience aliases (point to latest versions)
-  "claude-opus": {
-    "input_per_mtok": 5.00,
-    "output_per_mtok": 25.00
-  },
-  "claude-sonnet": {
-    "input_per_mtok": 3.00,
-    "output_per_mtok": 15.00
-  },
-  "claude-haiku": {
-    "input_per_mtok": 1.00,
-    "output_per_mtok": 5.00
-  }
+_CANONICAL_MODEL_PRICING: dict[str, dict[str, float]] = {
+    "claude-opus-4-20250514": {
+        "input_per_mtok": 15.00,
+        "output_per_mtok": 75.00,
+    },
+    "claude-opus-4-1-20250805": {
+        "input_per_mtok": 15.00,
+        "output_per_mtok": 75.00,
+    },
+    "claude-opus-4-5-20251101": {
+        "input_per_mtok": 5.00,
+        "output_per_mtok": 25.00,
+    },
+    "claude-opus-4-6": {
+        "input_per_mtok": 5.00,
+        "output_per_mtok": 25.00,
+    },
+    "claude-sonnet-4-20250514": {
+        "input_per_mtok": 3.00,
+        "output_per_mtok": 15.00,
+    },
+    "claude-sonnet-4-5-20250929": {
+        "input_per_mtok": 3.00,
+        "output_per_mtok": 15.00,
+    },
+    "claude-haiku-4-5-20251001": {
+        "input_per_mtok": 1.00,
+        "output_per_mtok": 5.00,
+    },
+    "claude-3-haiku-20240307": {
+        "input_per_mtok": 0.25,
+        "output_per_mtok": 1.25,
+    },
 }
+MODEL_PRICING: dict[str, dict[str, float]] = {
+    model_id: pricing.copy() for model_id, pricing in _CANONICAL_MODEL_PRICING.items()
+}
+for _alias, _target in ANTHROPIC_ALIAS_TARGETS.items():
+    MODEL_PRICING[_alias] = MODEL_PRICING[_target].copy()
 
 
 class AnthropicModel:

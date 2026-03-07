@@ -19,6 +19,10 @@ except ImportError as e:
         "Install with: pip install axis-core[openai]"
     ) from e
 
+from axis_core.adapters.models.catalog import (
+    OPENAI_COMPLETION_TOKENS_MODEL_IDS,
+    OPENAI_RESPONSES_API_MODEL_IDS,
+)
 from axis_core.adapters.models.openai_error_utils import (
     build_openai_model_error,
     classify_openai_error,
@@ -104,58 +108,10 @@ class OpenAIModel:
     """
 
     # Models that use max_completion_tokens instead of max_tokens
-    _COMPLETION_TOKENS_MODELS = {
-        "gpt-5.2",
-        "gpt-5.1",
-        "gpt-5",
-        "gpt-5-mini",
-        "gpt-5-nano",
-        "gpt-5.2-chat-latest",
-        "gpt-5.1-chat-latest",
-        "gpt-5-chat-latest",
-        "gpt-5.2-codex",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex",
-        "gpt-5-codex",
-        "gpt-5.1-codex-mini",
-        "codex-mini-latest",
-        "gpt-5.2-pro",
-        "gpt-5-pro",
-        "gpt-4.1",
-        "gpt-4.1-mini",
-        "gpt-4.1-nano",
-        "o1",
-        "o1-pro",
-        "o1-mini",
-        "o3",
-        "o3-pro",
-        "o3-mini",
-        "o3-deep-research",
-        "o4-mini",
-        "o4-mini-deep-research",
-        "gpt-5-search-api",
-    }
+    _COMPLETION_TOKENS_MODELS = OPENAI_COMPLETION_TOKENS_MODEL_IDS
 
     # Models that should route through the OpenAI Responses API
-    _RESPONSES_API_MODELS = {
-        # Codex
-        "gpt-5.2-codex",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex",
-        "gpt-5-codex",
-        "gpt-5.1-codex-mini",
-        "codex-mini-latest",
-        # Search
-        "gpt-5-search",
-        "gpt-5-search-api",
-        "gpt-4o-search-preview",
-        "gpt-4o-mini-search-preview",
-        # Deep research
-        "o3-deep-research",
-        "o4-mini-deep-research",
-        # Computer use
-        "computer-use-preview",
-    }
+    _RESPONSES_API_MODELS = OPENAI_RESPONSES_API_MODEL_IDS
     _TOOL_CALL_ID_MAX_LEN = 64
     _TOOL_CALL_ID_PREFIX = "call"
     _TOOL_CALL_ID_INVALID_CHARS = DEFAULT_TOOL_CALL_ID_INVALID_CHARS

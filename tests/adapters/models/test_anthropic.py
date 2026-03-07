@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from axis_core.adapters.models.catalog import ANTHROPIC_ALIAS_TARGETS
 from axis_core.protocols.model import ModelResponse
 
 # Test that import provides helpful error message if anthropic not installed
@@ -344,6 +345,9 @@ class TestAnthropicModel:
         assert "claude-opus-4-6" in MODEL_PRICING
         assert "claude-sonnet-4-20250514" in MODEL_PRICING
         assert "claude-haiku" in MODEL_PRICING
+
+        for alias, target in ANTHROPIC_ALIAS_TARGETS.items():
+            assert MODEL_PRICING[alias] == MODEL_PRICING[target]
 
         # Verify pricing structure
         opus_pricing = MODEL_PRICING["claude-opus-4-20250514"]

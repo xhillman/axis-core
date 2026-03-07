@@ -4,6 +4,10 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from axis_core.adapters.models.catalog import (
+    OPENAI_COMPLETION_TOKENS_MODEL_IDS,
+    OPENAI_RESPONSES_API_MODEL_IDS,
+)
 from axis_core.protocols.model import ModelChunk, ModelResponse, UsageStats
 
 # Test that import provides helpful error message if openai not installed
@@ -59,6 +63,11 @@ class TestOpenAIModel:
         model = OpenAIModel(model_id="gpt-4o-search-preview", api_key="test_key")
         assert model._responses_model is not None
         assert model._client is None
+
+    def test_shared_catalog_flags_match_openai_runtime_sets(self) -> None:
+        """OpenAI runtime routing flags should come from the shared provider catalog."""
+        assert OpenAIModel._COMPLETION_TOKENS_MODELS == OPENAI_COMPLETION_TOKENS_MODEL_IDS
+        assert OpenAIModel._RESPONSES_API_MODELS == OPENAI_RESPONSES_API_MODEL_IDS
 
     @pytest.mark.asyncio
     async def test_complete_routes_to_responses_adapter_for_responses_models(self) -> None:

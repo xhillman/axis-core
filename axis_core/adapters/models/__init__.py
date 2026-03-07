@@ -10,6 +10,12 @@ Available adapters (when dependencies are installed):
   (requires: pip install axis-core[openrouter])
 """
 
+from axis_core.adapters.models.catalog import (
+    ANTHROPIC_MODEL_CATALOG,
+    OPENAI_MODEL_CATALOG,
+    ModelCatalogEntry,
+    iter_registered_model_targets,
+)
 from axis_core.engine.registry import make_lazy_factory, model_registry
 
 __all__: list[str] = []
@@ -18,55 +24,34 @@ _ANTHROPIC_MODULE = "axis_core.adapters.models.anthropic"
 _OPENAI_MODULE = "axis_core.adapters.models.openai"
 
 
-# ===========================================================================
-# Register built-in Anthropic models (Task 16.1)
-# ===========================================================================
-
-_anthropic_models = [
-    "claude-3-haiku-20240307",
-    "claude-sonnet-4-20250514",
-    "claude-opus-4-20250514",
-    "claude-opus-4-1-20250805",
-    "claude-sonnet-4-5-20250929",
-    "claude-haiku-4-5-20251001",
-    "claude-opus-4-5-20251101",
-    "claude-opus-4-6",
-]
-
-for _model_id in _anthropic_models:
-    model_registry.register(
-        _model_id,
-        make_lazy_factory(
-            _ANTHROPIC_MODULE,
-            "AnthropicModel",
-            defaults={"model_id": _model_id},
-            missing_dep_message=(
-                f"Model '{_model_id}' requires the anthropic package. "
-                f"Install with: pip install 'axis-core[anthropic]'"
+def _register_catalog_models(
+    catalog: tuple[ModelCatalogEntry, ...],
+    *,
+    module_path: str,
+    class_name: str,
+    dependency_name: str,
+) -> None:
+    for registered_name, target_model_id in iter_registered_model_targets(catalog):
+        model_registry.register(
+            registered_name,
+            make_lazy_factory(
+                module_path,
+                class_name,
+                defaults={"model_id": target_model_id},
+                missing_dep_message=(
+                    f"Model '{registered_name}' requires the {dependency_name} package. "
+                    f"Install with: pip install 'axis-core[{dependency_name}]'"
+                ),
             ),
-        ),
-    )
+        )
 
-# Convenience aliases for latest versions
-_anthropic_aliases = {
-    "claude-haiku": "claude-haiku-4-5-20251001",
-    "claude-sonnet": "claude-sonnet-4-5-20250929",
-    "claude-opus": "claude-opus-4-6",
-}
 
-for _alias, _target in _anthropic_aliases.items():
-    model_registry.register(
-        _alias,
-        make_lazy_factory(
-            _ANTHROPIC_MODULE,
-            "AnthropicModel",
-            defaults={"model_id": _target},
-            missing_dep_message=(
-                f"Model '{_alias}' requires the anthropic package. "
-                f"Install with: pip install 'axis-core[anthropic]'"
-            ),
-        ),
-    )
+_register_catalog_models(
+    ANTHROPIC_MODEL_CATALOG,
+    module_path=_ANTHROPIC_MODULE,
+    class_name="AnthropicModel",
+    dependency_name="anthropic",
+)
 
 
 # ===========================================================================
@@ -84,88 +69,12 @@ except ImportError:
     pass
 
 
-# ===========================================================================
-# Register built-in OpenAI models (Task 16.1)
-# ===========================================================================
-
-_openai_models = [
-    # GPT-5 series (chat completions API)
-    "gpt-5.2",
-    "gpt-5.1",
-    "gpt-5",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-5.2-chat-latest",
-    "gpt-5.1-chat-latest",
-    "gpt-5-chat-latest",
-    "gpt-5.2-pro",
-    "gpt-5-pro",
-    # GPT-4.1 series (chat completions API)
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    # GPT-4o series (chat completions API)
-    "gpt-4o",
-    "gpt-4o-2024-05-13",
-    "gpt-4o-mini",
-    # O-series reasoning models (chat completions API)
-    "o1",
-    "o1-pro",
-    "o1-mini",
-    "o3",
-    "o3-pro",
-    "o3-mini",
-    "o4-mini",
-]
-
-for _model_id in _openai_models:
-    model_registry.register(
-        _model_id,
-        make_lazy_factory(
-            _OPENAI_MODULE,
-            "OpenAIModel",
-            defaults={"model_id": _model_id},
-            missing_dep_message=(
-                f"Model '{_model_id}' requires the openai package. "
-                f"Install with: pip install 'axis-core[openai]'"
-            ),
-        ),
-    )
-
-# Responses API models (routed internally by OpenAIModel)
-_openai_responses_models = [
-    # Codex
-    "gpt-5.2-codex",
-    "gpt-5.1-codex-max",
-    "gpt-5.1-codex",
-    "gpt-5-codex",
-    "gpt-5.1-codex-mini",
-    "codex-mini-latest",
-    # Search
-    "gpt-5-search",
-    "gpt-5-search-api",
-    "gpt-4o-search-preview",
-    "gpt-4o-mini-search-preview",
-    # Deep research
-    "o3-deep-research",
-    "o4-mini-deep-research",
-    # Computer use
-    "computer-use-preview",
-]
-
-for _model_id in _openai_responses_models:
-    model_registry.register(
-        _model_id,
-        make_lazy_factory(
-            _OPENAI_MODULE,
-            "OpenAIModel",
-            defaults={"model_id": _model_id},
-            missing_dep_message=(
-                f"Model '{_model_id}' requires the openai package. "
-                f"Install with: pip install 'axis-core[openai]'"
-            ),
-        ),
-    )
+_register_catalog_models(
+    OPENAI_MODEL_CATALOG,
+    module_path=_OPENAI_MODULE,
+    class_name="OpenAIModel",
+    dependency_name="openai",
+)
 
 
 # ===========================================================================
