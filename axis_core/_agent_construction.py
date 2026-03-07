@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
+from axis_core._scalar_parsing import coerce_env_flag
 from axis_core.budget import Budget
 from axis_core.config import (
     CacheConfig,
@@ -208,7 +209,7 @@ def resolve_telemetry(telemetry: bool | list[Any]) -> tuple[bool, list[Any]]:
 def resolve_telemetry_sinks() -> list[Any]:
     """Resolve telemetry sinks from environment variables."""
     sink_type = os.getenv("AXIS_TELEMETRY_SINK", "none").lower()
-    redact = os.getenv("AXIS_TELEMETRY_REDACT", "true").lower() == "true"
+    redact = coerce_env_flag(os.getenv("AXIS_TELEMETRY_REDACT"), default=True)
 
     def parse_buffer_mode(raw: str) -> BufferMode:
         normalized = raw.strip().lower()
@@ -228,7 +229,7 @@ def resolve_telemetry_sinks() -> list[Any]:
     if sink_type == "console":
         from axis_core.adapters.telemetry.console import ConsoleSink
 
-        compact = os.getenv("AXIS_TELEMETRY_COMPACT", "false").lower() == "true"
+        compact = coerce_env_flag(os.getenv("AXIS_TELEMETRY_COMPACT"), default=False)
         return [ConsoleSink(compact=compact, redact=redact)]
 
     if sink_type == "file":

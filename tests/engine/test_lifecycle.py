@@ -2999,6 +2999,37 @@ class TestExecutionPoliciesTask17:
         assert acquired_events[0].data["target"] == "model"
 
     @pytest.mark.asyncio
+    async def test_invalid_model_rate_limit_raises_config_error(self) -> None:
+        class ModelThenTerminalPlanner:
+            async def plan(self, observation: Observation, ctx: RunContext) -> Plan:
+                return Plan(
+                    id="model-invalid-rate-plan",
+                    goal="reject invalid rate limit",
+                    steps=(
+                        PlanStep(id="model-1", type=StepType.MODEL, payload={}),
+                        PlanStep(
+                            id="terminal",
+                            type=StepType.TERMINAL,
+                            payload={"output": "done"},
+                            dependencies=("model-1",),
+                        ),
+                    ),
+                )
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=ModelThenTerminalPlanner(),
+        )
+
+        with pytest.raises(ConfigError, match="Count must be an integer"):
+            await engine.execute(
+                input_text="bad rate limit",
+                agent_id="test-agent",
+                budget=Budget(),
+                config=_runtime_config(rate_limits=RateLimits(model_calls="abc/second")),
+            )
+
+    @pytest.mark.asyncio
     async def test_model_response_cache_hit_avoids_second_model_call(self) -> None:
         class ModelThenModelPlanner:
             async def plan(self, observation: Observation, ctx: RunContext) -> Plan:

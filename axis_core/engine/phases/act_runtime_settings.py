@@ -6,6 +6,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from axis_core._scalar_parsing import (
+    coerce_bool,
+    coerce_non_negative_int,
+    coerce_positive_int,
+)
 from axis_core.context import RunContext
 from axis_core.protocols.planner import PlanStep
 
@@ -104,7 +109,7 @@ class ActRuntimeSettingsResolver:
 
     def _resolve_max_cycle_context(self) -> int:
         source, raw_value = self._lookup("max_cycle_context")
-        parsed = _coerce_non_negative_int(raw_value)
+        parsed = coerce_non_negative_int(raw_value)
         if parsed is not None:
             return parsed
 
@@ -121,11 +126,11 @@ class ActRuntimeSettingsResolver:
         _, raw_value = self._lookup(key)
         if raw_value is None:
             return default
-        return _coerce_bool(raw_value, default=default)
+        return coerce_bool(raw_value, default=default)
 
     def _resolve_positive_int(self, key: str, *, default: int | None = None) -> int | None:
         _, raw_value = self._lookup(key)
-        parsed = _coerce_positive_int(raw_value)
+        parsed = coerce_positive_int(raw_value)
         if parsed is not None:
             return parsed
         return default
@@ -140,46 +145,6 @@ class ActRuntimeSettingsResolver:
             return f"config.{key}", config_value
 
         return "default", None
-
-
-def _coerce_bool(value: Any, *, default: bool = False) -> bool:
-    """Coerce booleans from bool/string config values."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return default
-
-
-def _coerce_positive_int(value: Any) -> int | None:
-    """Coerce a value to positive int, returning None when unset/invalid."""
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, str):
-        try:
-            parsed = int(value.strip())
-        except ValueError:
-            return None
-        return parsed if parsed > 0 else None
-    return None
-
-
-def _coerce_non_negative_int(value: Any) -> int | None:
-    """Coerce a value to non-negative int, returning None when unset/invalid."""
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if isinstance(value, str):
-        try:
-            parsed = int(value.strip())
-        except ValueError:
-            return None
-        return parsed if parsed >= 0 else None
-    return None
-
 
 __all__ = [
     "ActRuntimeSettingsResolver",

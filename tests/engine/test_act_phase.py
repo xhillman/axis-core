@@ -354,6 +354,45 @@ class TestActPhaseRuntimeConfigResolution:
         assert captured == [(True, 77)]
 
     @pytest.mark.asyncio
+    async def test_transcript_settings_step_string_values_are_coerced(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: list[tuple[bool, int | None]] = []
+
+        def fake_normalize(
+            messages: list[dict[str, Any]],
+            *,
+            strict: bool,
+            max_tool_result_chars: int | None,
+        ) -> list[dict[str, Any]]:
+            captured.append((strict, max_tool_result_chars))
+            return messages
+
+        act_module = importlib.import_module("axis_core.engine.phases.act_model_execution")
+        monkeypatch.setattr(act_module, "normalize_transcript_messages", fake_normalize)
+
+        engine = LifecycleEngine(
+            model=MockModelAdapter(),
+            planner=_planner_with_model_payload(
+                {
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "transcript_strict": "true",
+                    "max_tool_result_chars": "77",
+                }
+            ),
+        )
+        result = await engine.execute(
+            input_text="test",
+            agent_id="act-step-string-override",
+            budget=Budget(max_cycles=2),
+            config=_runtime_config(transcript_strict=False, max_tool_result_chars=42),
+        )
+
+        assert result["success"] is True
+        assert captured == [(True, 77)]
+
+    @pytest.mark.asyncio
     async def test_transcript_settings_use_config_when_step_omits_them(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
+from axis_core._scalar_parsing import parse_rate_limit
 from axis_core.config import CacheConfig, RateLimits, Timeouts
 from axis_core.context import RunContext
 from axis_core.errors import BudgetError, ConfigError
@@ -170,40 +171,10 @@ class RateLimitPolicyService:
     @staticmethod
     def parse_rate_limit(rate_spec: str, field_name: str) -> tuple[int, float]:
         """Parse a rate string like '10/minute' into count/period seconds."""
-        if "/" not in rate_spec:
-            raise ConfigError(
-                message=(
-                    f"Invalid rate format for {field_name}: '{rate_spec}'. "
-                    "Expected format: 'count/period' (e.g., '60/minute')"
-                )
-            )
-
-        count_raw, period_raw = rate_spec.split("/", 1)
         try:
-            count = int(count_raw)
-        except ValueError as e:
-            raise ConfigError(
-                message=(
-                    f"Invalid rate count for {field_name}: '{count_raw}'. "
-                    "Count must be an integer."
-                )
-            ) from e
-
-        period_map = {
-            "second": 1.0,
-            "minute": 60.0,
-            "hour": 3600.0,
-        }
-        period_seconds = period_map.get(period_raw)
-        if period_seconds is None:
-            raise ConfigError(
-                message=(
-                    f"Invalid rate period for {field_name}: '{period_raw}'. "
-                    "Must be 'second', 'minute', or 'hour'."
-                )
-            )
-
-        return count, period_seconds
+            return parse_rate_limit(rate_spec, field_name)
+        except ValueError as exc:
+            raise ConfigError(message=str(exc)) from exc
 
     def configure(self, rate_limits: RateLimits | None, tools: dict[str, Any]) -> None:
         """Apply rate-limit settings for the active run."""

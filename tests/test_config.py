@@ -446,6 +446,25 @@ class TestConfigSingleton:
             cfg = Config()
         assert getattr(cfg, attr_name) == expected_value
 
+    @pytest.mark.parametrize(
+        ("env_var", "raw_value", "attr_name", "expected_value"),
+        [
+            ("AXIS_TELEMETRY", "yes", "telemetry", False),
+            ("AXIS_VERBOSE", "on", "verbose", False),
+            ("AXIS_DEBUG", "1", "debug", False),
+        ],
+    )
+    def test_config_owned_env_flags_keep_strict_true_false_semantics(
+        self,
+        env_var: str,
+        raw_value: str,
+        attr_name: str,
+        expected_value: bool,
+    ) -> None:
+        with patch.dict(os.environ, {env_var: raw_value}):
+            cfg = Config()
+        assert getattr(cfg, attr_name) is expected_value
+
     def test_config_defaults_without_env_overrides(self) -> None:
         # Stub dotenv import so .env files do not affect this default-value smoke test.
         class _DotenvStub:

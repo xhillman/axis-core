@@ -7,6 +7,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from axis_core._scalar_parsing import coerce_env_flag
+
 REDACTED_VALUE = "[REDACTED]"
 _SENSITIVE_KEY_FRAGMENTS = (
     "api_key",
@@ -73,7 +75,10 @@ def redact_sensitive_data(value: Any) -> Any:
 
 def persist_sensitive_tool_data_enabled() -> bool:
     """Whether raw tool args/results can be persisted for debugging."""
-    return os.getenv("AXIS_PERSIST_SENSITIVE_TOOL_DATA", "false").lower() == "true"
+    return coerce_env_flag(
+        os.getenv("AXIS_PERSIST_SENSITIVE_TOOL_DATA"),
+        default=False,
+    )
 
 
 __all__ = [

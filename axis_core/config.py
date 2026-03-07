@@ -18,6 +18,14 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from axis_core._scalar_parsing import (
+    coerce_bool,
+    coerce_env_flag,
+    coerce_non_negative_int,
+    coerce_positive_int,
+    parse_rate_limit,
+)
+
 logger = logging.getLogger("axis_core.config")
 
 _DEFAULT_CONTEXT_STRATEGY = "smart"
@@ -114,38 +122,7 @@ class RateLimits:
         rate_str = getattr(self, field_name)
         if rate_str is None:
             return None
-
-        # Parse "count/period" format
-        if "/" not in rate_str:
-            raise ValueError(
-                f"Invalid rate format for {field_name}: '{rate_str}'. "
-                "Expected format: 'count/period' (e.g., '60/minute')"
-            )
-
-        try:
-            count_str, period_str = rate_str.split("/", 1)
-            count = int(count_str)
-        except ValueError:
-            raise ValueError(
-                f"Invalid rate format for {field_name}: '{rate_str}'. "
-                "Count must be an integer."
-            )
-
-        # Convert period string to seconds
-        period_map = {
-            "second": 1.0,
-            "minute": 60.0,
-            "hour": 3600.0,
-        }
-
-        period_seconds = period_map.get(period_str)
-        if period_seconds is None:
-            raise ValueError(
-                f"Invalid period for {field_name}: '{period_str}'. "
-                "Must be 'second', 'minute', or 'hour'."
-            )
-
-        return (count, period_seconds)
+        return parse_rate_limit(rate_str, field_name)
 
 
 @dataclass(frozen=True)
@@ -519,9 +496,18 @@ class Config:
         self._env_default_memory = os.getenv("AXIS_DEFAULT_MEMORY", "ephemeral")
         self._env_anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
         self._env_openai_api_key = os.getenv("OPENAI_API_KEY", "")
-        self._env_telemetry = os.getenv("AXIS_TELEMETRY", "true").lower() == "true"
-        self._env_verbose = os.getenv("AXIS_VERBOSE", "false").lower() == "true"
-        self._env_debug = os.getenv("AXIS_DEBUG", "false").lower() == "true"
+        self._env_telemetry = coerce_env_flag(
+            os.getenv("AXIS_TELEMETRY"),
+            default=True,
+        )
+        self._env_verbose = coerce_env_flag(
+            os.getenv("AXIS_VERBOSE"),
+            default=False,
+        )
+        self._env_debug = coerce_env_flag(
+            os.getenv("AXIS_DEBUG"),
+            default=False,
+        )
 
         # Current values (can be overridden programmatically)
         self.default_model = self._env_default_model
@@ -543,46 +529,6 @@ class Config:
         self.telemetry = self._env_telemetry
         self.verbose = self._env_verbose
         self.debug = self._env_debug
-
-
-def coerce_bool(value: str | bool | None, *, default: bool = False) -> bool:
-    """Coerce boolean config values from env-style strings or bools."""
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
-
-
-def coerce_positive_int(value: str | int | None) -> int | None:
-    """Coerce positive integer config values."""
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if value is None:
-        return None
-    try:
-        parsed = int(value.strip())
-    except ValueError:
-        return None
-    return parsed if parsed > 0 else None
-
-
-def coerce_non_negative_int(value: str | int | None) -> int | None:
-    """Coerce non-negative integer config values."""
-    if isinstance(value, int):
-        return value if value >= 0 else None
-    if value is None:
-        return None
-    try:
-        parsed = int(value.strip())
-    except ValueError:
-        return None
-    return parsed if parsed >= 0 else None
 
 
 def coerce_context_strategy(value: str | None) -> str | None:
