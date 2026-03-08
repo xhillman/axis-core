@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-03-08
+
 ### Changed
 
 - Refreshed `REPO_MAP.md` and the routed map docs to match the post-refactor ownership
@@ -64,6 +66,10 @@ All notable changes to this project will be documented in this file.
 - Aligned Axis/Synaptic interop docs and examples on the canonical `synaptic_core.Synaptic`
   client and documented the sibling source-tree verification sequence used for first-party
   compatibility checks.
+
+### Fixed
+
+- Updated PyPI project metadata links to point at the live `xhillman/axis-core` GitHub repository.
 
 ## [0.12.1] - 2026-03-03
 

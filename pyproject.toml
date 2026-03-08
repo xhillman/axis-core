@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "axis-core"
-version = "0.12.1"
+version = "0.13.0"
 description = "A modular, observable AI agent framework"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -58,10 +58,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/axis-core/axis-core"
+Homepage = "https://github.com/xhillman/axis-core"
 Documentation = "https://axis-core.readthedocs.io"
-Repository = "https://github.com/axis-core/axis-core"
-Issues = "https://github.com/axis-core/axis-core/issues"
+Repository = "https://github.com/xhillman/axis-core"
+Issues = "https://github.com/xhillman/axis-core/issues"
 
 [project.scripts]
 axis-core = "axis_core.cli:main"

@@ -20,7 +20,7 @@ Example:
 import importlib
 from typing import Any
 
-__version__ = "0.12.1"
+__version__ = "0.13.0"
 
 # Public export registry: maps public name -> (module_path, attribute_name).
 # Most exports stay lazy; `config` and `tool` are eagerly rebound below to preserve

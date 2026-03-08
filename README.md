@@ -354,7 +354,7 @@ The Axis command must import from the sibling `synaptic-core/src` tree rather th
 
 ## Status
 
-`v0.12.1` (Beta)
+`v0.13.0` (Beta)
 
 - Beta means APIs are stabilizing, but breaking changes are still possible before `1.0.0`.
 - See [CHANGELOG.md](CHANGELOG.md) for release notes.
