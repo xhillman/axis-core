@@ -58,6 +58,9 @@ All notable changes to this project will be documented in this file.
 - Moved lifecycle checkpoint/resume validation and resume-state materialization into the checkpoint
   helper layer, keeping `LifecycleEngine` focused on phase orchestration while rejecting
   checkpoint `next_phase` values that are incompatible with the saved phase boundary.
+- Migrated the Synaptic memory adapter from `synaptic_core.api.AsyncSynaptic` and private
+  `client.engine` calls to the public `synaptic_core.Synaptic` client methods, and aligned the
+  Synaptic adapter tests to run against the sibling source tree contract.
 
 ## [0.12.1] - 2026-03-03
 

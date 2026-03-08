@@ -138,4 +138,4 @@ Treat these as mandatory checks before marking work complete:
 
 ## Task Post-Mortem Policy
 
-After completing a task, provide a concise summary of the work done, using simple but complete language. Include reasoning for any significant design decisions or trade-offs made during implementation and practical implications for users or developers. Also provide a commit message that captures the essence of the change in a clear and concise manner.
+After completing a task, provide a concise summary of the work done, using simple but complete language. Include reasoning for any significant design decisions or trade-offs made during implementation and practical implications for users or developers. Also provide a commit message that captures the essence of the change in a clear and concise manner. If dealing with multiple repositories, provide a commit message for each affected repository, and ensure that the messages are consistent in style and content.

@@ -318,16 +318,15 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 - Synaptic integration is Axis-owned via
   `axis_core.adapters.memory.synaptic.SynapticMemory`.
 - Supported `synaptic-core` range: `>=0.3.0,<0.4.0`.
-- Axis uses canonical Synaptic 0.3 client APIs (`set/get/find`, `remember/recall`, session helpers)
-  via `synaptic_core.api.AsyncSynaptic`.
-- Compatibility matrix: [Synaptic Compatibility Matrix](docs/contracts/synaptic-compatibility-matrix.md).
+- Axis uses the canonical public Synaptic 0.3 client,
+  `synaptic_core.Synaptic`, for memory and session helpers.
 
 Session-first canonical Synaptic usage:
 
 ```python
-from synaptic_core.api import AsyncSynaptic
+from synaptic_core import Synaptic
 
-client = AsyncSynaptic(db_path="synaptic.db")
+client = Synaptic(db_path="synaptic.db")
 session = client.session("agent-session")
 
 await session.remember("User asked about deployment status.")

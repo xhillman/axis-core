@@ -320,6 +320,24 @@ class TestMemoryRegistry:
         ):
             pytest.skip("synaptic-core not installed")
 
+        synaptic_api = importlib.import_module("synaptic_core.api")
+        public_client = getattr(synaptic_api, "Synaptic", None)
+        required_methods = (
+            "set",
+            "get",
+            "find",
+            "delete",
+            "clear",
+            "store_session",
+            "retrieve_session",
+            "update_session",
+        )
+        if public_client is None or any(
+            not callable(getattr(public_client, method_name, None))
+            for method_name in required_methods
+        ):
+            pytest.skip("synaptic-core public Synaptic client contract not available")
+
         from axis_core.adapters.memory.synaptic import SynapticMemory
 
         db_path = str(tmp_path / "axis_synaptic.db")

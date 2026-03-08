@@ -1,37 +1,50 @@
-"""Integration tests for Synaptic adapter against synaptic-core 0.3.x."""
+"""Integration tests for the Synaptic adapter against the public Synaptic client."""
 
 from __future__ import annotations
 
 import re
 from importlib import import_module
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
 from pathlib import Path
 
 import pytest
 
 try:
-    import_module("synaptic_core.api")
+    synaptic_core = import_module("synaptic_core")
 except Exception as exc:  # pragma: no cover - exercised only in missing/partial installs
     pytest.skip(
-        f"synaptic-core API module not available: {exc}",
+        f"synaptic-core package not available: {exc}",
         allow_module_level=True,
     )
 
-from synaptic_core.api import AsyncSynaptic  # noqa: E402
+from synaptic_core import Synaptic  # noqa: E402
+
+_REQUIRED_PUBLIC_CLIENT_METHODS = (
+    "set",
+    "get",
+    "find",
+    "delete",
+    "clear",
+    "store_session",
+    "retrieve_session",
+    "update_session",
+)
+if any(
+    not callable(getattr(Synaptic, method_name, None))
+    for method_name in _REQUIRED_PUBLIC_CLIENT_METHODS
+):
+    pytest.skip(
+        "synaptic-core public Synaptic client contract is not available in the ambient install",
+        allow_module_level=True,
+    )
 
 from axis_core.adapters.memory.synaptic import SynapticMemory  # noqa: E402
 from axis_core.session import Session  # noqa: E402
 
 
-def _installed_synaptic_version() -> tuple[int, int, int]:
-    try:
-        raw = package_version("synaptic-core")
-    except PackageNotFoundError:
-        pytest.skip(
-            "synaptic-core distribution metadata not found",
-            allow_module_level=True,
-        )
+def _imported_synaptic_version() -> tuple[int, int, int]:
+    raw = getattr(synaptic_core, "__version__", None)
+    if not isinstance(raw, str):
+        pytest.skip("synaptic-core package version not exposed", allow_module_level=True)
     match = re.match(r"^\s*(\d+)\.(\d+)\.(\d+)", raw)
     if match is None:
         pytest.skip(f"Unparseable synaptic-core version: {raw}", allow_module_level=True)
@@ -39,10 +52,10 @@ def _installed_synaptic_version() -> tuple[int, int, int]:
     return (int(major), int(minor), int(patch))
 
 
-_INSTALLED_VERSION = _installed_synaptic_version()
-if _INSTALLED_VERSION[0:2] != (0, 3):
+_IMPORTED_VERSION = _imported_synaptic_version()
+if _IMPORTED_VERSION[0:2] != (0, 3):
     pytest.skip(
-        f"These integration tests run only against synaptic-core 0.3.x; got {_INSTALLED_VERSION}.",
+        f"These integration tests run only against synaptic-core 0.3.x; got {_IMPORTED_VERSION}.",
         allow_module_level=True,
     )
 
@@ -55,12 +68,15 @@ def _make_memory(tmp_path: Path, db_name: str = "synaptic_integration.db") -> Sy
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_synaptic_03_adapter_round_trip(tmp_path: Path) -> None:
-    client = AsyncSynaptic(db_path=str(tmp_path / "client.db"))
+    client = Synaptic(db_path=str(tmp_path / "client.db"))
     assert callable(getattr(client, "set", None))
     assert callable(getattr(client, "get", None))
     assert callable(getattr(client, "find", None))
-    assert callable(getattr(client, "remember", None))
-    assert callable(getattr(client, "recall", None))
+    assert callable(getattr(client, "delete", None))
+    assert callable(getattr(client, "clear", None))
+    assert callable(getattr(client, "store_session", None))
+    assert callable(getattr(client, "retrieve_session", None))
+    assert callable(getattr(client, "update_session", None))
 
     memory = _make_memory(tmp_path)
 

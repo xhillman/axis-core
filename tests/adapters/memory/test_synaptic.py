@@ -4,16 +4,37 @@ from __future__ import annotations
 
 import importlib.util
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 try:
-    import_module("synaptic_core.api")
+    synaptic_api = import_module("synaptic_core.api")
 except Exception as exc:  # pragma: no cover - exercised only in missing/partial installs
     pytest.skip(
         f"synaptic-core API module not available: {exc}",
+        allow_module_level=True,
+    )
+
+_REQUIRED_PUBLIC_CLIENT_METHODS = (
+    "set",
+    "get",
+    "find",
+    "delete",
+    "clear",
+    "store_session",
+    "retrieve_session",
+    "update_session",
+)
+_PUBLIC_CLIENT = getattr(synaptic_api, "Synaptic", None)
+if _PUBLIC_CLIENT is None or any(
+    not callable(getattr(_PUBLIC_CLIENT, method_name, None))
+    for method_name in _REQUIRED_PUBLIC_CLIENT_METHODS
+):
+    pytest.skip(
+        "synaptic-core public Synaptic client contract is not available in the ambient install",
         allow_module_level=True,
     )
 
@@ -75,33 +96,9 @@ class TestSynapticMemory:
 
     @pytest.mark.asyncio
     async def test_uses_canonical_client_methods(self, tmp_path: Path) -> None:
-        class _RecordingEngine:
-            async def kv_delete(self, *args: Any, **kwargs: Any) -> bool:
-                del args, kwargs
-                return True
-
-            async def kv_clear(self, *args: Any, **kwargs: Any) -> int:
-                del args, kwargs
-                return 1
-
-            async def store_session(self, session: Any) -> Any:
-                return session
-
-            async def retrieve_session(self, session_id: str) -> Any | None:
-                del session_id
-                return None
-
-            async def update_session(self, session: Any) -> Any:
-                return session
-
         class _RecordingClient:
             def __init__(self) -> None:
                 self.calls: list[str] = []
-                self.engine = _RecordingEngine()
-
-            def session(self, session_id: str) -> object:
-                del session_id
-                return object()
 
             async def set(self, *args: Any, **kwargs: Any) -> None:
                 del args, kwargs
@@ -125,13 +122,27 @@ class TestSynapticMemory:
                     }
                 ]
 
-            async def remember(self, *args: Any, **kwargs: Any) -> Any:
+            async def delete(self, *args: Any, **kwargs: Any) -> bool:
                 del args, kwargs
-                return None
+                self.calls.append("delete")
+                return True
 
-            async def recall(self, *args: Any, **kwargs: Any) -> Any:
+            async def clear(self, *args: Any, **kwargs: Any) -> int:
                 del args, kwargs
-                return None
+                self.calls.append("clear")
+                return 1
+
+            async def store_session(self, session: Any) -> Any:
+                self.calls.append("store_session")
+                return session
+
+            async def retrieve_session(self, session_id: str) -> Any | None:
+                self.calls.append("retrieve_session")
+                return {"id": session_id, "version": 1, "metadata": {}, "state": {}}
+
+            async def update_session(self, session: Any) -> Any:
+                self.calls.append("update_session")
+                return session
 
         memory = SynapticMemory(
             db_path=str(tmp_path / "canon.db"),
@@ -141,9 +152,27 @@ class TestSynapticMemory:
         await memory.store("obs:1", {"value": "alpha"})
         assert await memory.retrieve("obs:1") == {"value": "alpha"}
         results = await memory.search("obs", limit=5)
+        assert await memory.delete("obs:1") is True
+        assert await memory.clear() == 1
+        stored = await memory.store_session(Session(id="canonical-session"))
+        retrieved = await memory.retrieve_session("canonical-session")
+        updated = await memory.update_session(stored)
 
         assert [item.key for item in results] == ["obs:1"]
-        assert cast(Any, memory)._client.calls == ["set", "get", "find"]
+        assert stored.id == "canonical-session"
+        assert retrieved is not None
+        assert retrieved.id == "canonical-session"
+        assert updated.id == "canonical-session"
+        assert cast(Any, memory)._client.calls == [
+            "set",
+            "get",
+            "find",
+            "delete",
+            "clear",
+            "store_session",
+            "retrieve_session",
+            "update_session",
+        ]
 
     @pytest.mark.asyncio
     async def test_search_returns_empty_for_non_positive_limit(self, tmp_path: Path) -> None:
@@ -199,22 +228,29 @@ class TestSynapticMemory:
         with pytest.raises(ConfigError, match="Unsupported synaptic-core version"):
             _make_memory(tmp_path)
 
+    def test_uses_imported_package_version_when_metadata_missing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def _raise_package_not_found(_: str) -> str:
+            raise PackageNotFoundError
+
+        monkeypatch.setattr(synaptic_adapter, "package_version", _raise_package_not_found)
+
+        memory = _make_memory(tmp_path)
+
+        assert isinstance(memory, SynapticMemory)
+
     def test_rejects_provider_missing_required_methods(self, tmp_path: Path) -> None:
         class _IncompleteProvider:
-            def session(self, session_id: str) -> object:
-                del session_id
-                return object()
-
             async def set(self, *args: Any, **kwargs: Any) -> None: ...
 
             async def get(self, *args: Any, **kwargs: Any) -> Any | None:
                 return None
 
-            async def remember(self, *args: Any, **kwargs: Any) -> Any:
-                return None
-
-            async def recall(self, *args: Any, **kwargs: Any) -> Any:
-                return None
+            async def find(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+                return []
 
         with pytest.raises(
             ConfigError,

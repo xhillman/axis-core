@@ -1,7 +1,7 @@
 """Synaptic-backed memory adapter.
 
-This axis-owned adapter wraps ``synaptic_core.api.AsyncSynaptic`` canonical
-APIs and normalizes results to axis-core memory/session protocol types.
+This axis-owned adapter wraps the public ``synaptic_core.Synaptic`` client
+and normalizes results to axis-core memory/session protocol types.
 
 Requires: pip install axis-core[synaptic]
 """
@@ -17,7 +17,8 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, cast
 
-from synaptic_core.api import AsyncSynaptic as _AsyncSynaptic
+import synaptic_core as _synaptic_core
+from synaptic_core import Synaptic as _Synaptic
 
 from axis_core.errors import ConfigError
 from axis_core.protocols.memory import MemoryCapability, MemoryItem
@@ -30,13 +31,8 @@ _REQUIRED_CLIENT_ASYNC_METHODS = (
     "set",
     "get",
     "find",
-    "remember",
-    "recall",
-)
-_REQUIRED_CLIENT_SYNC_METHODS = ("session",)
-_REQUIRED_ENGINE_ASYNC_METHODS = (
-    "kv_delete",
-    "kv_clear",
+    "delete",
+    "clear",
     "store_session",
     "retrieve_session",
     "update_session",
@@ -51,7 +47,7 @@ class SynapticMemory:
         *,
         db_path: str = "synaptic.db",
         embedding_fn: Callable[[str], Sequence[float] | Any] | None = None,
-        synaptic_client: _AsyncSynaptic | None = None,
+        synaptic_client: _Synaptic | None = None,
         session_deserializer: Callable[[dict[str, Any]], Any] | None = None,
         **synaptic_kwargs: Any,
     ) -> None:
@@ -59,7 +55,7 @@ class SynapticMemory:
         _validate_provider_version(provider_version)
 
         if synaptic_client is None:
-            self._client = _AsyncSynaptic(
+            self._client = _Synaptic(
                 db_path=db_path,
                 embedding_fn=embedding_fn,
                 session_deserializer=session_deserializer,
@@ -69,12 +65,11 @@ class SynapticMemory:
             self._client = synaptic_client
 
         _validate_provider_api(self._client)
-        self._engine = self._client.engine
 
     @property
     def capabilities(self) -> set[MemoryCapability]:
         """Return supported capabilities, normalized to axis-core enum values."""
-        raw_capabilities = getattr(self._engine, "capabilities", None)
+        raw_capabilities = getattr(self._client, "capabilities", None)
         if raw_capabilities is None:
             return {
                 MemoryCapability.KEYWORD_SEARCH,
@@ -143,28 +138,28 @@ class SynapticMemory:
         key: str,
         namespace: str | None = None,
     ) -> bool:
-        deleted = await self._engine.kv_delete(key=key, namespace=namespace)
+        deleted = await self._client.delete(key, namespace=namespace)
         return cast(bool, deleted)
 
     async def clear(
         self,
         namespace: str | None = None,
     ) -> int:
-        count = await self._engine.kv_clear(namespace=namespace)
+        count = await self._client.clear(namespace=namespace)
         return cast(int, count)
 
     async def store_session(self, session: Session) -> Session:
-        stored = await self._engine.store_session(session)
+        stored = await self._client.store_session(session)
         return self._normalize_session(stored)
 
     async def retrieve_session(self, session_id: str) -> Session | None:
-        retrieved = await self._engine.retrieve_session(session_id)
+        retrieved = await self._client.retrieve_session(session_id)
         if retrieved is None:
             return None
         return self._normalize_session(retrieved)
 
     async def update_session(self, session: Session) -> Session:
-        updated = await self._engine.update_session(session)
+        updated = await self._client.update_session(session)
         return self._normalize_session(updated)
 
     @staticmethod
@@ -235,16 +230,20 @@ class SynapticMemory:
                 return datetime.fromisoformat(raw)
         return None
 
+
 def _load_synaptic_core_version() -> str:
     try:
         return package_version("synaptic-core")
-    except PackageNotFoundError as exc:
+    except PackageNotFoundError:
+        source_tree_version = getattr(_synaptic_core, "__version__", None)
+        if isinstance(source_tree_version, str) and source_tree_version.strip():
+            return source_tree_version
         raise ConfigError(
             message=(
                 "Memory adapter 'synaptic' requires the synaptic-core package. "
                 "Install with: pip install 'axis-core[synaptic]'"
             )
-        ) from exc
+        ) from None
 
 
 def _validate_provider_version(provider_version: str) -> None:
@@ -267,28 +266,12 @@ def _validate_provider_version(provider_version: str) -> None:
         )
 
 
-def _validate_provider_api(client: _AsyncSynaptic) -> None:
+def _validate_provider_api(client: _Synaptic) -> None:
     missing_methods = [
         method_name
         for method_name in _REQUIRED_CLIENT_ASYNC_METHODS
         if not callable(getattr(client, method_name, None))
     ]
-    missing_methods.extend(
-        method_name
-        for method_name in _REQUIRED_CLIENT_SYNC_METHODS
-        if not callable(getattr(client, method_name, None))
-    )
-
-    engine = getattr(client, "engine", None)
-    if engine is None:
-        missing_methods.append("engine")
-
-    if engine is not None:
-        missing_methods.extend(
-            method_name
-            for method_name in _REQUIRED_ENGINE_ASYNC_METHODS
-            if not callable(getattr(engine, method_name, None))
-        )
 
     if missing_methods:
         missing = ", ".join(sorted(set(missing_methods)))
@@ -304,11 +287,6 @@ def _validate_provider_api(client: _AsyncSynaptic) -> None:
         for method_name in _REQUIRED_CLIENT_ASYNC_METHODS
         if not inspect.iscoroutinefunction(getattr(client, method_name))
     ]
-    non_async_methods.extend(
-        method_name
-        for method_name in _REQUIRED_ENGINE_ASYNC_METHODS
-        if not inspect.iscoroutinefunction(getattr(engine, method_name))
-    )
     if non_async_methods:
         non_async = ", ".join(sorted(set(non_async_methods)))
         raise ConfigError(
