@@ -58,9 +58,12 @@ All notable changes to this project will be documented in this file.
 - Moved lifecycle checkpoint/resume validation and resume-state materialization into the checkpoint
   helper layer, keeping `LifecycleEngine` focused on phase orchestration while rejecting
   checkpoint `next_phase` values that are incompatible with the saved phase boundary.
-- Migrated the Synaptic memory adapter from `synaptic_core.api.AsyncSynaptic` and private
-  `client.engine` calls to the public `synaptic_core.Synaptic` client methods, and aligned the
-  Synaptic adapter tests to run against the sibling source tree contract.
+- Migrated the Synaptic memory adapter onto the public `synaptic_core.Synaptic` client methods,
+  removed private `client.engine` calls, and aligned the Synaptic adapter tests to run against the
+  sibling source tree contract.
+- Aligned Axis/Synaptic interop docs and examples on the canonical `synaptic_core.Synaptic`
+  client and documented the sibling source-tree verification sequence used for first-party
+  compatibility checks.
 
 ## [0.12.1] - 2026-03-03
 
@@ -72,9 +75,6 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added a Synaptic compatibility matrix at
-  `docs/contracts/synaptic-compatibility-matrix.md` with explicit supported and blocked
-  `synaptic-core` ranges.
 - Added adapter contract tests for Synaptic version gating, required canonical API methods, and
   non-positive search limits.
 - Added Synaptic integration coverage pinned to `synaptic-core` `0.3.x` in
@@ -84,9 +84,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Refactored `axis_core.adapters.memory.synaptic.SynapticMemory` to integrate directly with
-  canonical `synaptic_core.api.AsyncSynaptic` methods (`set/get/find`, `remember/recall`) with
-  no legacy alias paths.
+- Refactored `axis_core.adapters.memory.synaptic.SynapticMemory` to integrate directly with the
+  public `synaptic_core.Synaptic` client methods (`set/get/find`, `remember/recall`) with no
+  legacy alias paths.
 - Added fail-fast provider validation at Synaptic adapter initialization, including actionable
   version-range errors and required-method checks.
 - Updated optional Synaptic dependency constraint to `synaptic-core>=0.3.0,<0.4.0`.

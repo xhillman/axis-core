@@ -320,6 +320,9 @@ OPENAI_BASE_URL=https://openrouter.ai/api/v1
 - Supported `synaptic-core` range: `>=0.3.0,<0.4.0`.
 - Axis uses the canonical public Synaptic 0.3 client,
   `synaptic_core.Synaptic`, for memory and session helpers.
+- The maintained first-party interop surface is `Synaptic`, `client.session("...")`, KV methods
+  (`set/get/find/delete/clear`), and public session persistence methods
+  (`store_session/retrieve_session/update_session`).
 
 Session-first canonical Synaptic usage:
 
@@ -334,6 +337,20 @@ result = await session.recall("deployment status")
 
 await client.set("axis:last_run", {"ok": True}, namespace="axis")
 ```
+
+Source-tree validation against a sibling `synaptic-core` checkout:
+
+```bash
+# from axis-core/
+PYTHONPATH="$(cd ../synaptic-core/src && pwd)" \
+./scripts/test.sh tests/adapters/memory/test_synaptic.py tests/adapters/memory/test_synaptic_integration.py
+
+# from synaptic-core/
+.venv/bin/python -m pytest tests/synaptic_core/test_api_v03.py tests/synaptic_core/test_core_integration.py -q
+```
+
+The Axis command must import from the sibling `synaptic-core/src` tree rather than a wheel in
+`site-packages`.
 
 ## Status
 

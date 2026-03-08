@@ -17,7 +17,7 @@ This page points to runnable examples in `/examples`.
   - Demonstrates reasoning visibility patterns
 
 - `examples/synaptic_session_first.py`
-  - Shows canonical Synaptic 0.3 session-first API (`AsyncSynaptic`)
+  - Shows canonical Synaptic 0.3 session-first API (`Synaptic`)
   - Demonstrates axis-core Synaptic adapter interop (`store/retrieve/search` + sessions)
 
 ## How to Run

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from synaptic_core.api import AsyncSynaptic
+from synaptic_core import Synaptic
 
 from axis_core.adapters.memory.synaptic import SynapticMemory
 from axis_core.session import Message, Session
@@ -21,7 +21,7 @@ async def main() -> None:
     db_path = Path("synaptic_example.db")
 
     # Canonical Synaptic 0.3 API (session-first surface).
-    client = AsyncSynaptic(db_path=str(db_path), embedding_fn=_embedding_fn)
+    client = Synaptic(db_path=str(db_path), embedding_fn=_embedding_fn)
     session_client = client.session("demo-session")
 
     await session_client.remember("Deploy status: green in us-east-1.")
